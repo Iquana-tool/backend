@@ -1,0 +1,54 @@
+# Byte-compiled / optimized Python files
+__pycache__/
+*.py[cod]
+*.so
+*.pyo
+*.pyd
+*.log
+
+# Virtual Environment
+venv/
+env/
+*.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Flask / Python Environment Variables
+.env
+.env.local
+*.ini
+*.cfg
+
+# SQLite Database Files
+*.sqlite3
+instance/
+db.sqlite3
+
+# Flask-Migrate (Alembic) Migrations
+migrations/versions/
+
+# Pytest / Unittest
+.coverage
+htmlcov/
+*.cover
+.pytest_cache/
+nosetests.xml
+test-reports/
+
+# VS Code / JetBrains / Editor-Specific Files
+.vscode/
+.idea/
+*.iml
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+# Docker / Deployment
+docker-compose.override.yml
+*.dockerfile
+*.dockerenv
+
+# Logs & Debugging Files
+logs/
+*.log
+debug.log
