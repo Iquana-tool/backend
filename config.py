@@ -32,12 +32,22 @@ class Paths:
 
 class ModelConfig:
     """ This class contains the configuration options for the model. """
-    class MesoModel:
-        """ This class contains the configuration options for the Mesoscale model. """
+    class SAM2Tiny:
+        """ This class contains the configuration options for the tiny SAM2 model. """
         weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.pt')
         config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.yaml')
 
-    class MicroModel:
-        """ This class contains the configuration options for the Microscale model. """
-        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.pt')
-        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.yaml')
+    class SAM2Small:
+        """ This class contains the configuration options for the small SAM2 model. """
+        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_small.pt')
+        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_small.yaml')
+
+    class SAM2Large:
+        """ This class contains the configuration options for the large SAM2 model. """
+        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.pt')
+        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.yaml')
+
+    class SAM2BasePlus:
+        """ This class contains the configuration options for the base plus SAM2 model. """
+        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_base_plus.pt')
+        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_base_plus.yaml')

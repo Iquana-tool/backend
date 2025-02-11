@@ -14,12 +14,14 @@ def assert_nd_array(image: Union[Image, np.ndarray]) -> np.ndarray:
     return np.array(image) if isinstance(image, type(Image)) else image
 
 
-class ImageSegmenter:
+class SAM2:
     def __init__(self, device='auto'):
-        self.device = device if device != 'auto' else 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.model: SAM2Base = None
-        self.prompt_predictor: SAM2ImagePredictor = None
-        self.mask_generator: SAM2AutomaticMaskGenerator = None
+        self.device = device
+        self.model = build(ckpt_path=ModelConfig.SAM2Tiny.weights,
+                           config_file=ModelConfig.SAM2Tiny.config,
+                           device=self.device)
+        self.prompt_predictor = SAM2ImagePredictor(self.model)
+        self.mask_generator = SAM2AutomaticMaskGenerator(self.model)
 
     def segment_prompts(self,
                         image: Union[np.ndarray, Image.Image],
@@ -62,23 +64,5 @@ class ImageSegmenter:
         """
         return self.mask_generator.generate(assert_nd_array(image))
 
-
-class StackSegmenter:
-    """ TODO: Implement this class """
-    pass
-
-
-# Use case specific models
-
-
-class MesoScaleImageSegmenter(ImageSegmenter):
-    """ A class for segmenting coral images at the mesoscale. In the future this class should have finetuned models
-        for the mesoscale. """
-
-    def __init__(self, device='auto'):
-        super().__init__(device)
-        self.model = build(ckpt_path=ModelConfig.MesoModel.weights,
-                           config_file=ModelConfig.MesoModel.config,
-                           device=self.device)
-        self.prompt_predictor = SAM2ImagePredictor(self.model)
-        self.mask_generator = SAM2AutomaticMaskGenerator(self.model)
+    def segment_stack(self, stack: np.ndarray, input_prompts: Prompts):
+        raise NotImplementedError("This method is not implemented yet!")
