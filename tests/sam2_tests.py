@@ -3,15 +3,15 @@ from PIL import Image
 import numpy as np
 import unittest
 import config as config
-from app.services.sam2 import MesoScaleImageSegmenter
+from app.services.sam2 import SAM2
 from app.services.prompts import Prompts
 
 
-class TestMesoScaleImageSegmenter(unittest.TestCase):
-    model: MesoScaleImageSegmenter = None
+class TestSAM2(unittest.TestCase):
+    model: SAM2 = None
 
     def setUp(self):
-        model = MesoScaleImageSegmenter()
+        model = SAM2()
         self.assertIsNotNone(model, "Model couldn't be loaded.")
         self.model = model
 
