@@ -30,15 +30,14 @@ class Paths:
     weights_dir = os.path.join(services_dir, 'weights')
 
 
-
 class ModelConfig:
     """ This class contains the configuration options for the model. """
     class MesoModel:
         """ This class contains the configuration options for the Mesoscale model. """
-        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.pt')
-        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_l.yaml')
+        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.pt')
+        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.yaml')
 
     class MicroModel:
         """ This class contains the configuration options for the Microscale model. """
-        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.pt')
-        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_l.yaml')
+        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.pt')
+        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.yaml')
