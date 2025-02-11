@@ -16,7 +16,7 @@ def assert_nd_array(image: Union[Image, np.ndarray]) -> np.ndarray:
 
 class SAM2:
     def __init__(self, device='auto'):
-        self.device = device
+        self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = build(ckpt_path=ModelConfig.SAM2Tiny.weights,
                            config_file=ModelConfig.SAM2Tiny.config,
                            device=self.device)
