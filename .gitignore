@@ -1,3 +1,5 @@
+app/services/weights/*.pt
+
 # Byte-compiled / optimized Python files
 __pycache__/
 *.py[cod]
