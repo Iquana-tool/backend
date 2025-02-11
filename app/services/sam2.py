@@ -7,7 +7,7 @@ from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.sam2_video_predictor import SAM2VideoPredictor
 from typing import Union
 from prompts import Prompts
-from config import ModelConfig
+from app.config import ModelConfig
 
 # Base classes for segmentation
 
