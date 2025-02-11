@@ -1,8 +1,12 @@
 import flask
 
-app = flask.Flask(__name__)
 
+def create_app():
+    """Flask application factory function."""
+    app = flask.Flask(__name__)
 
-@app.route('/')
-def index():
-    return "Hello World!"
+    # Import and register blueprints
+    from app.routes.sam2_endpoints import segmentation_bp
+    app.register_blueprint(segmentation_bp, url_prefix="/api")
+
+    return app
