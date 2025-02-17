@@ -6,9 +6,10 @@ This repository contains a Flask backend for coral analysis, integrating **Segme
 ## 🏗️ Project Structure
 ```
 app/
-│── data             # Data folder. Saves images and CT Scans
+│── data             # Data folder. Saves images and CT Scans, and all other kind of data
 │   |── meso-scale   # Coral images 
 │   |── micro-scale  # Coral CT Scans
+│   |── *            # Other data
 │── database         # Database models (SQLAlchemy). Define the database scheme
 │   |── coral.py     
 │── schemas          # API request/response validation (Marshmallow). Define the data format for requests/responses
@@ -18,7 +19,7 @@ app/
 │── services/        # Defines actual functionalities. Disconnected from routes.
 │   │── *.py  
 │── __init__.py      # Flask app factory function. Builds the app
-│── config.py        # Configuration settings (database, environment variables)
+config.py            # Configuration settings (database, environment variables, paths etc.)
 migrations/          # Database migration scripts (Flask-Migrate) = Source control for db
 .env                 # Environment variables (e.g., DB credentials)
 requirements.txt     # Project dependencies
@@ -86,12 +87,26 @@ TODO: Add this.
 
 ### **4. Routes (`routes/*.py`)**
 - **Handles API requests** and calls services.
+- **Does not implement functional code**.
 - Uses schemas for JSON serialization.
+- Example: `sam2_endpoints.py` contains routes for image segmentation.
 
 ### **5. Services (`services/*.py`)**
-- Implements **business logic** for backend functionality.
+- Implements **business logic** for backend functionality. 
 - **Does not handle API requests directly**.
+- Disconnected from routes for better maintainability.
+- Example: `sam2.py` contains the SAM model for image segmentation.
 
+## Understanding the workflow
+1. **API Request**: User sends a request to the API endpoint.
+2. **Route**: Receives the request, validates it using *schemas*, and calls the *service*.
+   1. **Schema**: Validates the request data and extracts into a usable format.
+   2. **Service**: Implements the business logic, interacts with the database, does computations and returns the result.
+   3. **Database**: Stores and retrieves data using SQLAlchemy models.
+   4. **Service**: Returns the result to the route.
+   5. **Schema**: Puts the result in valid JSON response format.
+3. **Route**: Sends the response back to the user.
+4. Done!
 ## 📜 License
 This project is licensed under the AGPL3 License.
 
