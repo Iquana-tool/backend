@@ -1,4 +1,4 @@
-app/services/weights/*.pt
+app/services/weights/*
 
 # Byte-compiled / optimized Python files
 __pycache__/
