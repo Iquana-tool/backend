@@ -4,20 +4,24 @@ import PIL.Image as Image
 from sam2.build_sam import build_sam2 as build
 from sam2.sam2_image_predictor import SAM2ImagePredictor, SAM2Base
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-from sam2.sam2_video_predictor import SAM2VideoPredictor
 from typing import Union
-from prompts import Prompts
+from app.services.prompts import Prompts
 from config import ModelConfig
 
+
 # Base classes for segmentation
+def assert_nd_array(image: Union[Image, np.ndarray]) -> np.ndarray:
+    return np.array(image) if isinstance(image, type(Image)) else image
 
 
-class ImageSegmenter:
+class SAM2:
     def __init__(self, device='auto'):
-        self.device = device if device != 'auto' else 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.model: SAM2Base = None
-        self.prompt_predictor: SAM2ImagePredictor = None
-        self.mask_generator: SAM2AutomaticMaskGenerator = None
+        self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = build(ckpt_path=ModelConfig.SAM2Tiny.weights,
+                           config_file=ModelConfig.SAM2Tiny.config,
+                           device=self.device)
+        self.prompt_predictor = SAM2ImagePredictor(self.model)
+        self.mask_generator = SAM2AutomaticMaskGenerator(self.model)
 
     def segment_prompts(self,
                         image: Union[np.ndarray, Image.Image],
@@ -32,7 +36,7 @@ class ImageSegmenter:
                  where each entry is the quality of the corresponding mask.
         """
         with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
-            self.prompt_predictor.set_image(image)
+            self.prompt_predictor.set_image(assert_nd_array(image))
             masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input())
         return masks, quality
 
@@ -58,22 +62,7 @@ class ImageSegmenter:
                    crop_box (list(float)): The crop of the image used to generate
                      the mask, given in XYWH format.
         """
-        return self.mask_generator.generate(image)
+        return self.mask_generator.generate(assert_nd_array(image))
 
-
-class StackSegmenter:
-    """ TODO: Implement this class """
-    pass
-
-
-# Use case specific models
-
-
-class MesoScaleImageSegmenter(ImageSegmenter):
-    """ A class for segmenting coral images at the mesoscale. In the future this class should have finetuned models
-        for the mesoscale. """
-    def __init__(self, device='auto'):
-        super().__init__(device)
-        self.model = build(ModelConfig.MesoModel.weights, ModelConfig.MesoModel.config, self.device)
-        self.prompt_predictor = SAM2ImagePredictor(self.model)
-        self.mask_generator = SAM2AutomaticMaskGenerator(self.model)
+    def segment_stack(self, stack: np.ndarray, input_prompts: Prompts):
+        raise NotImplementedError("This method is not implemented yet!")
