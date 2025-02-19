@@ -22,10 +22,13 @@ pip-delete-this-directory.txt
 *.cfg
 
 # SQLite Database Files
-*.sqlite3
-instance/
-db.sqlite3
-
+sam_vit_b_01ec64.pth
+vector_db.index
+image_map.pkl
+fine_tune_masks
+polyps_masks
+uploads
+selected_masks
 # Flask-Migrate (Alembic) Migrations
 migrations/versions/
 
