@@ -4,3 +4,4 @@ torchvision>=0.15.0
 opencv-python>=4.5.0
 numpy>=1.21.0
 segment-anything
+SQLAlchemy~=2.0.38
