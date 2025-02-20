@@ -6,9 +6,10 @@ This repository contains a Flask backend for coral analysis, integrating **Segme
 ## 🏗️ Project Structure
 ```
 app/
-│── data             # Data folder. Saves images and CT Scans
+│── data             # Data folder. Saves images and CT Scans, and all other kind of data
 │   |── meso-scale   # Coral images 
 │   |── micro-scale  # Coral CT Scans
+│   |── *            # Other data
 │── database         # Database models (SQLAlchemy). Define the database scheme
 │   |── coral.py     
 │── schemas          # API request/response validation (Marshmallow). Define the data format for requests/responses
@@ -18,12 +19,12 @@ app/
 │── services/        # Defines actual functionalities. Disconnected from routes.
 │   │── *.py  
 │── __init__.py      # Flask app factory function. Builds the app
-│── config.py        # Configuration settings (database, environment variables)
-migrations/          # Database migration scripts (Flask-Migrate) = Source control for db
+config.py            # Configuration settings (database, environment variables, paths etc.)
+migrations/          # Database migration scripts (Fastapi-Migrate) = Source control for db
 .env                 # Environment variables (e.g., DB credentials)
 requirements.txt     # Project dependencies
 Readme.md            # Project documentation
-run.py               # Entry point to start the Flask application
+run.py               # Entry point to start the Fastapi application
 ```
 
 ## 🛠️ Installation & Setup
@@ -86,12 +87,90 @@ TODO: Add this.
 
 ### **4. Routes (`routes/*.py`)**
 - **Handles API requests** and calls services.
+- **Does not implement functional code**.
 - Uses schemas for JSON serialization.
+- Example: `sam2_endpoints.py` contains routes for image segmentation.
 
 ### **5. Services (`services/*.py`)**
-- Implements **business logic** for backend functionality.
+- Implements **business logic** for backend functionality. 
 - **Does not handle API requests directly**.
+- Disconnected from routes for better maintainability.
+- Example: `sam2.py` contains the SAM model for image segmentation.
 
+## Understanding the workflow
+1. **API Request**: User sends a request to the API endpoint.
+2. **Route**: Receives the request, validates it using *schemas*, and calls the *service*.
+   1. **Schema**: Validates the request data and extracts into a usable format.
+   2. **Service**: Implements the business logic, interacts with the database, does computations and returns the result.
+   3. **Database**: Stores and retrieves data using SQLAlchemy models.
+   4. **Service**: Returns the result to the route.
+   5. **Schema**: Puts the result in valid JSON response format.
+3. **Route**: Sends the response back to the user.
+4. Done!
+## Endpoint Scheme
+### **Authentication**
+> Do we need this?
+
+### **Coral**
+> **GET** `/coral/get_coral`
+> - Parameters:
+>   - `coral_id` (int): Coral ID
+> - Get all coral parameters by ID.
+> - Response: Coral parameters.
+
+> **POST** `/coral/add_coral`
+> - Parameters:
+>   - `metadata` (dict): Coral metadata
+> - Add a new coral to the database.
+> - Response: Coral ID.
+### **Images**
+> **GET** `/images/get_image` 
+>- Parameters: 
+>  - `image_id` (int): Image ID
+>- Get an image by ID. Used for displaying images.
+>- Response: Image file.
+
+> **POST** '/images/upload_meso_image' 
+>- Parameters: 
+>  - `file` (file): Image file
+>  - `coral_id` (int): Coral id to which the image belongs (? this might be incorrect)
+>- Upload an image. Used for uploading meso-scale images.
+>- Response: Image ID. 
+
+> **POST** '/images/upload_ct_scan'
+> - Parameters:
+>   - `folder` (folder): Folder of CT scans
+>   - `coral_id` (int): Coral id to which the CT scan belongs
+> - Upload a folder of CT scans. Used for uploading micro-scale images.
+> - Response: Scan ID.
+> - Note: This endpoint will be used for uploading a folder of CT scans. The folder should contain the CT scans and a 
+> log file containing the scan parameters.
+
+### **Segmentation**
+> **POST** `/segmentation/auto_segment_image`
+> - Parameters:
+>   - `image_id` (int): Image ID
+>   - `model` (str): Model to use for segmentation
+> - Automatically segment an image using the specified model.
+> - Response: Segmented image. Returns cached result if available.
+
+> **POST** `/segmentation/prompt_segment_image`
+> - Parameters:
+>   - `image_id` (int): Image ID
+>   - `model` (str): Model to use for segmentation
+>   - `point_prompts` (List[Tuple[float, float, int]]): Point prompts. A list of (x, y, label) tuples, where the label 
+>   is one of background (0) or foreground (1).
+>   - `box_prompts` (List[Tuple[float, float, float, float]]): Box prompts. A list of (x1, y1, x2, y2). Everything 
+>   inside the box is considered foreground.
+>   - `polygon_prompts` (List[List[Tuple[float, float]]]): Polygon prompts. A list of lists of (x, y) tuples. Everything
+>   inside the polygon is considered foreground.
+> - Segments the image given the prompts. Used for interactive segmentation.
+> - Note: All coordinates should be in the range [0, 1]. Each type of prompt is optional. However, at least one prompt
+> should be provided.
+> - Response: Segmented image.
+
+> **POST** `/segmentation/auto_segmented_scan`
+> TBD
 ## 📜 License
 This project is licensed under the AGPL3 License.
 
