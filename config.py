@@ -30,24 +30,40 @@ class Paths:
     weights_dir = os.path.join(services_dir, 'weights')
 
 
+class SAM2Tiny:
+    """ This class contains the configuration options for the tiny SAM2 model. """
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.pt')
+    config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.yaml')
+
+
+class SAM2Small:
+    """ This class contains the configuration options for the small SAM2 model. """
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_small.pt')
+    config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_small.yaml')
+
+
+class SAM2Large:
+    """ This class contains the configuration options for the large SAM2 model. """
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.pt')
+    config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.yaml')
+
+
+class SAM2BasePlus:
+    """ This class contains the configuration options for the base plus SAM2 model. """
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_base_plus.pt')
+    config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_base_plus.yaml')
+
+
 class ModelConfig:
     """ This class contains the configuration options for the model. """
-    class SAM2Tiny:
-        """ This class contains the configuration options for the tiny SAM2 model. """
-        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.pt')
-        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.yaml')
+    selected_model = 'SAM2Tiny'
+    available_models = {
+        'SAM2Tiny': SAM2Tiny,
+        'SAM2Small': SAM2Small,
+        'SAM2Large': SAM2Large,
+        'SAM2BasePlus': SAM2BasePlus
+    }
 
-    class SAM2Small:
-        """ This class contains the configuration options for the small SAM2 model. """
-        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_small.pt')
-        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_small.yaml')
-
-    class SAM2Large:
-        """ This class contains the configuration options for the large SAM2 model. """
-        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.pt')
-        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.yaml')
-
-    class SAM2BasePlus:
-        """ This class contains the configuration options for the base plus SAM2 model. """
-        weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_base_plus.pt')
-        config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_base_plus.yaml')
+    @classmethod
+    def get_active_model_config(cls):
+        return cls.available_models[cls.selected_model]
