@@ -1,6 +1,7 @@
 import torch
 import numpy as np
-import PIL.Image as Image
+import PIL.Image
+from PIL.Image import Image  
 from sam2.build_sam import build_sam2 as build
 from sam2.sam2_image_predictor import SAM2ImagePredictor, SAM2Base
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
