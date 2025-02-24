@@ -19,6 +19,7 @@ class Paths:
     base_dir = os.path.dirname(os.path.realpath(__file__))
 
     data_dir = os.path.join(base_dir, 'data')
+    database = os.path.join(data_dir, 'database.sql')
     meso_dir = os.path.join(data_dir, 'meso-scale')
     micro_dir = os.path.join(data_dir, 'micro-scale')
 
