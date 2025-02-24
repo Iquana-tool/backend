@@ -1,67 +1,51 @@
-from marshmallow import Schema, fields, ValidationError, validates
+from pydantic import BaseModel, Field, conlist, validator, field_serializer, field_validator
+from typing import List, Optional
 from app.database.images import Images
 
+class PointPrompt(BaseModel):
+    """ Model for validating a point annotation. """
+    x: float
+    y: float
+    label: int
 
-class PointPromptSchema(Schema):
-    """ Schema for validating a point annotation. """
-    x = fields.Float(required=True)
-    y = fields.Float(required=True)
-    label = fields.Integer(required=True)
-
-    @validates("label")
+    @field_validator('label')
     def validate_label(self, value):
         if value not in [0, 1]:
-            raise ValidationError("Label must be 0 (background) or 1 (foreground).")
+            raise ValueError("Label must be 0 (background) or 1 (foreground).")
 
-    @validates("x")
-    @validates("y")
+    @field_validator('x', 'y')
     def validate_coordinates(self, value):
         if not (0 <= value <= 1):
-            raise ValidationError("Coordinates must be between 0 and 1.")
+            raise ValueError("Coordinates must be between 0 and 1.")
 
+class BoxPrompt(BaseModel):
+    """ Model for validating a bounding box annotation. """
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
 
-class BoxPromptSchema(Schema):
-    """ Schema for validating a bounding box annotation. """
-    min_x = fields.Float(required=True)
-    min_y = fields.Float(required=True)
-    max_x = fields.Float(required=True)
-    max_y = fields.Float(required=True)
-
-    @validates("min_x")
-    @validates("min_y")
-    @validates("max_x")
-    @validates("max_y")
+    @field_validator('min_x', 'min_y', 'max_x', 'max_y')
     def validate_coordinates(self, value):
         if not (0 <= value <= 1):
-            raise ValidationError("Box coordinates must be between 0 and 1.")
+            raise ValueError("Box coordinates must be between 0 and 1.")
 
+class SegmentationRequest(BaseModel):
+    """ Model for validating the segmentation request. """
+    use_prompts: bool
+    image_id: int
+    point_prompts: Optional[List[PointPrompt]] = Field(default_factory=list)
+    box_prompts: Optional[List[BoxPrompt]] = Field(default_factory=list)
 
-class SegmentationRequestSchema(Schema):
-    """ Schema for validating the segmentation request. """
-    use_prompts = fields.Boolean(required=True)
-    image_id = fields.Integer(required=True)
-    point_prompts = fields.List(fields.Nested(PointPromptSchema), required=False)
-    box_prompts = fields.List(fields.Nested(BoxPromptSchema), required=False)
-
-    @validates("point_prompts")
-    def validate_point_prompts(self, value):
-        if not isinstance(value, list):
-            raise ValidationError("point_prompts must be a list.")
-
-    @validates("box_prompts")
-    def validate_box_prompts(self, value):
-        if not isinstance(value, list):
-            raise ValidationError("box_prompts must be a list.")
-
-    @validates("image_id")
+    @field_validator('image_id')
     def validate_image_id(self, value):
-        if not isinstance(value, int) or value <= 0:
-            raise ValidationError("image_id must be a positive integer.")
+        if value <= 0:
+            raise ValueError("image_id must be a positive integer.")
         elif Images.query.filter_by(id=value).first() is None:
-            raise ValidationError("image_id does not exist in the database.")
+            raise ValueError("image_id does not exist in the database.")
 
+class SegmentationResponse(BaseModel):
+    """ Model for validating the segmentation response. """
+    masks: List[conlist(int, min_items=1)]  # Nested list for masks
+    quality: List[float]
 
-class SegmentationResponseSchema(Schema):
-    """ Schema for validating the segmentation response. """
-    masks = fields.List(fields.List(fields.Integer()), required=True)  # Nested list for masks
-    quality = fields.List(fields.Float(), required=True)
