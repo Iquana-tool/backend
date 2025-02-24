@@ -21,3 +21,10 @@ def load_embedding(image_id):
         return {"image_embed": image_embed, "high_res_feats": high_res_feats}
     else:
         return None
+
+def save_image(image, image_id):
+    """Save an image to the database."""
+    image_path = f"images/{image_id}.png"
+    image.save(image_path)
+    new_image = Images(id=image_id, path=image_path, type='png', size=len(image.tobytes()))
+    new_image.save()
