@@ -1,12 +1,20 @@
-import flask
-
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 def create_app():
-    """Flask application factory function."""
-    app = flask.Flask(__name__)
+    app = FastAPI(
+        title="Coral Segmentation API",
+        description="FastAPI backend for interactive coral segmentation",
+        version="0.1.0",
+    )
 
-    # Import and register blueprints
-    from app.routes.segmentation import segmentation_bp
-    app.register_blueprint(segmentation_bp, url_prefix="/api")
+    # Configure CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     return app

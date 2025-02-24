@@ -21,13 +21,9 @@ pip-delete-this-directory.txt
 *.ini
 *.cfg
 
-# SQLite Database Files
-*.sqlite3
-instance/
-db.sqlite3
-
-# Flask-Migrate (Alembic) Migrations
-migrations/versions/
+# Data Files
+sam_vit_b_01ec64.pth
+data
 
 # Pytest / Unittest
 .coverage
