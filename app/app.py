@@ -5,6 +5,7 @@ import os
 import logging
 
 from app.routes.segmentation import router as segmentation_router
+from app.routes.images import router as images_router
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -29,42 +30,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure directories exist
-directories = {
-    "database": os.path.join(BASE_DIR, "database"),
-    "uploads": os.path.join(BASE_DIR, "uploads"),
-    "output_masks": os.path.join(BASE_DIR, "output_masks"),
-    "selected_masks": os.path.join(BASE_DIR, "selected_masks"),
-    "polyps_masks": os.path.join(BASE_DIR, "polyps_masks"),
-    "fine_tune_masks": os.path.join(BASE_DIR, "fine_tune_masks")
-}
-
-# Create directories if they don't exist
-for dir_path in directories.values():
-    os.makedirs(dir_path, exist_ok=True)
-    logger.info(f"Ensuring directory exists: {dir_path}")
-
-# Mount static directories
-for route, dir_path in directories.items():
-    logger.info(f"Mounting static directory: {dir_path} at /{route}")
-    if os.path.exists(dir_path):
-        # List contents of directory for debugging
-        files = os.listdir(dir_path)
-        logger.info(f"Contents of {dir_path}: {files}")
-        try:
-            app.mount(
-                f"/{route}",
-                StaticFiles(directory=dir_path, check_dir=True),
-                name=route
-            )
-            logger.info(f"Successfully mounted {route}")
-        except Exception as e:
-            logger.error(f"Failed to mount {dir_path}: {str(e)}")
-    else:
-        logger.error(f"Directory does not exist: {dir_path}")
-
 # Include the router
 app.include_router(segmentation_router, prefix="/api")
+app.include_router(images_router, prefix="/api")
 
 @app.get("/")
 def read_root():

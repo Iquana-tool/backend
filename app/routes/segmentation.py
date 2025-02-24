@@ -1,12 +1,15 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import ValidationError
 import logging
+from sqlalchemy.orm import Session
+
 import config
 from app.services.segmentation import segment_with_prompts, segment_without_prompts, embed_image
 from app.services.prompts import Prompts
 from app.services.dataloader import load_image, load_embedding
 from app.schemas.segmentation_schemas import SegmentationRequest, SegmentationResponse
-from app.database.images import ImageEmbeddings
+from app.database import get_session  # Import the dependency for the database session
+from app.database.images import ImageEmbeddings  # Ensure this is the correct import for your models
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -15,7 +18,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/segmentation")
 
 @router.post('/segment_image')
-async def segment_image(request: Request):
+async def segment_image(request: Request, db: Session = Depends(get_session)):
     """Perform segmentation with optional prompts, using data validation."""
     try:
         request_data = await request.json()
@@ -36,13 +39,16 @@ async def segment_image(request: Request):
         if embedding is None:
             # Image has not been embedded yet
             embedding = embed_image(load_image(validated_data.image_id))
-            ImageEmbeddings.create(
+            new_embedding = ImageEmbeddings(
                 image_id=validated_data.image_id,
                 model=config.ModelConfig.selected_model,
-                dimensions=embedding["image_embed"].shape,
-                vector=embedding["image_embed"],
+                dimensions=str(embedding["image_embed"].shape),
+                embed=embedding["image_embed"],
                 high_res_features=embedding["high_res_feats"]
             )
+            db.add(new_embedding)
+            db.commit()
+
         masks, quality = segment_with_prompts(embedding, prompts)
     else:
         image = load_image(validated_data.image_id)
@@ -50,3 +56,4 @@ async def segment_image(request: Request):
 
     response = {"masks": masks.tolist(), "quality": quality.tolist()}
     return SegmentationResponse(**response)
+
