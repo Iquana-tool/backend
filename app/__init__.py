@@ -6,7 +6,7 @@ def create_app():
     app = flask.Flask(__name__)
 
     # Import and register blueprints
-    from app.routes.sam2_endpoints import segmentation_bp
+    from app.routes.segmentation import segmentation_bp
     app.register_blueprint(segmentation_bp, url_prefix="/api")
 
     return app

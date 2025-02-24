@@ -9,34 +9,50 @@ from app.services.prompts import Prompts
 from config import ModelConfig
 
 
-# Base classes for segmentation
 def assert_nd_array(image: Union[Image, np.ndarray]) -> np.ndarray:
+    """ Assert the image is a numpy array and not a PIL Image. """
     return np.array(image) if isinstance(image, type(Image)) else image
 
 
 class SAM2:
     def __init__(self, device='auto'):
         self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = build(ckpt_path=ModelConfig.SAM2Tiny.weights,
-                           config_file=ModelConfig.SAM2Tiny.config,
+        self.model = build(ckpt_path=ModelConfig.get_active_model_config().weights,
+                           config_file=ModelConfig.get_active_model_config().config,
                            device=self.device)
+        self.model_name = ModelConfig.get_active_model_config().__name__
         self.prompt_predictor = SAM2ImagePredictor(self.model)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model)
 
-    def segment_prompts(self,
-                        image: Union[np.ndarray, Image.Image],
-                        input_prompts: Prompts):
+    def embed_image(self, image: Union[np.ndarray, Image.Image]) -> dict[str, torch.Tensor]:
+        """ Compute embeddings for image.
+            Args:
+                image (Union[np.ndarray, Image.Image]): The image to embed.
+
+            Returns:
+                dict[str, torch.Tensor]: A dictionary containing the embeddings. The dict has two entries: 'image_embed'
+                 and 'high_res_feats'.
+        """
+        with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
+            self.prompt_predictor.set_image(assert_nd_array(image))
+            return {key: value.cpu().detach().numpy() for key, value in self.prompt_predictor._features}
+
+    def segment_with_prompts(self,
+                             embedding: dict[str, np.ndarray],
+                             input_prompts: Prompts):
         """ Segment an image using prompts.
             Args:
-                image (Union[np.ndarray, Image.Image]): The image to segment.
+                embedding: (dict[str, np.ndarray]): The embedding of the image to segment.
                 input_prompts (Prompts): The prompts to use for segmentation.
 
             Returns:
                 A tuple containing a CxHxW array, where C is the number of masks, and an array of length C,
                  where each entry is the quality of the corresponding mask.
         """
+        embedding = {key: torch.tensor(value, device=self.device) for key, value in embedding.items()}
         with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
-            self.prompt_predictor.set_image(assert_nd_array(image))
+            self.prompt_predictor._features = embedding
+            self.prompt_predictor._is_image_set = True
             masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input())
         return masks, quality
 
