@@ -22,9 +22,11 @@ def load_embedding(image_id):
     else:
         return None
 
-def save_image(image, image_id):
+def save_image(image):
     """Save an image to the database."""
+    image_id = Images.query.count() + 1
     image_path = f"images/{image_id}.png"
     image.save(image_path)
     new_image = Images(id=image_id, path=image_path, type='png', size=len(image.tobytes()))
     new_image.save()
+    return image_id
