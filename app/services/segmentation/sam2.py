@@ -51,7 +51,7 @@ class SAM2:
         """
         embedding = {key: torch.tensor(value, device=self.device) for key, value in embedding.items()}
         with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
-            self.prompt_predictor._features = embedding
+            self.prompt_predictor._features = embedding  # Sets the embedding
             self.prompt_predictor._is_image_set = True
             masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input())
         return masks, quality
@@ -62,23 +62,13 @@ class SAM2:
                 image (Union[np.ndarray, Image.Image]): The image to segment.
 
             Returns:
-                list(dict(str, any)): A list over records for masks. Each record is
-                 a dict containing the following keys:
-                   segmentation (dict(str, any) or np.ndarray): The mask. If
-                     output_mode='binary_mask', is an array of shape HW. Otherwise,
-                     is a dictionary containing the RLE.
-                   bbox (list(float)): The box around the mask, in XYWH format.
-                   area (int): The area in pixels of the mask.
-                   predicted_iou (float): The model's own prediction of the mask's
-                     quality. This is filtered by the pred_iou_thresh parameter.
-                   point_coords (list(list(float))): The point coordinates input
-                     to the model to generate this mask.
-                   stability_score (float): A measure of the mask's quality. This
-                     is filtered on using the stability_score_thresh parameter.
-                   crop_box (list(float)): The crop of the image used to generate
-                     the mask, given in XYWH format.
+                An array containing the segmentation masks, and an array of the predicted iou scores.
         """
-        return self.mask_generator.generate(assert_nd_array(image))
+        masks, scores = [], []
+        for entry in self.mask_generator.generate(assert_nd_array(image)):
+            masks.append(entry['segmentation'])
+            scores.append(entry['predicted_iou'])
+        return np.array(masks), np.array(scores)
 
     def segment_stack(self, stack: np.ndarray, input_prompts: Prompts):
         raise NotImplementedError("This method is not implemented yet!")

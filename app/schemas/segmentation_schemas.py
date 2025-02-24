@@ -1,4 +1,5 @@
 from marshmallow import Schema, fields, ValidationError, validates
+from app.database.images import Images
 
 
 class PointPromptSchema(Schema):
@@ -35,9 +36,10 @@ class BoxPromptSchema(Schema):
             raise ValidationError("Box coordinates must be between 0 and 1.")
 
 
-class SAM2RequestSchema(Schema):
+class SegmentationRequestSchema(Schema):
     """ Schema for validating the segmentation request. """
     use_prompts = fields.Boolean(required=True)
+    image_id = fields.Integer(required=True)
     point_prompts = fields.List(fields.Nested(PointPromptSchema), required=False)
     box_prompts = fields.List(fields.Nested(BoxPromptSchema), required=False)
 
@@ -51,9 +53,15 @@ class SAM2RequestSchema(Schema):
         if not isinstance(value, list):
             raise ValidationError("box_prompts must be a list.")
 
+    @validates("image_id")
+    def validate_image_id(self, value):
+        if not isinstance(value, int) or value <= 0:
+            raise ValidationError("image_id must be a positive integer.")
+        elif Images.query.filter_by(id=value).first() is None:
+            raise ValidationError("image_id does not exist in the database.")
 
-class SAM2ResponseSchema(Schema):
+
+class SegmentationResponseSchema(Schema):
     """ Schema for validating the segmentation response. """
-    masks = fields.List(fields.List(fields.Integer()), required=False)  # Nested list for masks
-    quality = fields.List(fields.Float(), required=False)
-    segmentation_result = fields.List(fields.Dict(keys=fields.String(), values=fields.Raw()), required=False)
+    masks = fields.List(fields.List(fields.Integer()), required=True)  # Nested list for masks
+    quality = fields.List(fields.Float(), required=True)

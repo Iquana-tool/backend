@@ -11,10 +11,10 @@ class Images(database):
     size = Column(Integer, nullable=False)  # Size of the image in bytes
 
     def __repr__(self):
-        return (f"<Image(image_id='{self.image_id}', "
-                f"image_path='{self.image_path}', "
-                f"image_type='{self.image_type}',"
-                f"image_size='{self.image_size}')>")
+        return (f"<Image(image_id='{self.id}', "
+                f"image_path='{self.path}', "
+                f"image_type='{self.type}',"
+                f"image_size='{self.size}')>")
 
 
 class ImageEmbeddings(database):
@@ -25,11 +25,13 @@ class ImageEmbeddings(database):
                       ForeignKey('images.id', ondelete='CASCADE'),
                       nullable=False, unique=True)  # Image ID is the primary key
     model = Column(String, nullable=False)  # The model used to generate the embedding
-    dimensions = Column(String, nullable=False)  # The dimensions of the embedding (e.g. (256, 64, 64))
-    vector = Column(Text, nullable=False)  # The flattened embedding vector as a string
+    dimensions = Column(String, nullable=False)  # The dimensions of the embedding
+    embed = Column(Text, nullable=False)  # The flattened embedding vector as a string
+    high_res_features = Column(Text, nullable=False)  # The high resolution features as a string
 
     def __repr__(self):
         return (f"<ImageEmbedding(image_id='{self.image_id}', "
-                f"model='{self.embedding_model}', "
-                f"dimension='{self.embedding_dim}',"
-                f"vector='{self.embedding}')>")
+                f"model='{self.model}', "
+                f"dimension='{self.dimensions}',"
+                f"embed='{self.embed}', "
+                f"high_res_features='{self.high_res_features}')>")
