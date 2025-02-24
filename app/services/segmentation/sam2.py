@@ -9,8 +9,8 @@ from app.services.prompts import Prompts
 from config import ModelConfig
 
 
-# Base classes for segmentation
 def assert_nd_array(image: Union[Image, np.ndarray]) -> np.ndarray:
+    """ Assert the image is a numpy array and not a PIL Image. """
     return np.array(image) if isinstance(image, type(Image)) else image
 
 
@@ -37,9 +37,9 @@ class SAM2:
             self.prompt_predictor.set_image(assert_nd_array(image))
             return {key: value.cpu().detach().numpy() for key, value in self.prompt_predictor._features}
 
-    def segment_prompts(self,
-                        embedding: dict[str, np.ndarray],
-                        input_prompts: Prompts):
+    def segment_with_prompts(self,
+                             embedding: dict[str, np.ndarray],
+                             input_prompts: Prompts):
         """ Segment an image using prompts.
             Args:
                 embedding: (dict[str, np.ndarray]): The embedding of the image to segment.

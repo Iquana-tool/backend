@@ -1,11 +1,10 @@
 from flask import Blueprint, request, jsonify
 import numpy as np
-import torch
 from PIL import Image
 from io import BytesIO
 from marshmallow import ValidationError
 
-from app.services.sam2 import SAM2
+from app.services.segmentation.sam2 import SAM2
 from app.services.prompts import Prompts
 from app.schemas.sam2_schemas import SAM2ResponseSchema, SAM2RequestSchema
 
@@ -49,7 +48,7 @@ def segment_image():
         for box in validated_data.get("box_prompts", []):
             prompts.add_box_annotation(box["min_x"], box["min_y"], box["max_x"], box["max_y"])
 
-        masks, quality = sam2_model.segment_prompts(image, prompts)
+        masks, quality = sam2_model.segment_with_prompts(image, prompts)
         response = {"masks": masks.tolist(), "quality": quality.tolist()}
     else:
         response = {"segmentation_result": sam2_model.segment_without_prompts(image)}
