@@ -1,20 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 import logging
-
-# Set up logging
-logger = logging.getLogger(__name__)
-
-# Create router
-router = APIRouter()
-
-@router.get("/segmentation/health")
-def check_health():
-    """Check if segmentation service is running"""
-    return {"status": "ok", "service": "segmentation"}
 from flask import Blueprint, request, jsonify
-import numpy as np
-from PIL import Image
-from io import BytesIO
 from marshmallow import ValidationError
 
 import config
@@ -24,6 +10,12 @@ from app.services.dataloader import load_image, load_embedding
 from app.schemas.segmentation_schemas import SegmentationResponseSchema, SegmentationRequestSchema
 from app.database.images import ImageEmbeddings
 
+# Set up logging
+logger = logging.getLogger(__name__)
+
+# Create router
+router = APIRouter(prefix="/segmentation")
+
 # Create Flask blueprint
 segmentation_bp = Blueprint('segmentation', __name__)
 
@@ -31,7 +23,7 @@ request_schema = SegmentationRequestSchema()
 response_schema = SegmentationResponseSchema()
 
 
-@segmentation_bp.route('/segment', methods=['POST'])
+@router.post('/segment_image')
 def segment_image():
     """ Perform segmentation with optional prompts, using data validation. """
     try:
@@ -63,15 +55,3 @@ def segment_image():
         masks, quality = segment_without_prompts(image)
     response = {"masks": masks.tolist(), "quality": quality.tolist()}
     return jsonify(response_schema.dump(response))
-
-@router.post("/segmentation")
-async def segment_image(file: UploadFile = File(None)):
-    """Placeholder for image segmentation endpoint"""
-    if not file:
-        raise HTTPException(status_code=400, detail="No image file provided")
-
-    return {
-        "message": "Image received for segmentation",
-        "filename": file.filename,
-        "content_type": file.content_type
-    }
