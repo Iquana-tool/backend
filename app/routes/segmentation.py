@@ -5,7 +5,7 @@ import config
 from app.services.segmentation import segment_with_prompts, segment_without_prompts, embed_image
 from app.services.prompts import Prompts
 from app.services.dataloader import load_image, load_embedding
-from app.schemas.segmentation_schemas import SegmentationResponseSchema, SegmentationRequestSchema
+from app.schemas.segmentation_schemas import SegmentationRequest, SegmentationResponse
 from app.database.images import ImageEmbeddings
 
 # Set up logging
@@ -19,7 +19,7 @@ async def segment_image(request: Request):
     """Perform segmentation with optional prompts, using data validation."""
     try:
         request_data = await request.json()
-        validated_data = SegmentationRequestSchema(**request_data)
+        validated_data = SegmentationRequest(**request_data)
     except ValidationError as err:
         raise HTTPException(status_code=400, detail=err.errors())
 
@@ -49,4 +49,4 @@ async def segment_image(request: Request):
         masks, quality = segment_without_prompts(image)
 
     response = {"masks": masks.tolist(), "quality": quality.tolist()}
-    return SegmentationResponseSchema(**response)
+    return SegmentationResponse(**response)
