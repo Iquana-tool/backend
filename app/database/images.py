@@ -7,7 +7,7 @@ class Images(database):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     path = Column(String, nullable=False)  # Path to the image file
-    type = Column(String, nullable=False)  # Type of image (e.g. 'png', 'jpg', 'tif')
+    type = Column(String(10), nullable=False)  # Type of image (e.g. 'png', 'jpg', 'tif')
     size = Column(Integer, nullable=False)  # Size of the image in bytes
 
     def __repr__(self):
@@ -23,9 +23,9 @@ class ImageEmbeddings(database):
     image_id = Column(Integer,
                       # Foreign key to the images table, cascade on delete to remove embeddings when image is deleted
                       ForeignKey('images.id', ondelete='CASCADE'),
-                      nullable=False, unique=True)  # Image ID is the primary key
-    model = Column(String, nullable=False)  # The model used to generate the embedding
-    dimensions = Column(String, nullable=False)  # The dimensions of the embedding
+                      nullable=False)  # Image ID is the primary key
+    model = Column(String(50), nullable=False)  # The model used to generate the embedding
+    dimensions = Column(String(50), nullable=False)  # The dimensions of the embedding
     embed = Column(Text, nullable=False)  # The flattened embedding vector as a string
     high_res_features = Column(Text, nullable=False)  # The high resolution features as a string
 
