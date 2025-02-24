@@ -1,8 +1,6 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, Request, HTTPException
+from pydantic import ValidationError
 import logging
-from flask import Blueprint, request, jsonify
-from marshmallow import ValidationError
-
 import config
 from app.services.segmentation import segment_with_prompts, segment_without_prompts, embed_image
 from app.services.prompts import Prompts
@@ -16,42 +14,39 @@ logger = logging.getLogger(__name__)
 # Create router
 router = APIRouter(prefix="/segmentation")
 
-# Create Flask blueprint
-segmentation_bp = Blueprint('segmentation', __name__)
-
-request_schema = SegmentationRequestSchema()
-response_schema = SegmentationResponseSchema()
-
-
 @router.post('/segment_image')
-def segment_image():
-    """ Perform segmentation with optional prompts, using data validation. """
+async def segment_image(request: Request):
+    """Perform segmentation with optional prompts, using data validation."""
     try:
-        request_data = request.json or {}
-        validated_data = request_schema.load(request_data)
+        request_data = await request.json()
+        validated_data = SegmentationRequestSchema(**request_data)
     except ValidationError as err:
-        return jsonify({"error": err.messages}), 400
+        raise HTTPException(status_code=400, detail=err.errors())
 
-    if validated_data.get("use_prompts"):
+    if validated_data.use_prompts:
         prompts = Prompts()
 
-        for point in validated_data.get("point_prompts", []):
-            prompts.add_point_annotation(point["x"], point["y"], point["label"])
+        for point in validated_data.point_prompts:
+            prompts.add_point_annotation(point.x, point.y, point.label)
 
-        for box in validated_data.get("box_prompts", []):
-            prompts.add_box_annotation(box["min_x"], box["min_y"], box["max_x"], box["max_y"])
-        embedding = load_embedding(validated_data["image_id"])
+        for box in validated_data.box_prompts:
+            prompts.add_box_annotation(box.min_x, box.min_y, box.max_x, box.max_y)
+
+        embedding = load_embedding(validated_data.image_id)
         if embedding is None:
             # Image has not been embedded yet
-            embedding = embed_image(load_image(validated_data["image_id"]))
-            ImageEmbeddings.create(image_id=validated_data["image_id"],
-                                   model=config.ModelConfig.selected_model,
-                                   dimensions=embedding["image_embed"].shape,
-                                   vector=embedding["image_embed"],
-                                   high_res_features=embedding["high_res_feats"])
+            embedding = embed_image(load_image(validated_data.image_id))
+            ImageEmbeddings.create(
+                image_id=validated_data.image_id,
+                model=config.ModelConfig.selected_model,
+                dimensions=embedding["image_embed"].shape,
+                vector=embedding["image_embed"],
+                high_res_features=embedding["high_res_feats"]
+            )
         masks, quality = segment_with_prompts(embedding, prompts)
     else:
-        image = load_image(validated_data["image_id"])
+        image = load_image(validated_data.image_id)
         masks, quality = segment_without_prompts(image)
+
     response = {"masks": masks.tolist(), "quality": quality.tolist()}
-    return jsonify(response_schema.dump(response))
+    return SegmentationResponseSchema(**response)
