@@ -14,6 +14,7 @@ database.metadata.create_all(engine)
 # Create a configured "Session" class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
 # Context manager for session handling
 @contextmanager
 def get_session():

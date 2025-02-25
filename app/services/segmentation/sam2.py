@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import PIL.Image
 from PIL.Image import Image  
 from sam2.build_sam import build_sam2 as build
 from sam2.sam2_image_predictor import SAM2ImagePredictor, SAM2Base
@@ -10,9 +9,12 @@ from app.services.prompts import Prompts
 from config import ModelConfig
 
 
-def assert_nd_array(image: Union[Image, np.ndarray]) -> np.ndarray:
+def assert_nd_array(image: np.ndarray) -> np.ndarray:
     """ Assert the image is a numpy array and not a PIL Image. """
-    return np.array(image) if isinstance(image, type(Image)) else image
+    if isinstance(image, np.ndarray):
+        return image
+    else:
+        raise ValueError("Image must be numpy array.")
 
 
 class SAM2:
@@ -25,7 +27,7 @@ class SAM2:
         self.prompt_predictor = SAM2ImagePredictor(self.model)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model)
 
-    def embed_image(self, image: Union[np.ndarray, Image.Image]) -> dict[str, torch.Tensor]:
+    def embed_image(self, image: np.ndarray) -> dict[str, torch.Tensor]:
         """ Compute embeddings for image.
             Args:
                 image (Union[np.ndarray, Image.Image]): The image to embed.
@@ -57,7 +59,7 @@ class SAM2:
             masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input())
         return masks, quality
 
-    def segment_without_prompts(self, image: Union[np.ndarray, Image.Image]):
+    def segment_without_prompts(self, image: np.ndarray):
         """ Segment an image without prompts.
             Args:
                 image (Union[np.ndarray, Image.Image]): The image to segment.

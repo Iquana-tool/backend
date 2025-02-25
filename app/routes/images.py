@@ -4,14 +4,15 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.services.dataloader import save_image
-from app.database import get_db  # Import the dependency for the database session
-from app.models import Images  # Ensure this is the correct import for your models
+from app.database import get_session  # Import the dependency for the database session
+from app.database.images import Images  # Ensure this is the correct import for your models
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
 
+
 @router.post("/upload_image")
-async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_session)):
     """Upload an image file"""
     try:
         image_id = await save_image(file)
@@ -31,8 +32,9 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_d
         logger.error(f"Upload error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/list_images")
-def list_images(db: Session = Depends(get_db)):
+def list_images(db: Session = Depends(get_session)):
     """List all uploaded images"""
     try:
         images = db.query(Images).all()
@@ -41,8 +43,9 @@ def list_images(db: Session = Depends(get_db)):
         logger.error(f"List images error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/get_image/{image_id}")
-async def get_image(image_id: int, db: Session = Depends(get_db)):
+async def get_image(image_id: int, db: Session = Depends(get_session)):
     """Get a specific image"""
     try:
         image = db.query(Images).filter(Images.id == image_id).first()
