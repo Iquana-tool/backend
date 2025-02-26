@@ -7,14 +7,34 @@ class Images(database):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     path = Column(String, nullable=False)  # Path to the image file
-    type = Column(String(10), nullable=False)  # Type of image (e.g. 'png', 'jpg', 'tif')
-    size = Column(Integer, nullable=False)  # Size of the image in bytes
+    width = Column(Integer, nullable=False)  # Width of the image in pixels
+    height = Column(Integer, nullable=False)  # Height of the image in pixels
 
     def __repr__(self):
-        return (f"<Image(image_id='{self.id}', "
-                f"image_path='{self.path}', "
-                f"image_type='{self.type}',"
-                f"image_size='{self.size}')>")
+        return (f"<Image(id='{self.id}', "
+                f"path='{self.path}', "
+                f"width='{self.width}',"
+                f"height='{self.height}')>")
+
+
+class Cutouts(database):
+    __tablename__ = 'cutouts'
+    id = Column(Integer, primary_key=True, autoincrement=True)  # Unique ID for the cutout
+    image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'), nullable=False)  # Image ID is the primary key
+    path = Column(String, nullable=False)  # Path to the cutout file
+    width = Column(Integer, nullable=False)  # Width of the cutout in pixels
+    height = Column(Integer, nullable=False)  # Height of the cutout in pixels
+    lower_left_x = Column(Integer, nullable=False)  # X coordinate of the lower left corner of the cutout
+    lower_left_y = Column(Integer, nullable=False)  # Y coordinate of the lower left corner of the cutout
+
+    def __repr__(self):
+        return (f"<Cutout(image_id='{self.image_id}', "
+                f"path='{self.path}', "
+                f"width='{self.width}',"
+                f"height='{self.height}',"
+                f"lower_left_x='{self.lower_left_x}',"
+                f"lower_left_y='{self.lower_left_y}')>")
+
 
 
 class ImageEmbeddings(database):
