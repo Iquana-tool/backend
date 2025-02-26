@@ -1,6 +1,9 @@
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import create_engine
 from contextlib import contextmanager
+
+from torch.ao.quantization import qconfig_equals
+
 from config import Paths
 
 # Define the declarative base
@@ -15,11 +18,19 @@ database.metadata.create_all(engine)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-# Context manager for session handling
-@contextmanager
+def init_db():
+    database.metadata.create_all(bind=engine)
+
+
 def get_session():
     session = SessionLocal()
     try:
         yield session
     finally:
         session.close()
+
+
+@contextmanager
+def get_context_session():
+    session = SessionLocal()
+    return session
