@@ -8,6 +8,9 @@ class ImagesResponse(BaseModel):
     """ Model for validating the images response. """
     images: dict[int, np.ndarray]
 
+    class Config:
+        arbitrary_types_allowed = True
+
     @field_validator('images')
     def validate_images(cls, value):
         if not isinstance(value, dict):
@@ -49,6 +52,9 @@ class CutoutsRequest(BaseModel):
     darken_outside_contours: bool
     darkening_factor: float
 
+    class Config:
+        arbitrary_types_allowed = True
+
     @field_validator('image_id', 'mask')
     def validate_image_id(cls, value):
         if value <= 0:
@@ -69,6 +75,9 @@ class CutoutsRequest(BaseModel):
 class CutoutsResponse(BaseModel):
     """ Model for validating the cutouts response. """
     cutouts: List[np.ndarray]
+
+    class Config:
+        arbitrary_types_allowed = True
 
     @field_validator('cutouts')
     def validate_cutouts(cls, value):
