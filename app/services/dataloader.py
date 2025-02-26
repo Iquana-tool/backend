@@ -1,5 +1,7 @@
 import numpy as np
 from PIL import Image
+from fastapi import UploadFile
+import config
 from app.database.images import Images, ImageEmbeddings
 
 
@@ -22,11 +24,11 @@ def load_embedding(image_id):
     else:
         return None
 
-def save_image(image):
-    """Save an image to the database."""
-    image_id = Images.query.count() + 1
-    image_path = f"images/{image_id}.png"
-    image.save(image_path)
-    new_image = Images(id=image_id, path=image_path, type='png', size=len(image.tobytes()))
-    new_image.save()
-    return image_id
+def save_image(image: UploadFile):
+    """Save an image to disk and to the database and return the new image ID."""
+    path = f"{config.Paths.meso_dir}/{image.filename}"
+    with open(path, "wb") as file:
+        file.write(image.file.read())
+    image_array = np.array(Image.open(path))
+    Images.query.add(Images(path=path, width=image_array.shape[1], height=image_array.shape[0]))
+    return Images.query.filter_by(path=path).first().id
