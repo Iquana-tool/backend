@@ -20,7 +20,7 @@ def cutout_contour_from_image(image: np.ndarray,
                               contour: np.ndarray,
                               resize_factor: float = 1.0,
                               darken_outside_contour: bool = False,
-                              darkening_factor: float = 0.7) -> np.ndarray:
+                              darkening_factor: float = 0.7) -> tuple[np.ndarray, float, float]:
     """ Cut out a box from the image, which includes the mask. The box is the smallest box that includes the mask unless
         size_factor is specified.
         Args:
@@ -33,7 +33,9 @@ def cutout_contour_from_image(image: np.ndarray,
             darkening_factor (float): The factor to darken the area outside the contour by. Default is 0.7.
 
         Returns:
-            np.ndarray: The image with the mask cut out.
+            tuple[np.ndarray, float, float]: The image with the mask cut out, the x-coordinate of the lower-left corner
+            of the box, and the y-coordinate of the lower-left corner of the box.
+
     """
     min_y, max_y = np.min(contour[0]), np.max(contour[0])
     min_x, max_x = np.min(contour[1]), np.max(contour[1])
@@ -48,7 +50,7 @@ def cutout_contour_from_image(image: np.ndarray,
         image_copy[max_y:, :] *= darkening_factor
         image_copy[:, :min_x] *= darkening_factor
         image_copy[:, max_x:] *= darkening_factor
-    return image_copy[min_y:max_y, min_x:max_x]
+    return image_copy[min_y:max_y, min_x:max_x], min_x, min_y
 
 
 def cutout_objects_on_mask_from_image(image: np.ndarray, mask: np.ndarray, size_factor: float = 1.0,
