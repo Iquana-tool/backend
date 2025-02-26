@@ -9,14 +9,6 @@ from app.services.prompts import Prompts
 from config import ModelConfig
 
 
-def assert_nd_array(image: np.ndarray) -> np.ndarray:
-    """ Assert the image is a numpy array and not a PIL Image. """
-    if isinstance(image, np.ndarray):
-        return image
-    else:
-        raise ValueError("Image must be numpy array.")
-
-
 class SAM2:
     def __init__(self, device='auto'):
         self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
@@ -37,7 +29,7 @@ class SAM2:
                  and 'high_res_feats'.
         """
         with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
-            self.prompt_predictor.set_image(assert_nd_array(image))
+            self.prompt_predictor.set_image(image)
             return {key: value.cpu().detach().numpy() for key, value in self.prompt_predictor._features}
 
     def segment_with_prompts(self,
@@ -68,7 +60,7 @@ class SAM2:
                 An array containing the segmentation masks, and an array of the predicted iou scores.
         """
         masks, scores = [], []
-        for entry in self.mask_generator.generate(assert_nd_array(image)):
+        for entry in self.mask_generator.generate(image):
             masks.append(entry['segmentation'])
             scores.append(entry['predicted_iou'])
         return np.array(masks), np.array(scores)
