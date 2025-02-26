@@ -1,1 +1,0 @@
-# Sam Model code

@@ -1,25 +1,59 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
+from pydantic import ValidationError
 import logging
+from sqlalchemy.orm import Session
+
+import config
+from app.services.segmentation import segment_with_prompts, segment_without_prompts, embed_image
+from app.services.prompts import Prompts
+from app.services.dataloader import load_image, load_embedding
+from app.schemas.segmentation_schemas import SegmentationRequest, SegmentationResponse
+from app.database import get_session  # Import the dependency for the database session
+from app.database.images import ImageEmbeddings  # Ensure this is the correct import for your models
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 # Create router
-router = APIRouter()
+router = APIRouter(prefix="/segmentation")
 
-@router.get("/segmentation/health")
-def check_health():
-    """Check if segmentation service is running"""
-    return {"status": "ok", "service": "segmentation"}
+@router.post('/segment_image')
+async def segment_image(request: Request, db: Session = Depends(get_session)):
+    """Perform segmentation with optional prompts, using data validation."""
+    try:
+        request_data = await request.json()
+        validated_data = SegmentationRequest(**request_data)
+    except ValidationError as err:
+        raise HTTPException(status_code=400, detail=err.errors())
 
-@router.post("/segmentation")
-async def segment_image(file: UploadFile = File(None)):
-    """Placeholder for image segmentation endpoint"""
-    if not file:
-        raise HTTPException(status_code=400, detail="No image file provided")
-    
-    return {
-        "message": "Image received for segmentation",
-        "filename": file.filename,
-        "content_type": file.content_type
-    }
+    if validated_data.use_prompts:
+        prompts = Prompts()
+
+        for point in validated_data.point_prompts:
+            prompts.add_point_annotation(point.x, point.y, point.label)
+
+        for box in validated_data.box_prompts:
+            prompts.add_box_annotation(box.min_x, box.min_y, box.max_x, box.max_y)
+
+        embedding = load_embedding(validated_data.image_id)
+        if embedding is None:
+            # Image has not been embedded yet
+            embedding = embed_image(load_image(validated_data.image_id))
+            new_embedding = ImageEmbeddings(
+                image_id=validated_data.image_id,
+                model=config.ModelConfig.selected_model,
+                dimensions=str(embedding["image_embed"].shape),
+                embed=embedding["image_embed"],
+                high_res_features=embedding["high_res_feats"]
+            )
+            db.add(new_embedding)
+            db.commit()
+
+        masks, quality = segment_with_prompts(embedding, prompts)
+    else:
+        image = load_image(validated_data.image_id)
+        masks, quality = segment_without_prompts(image)
+
+    response = {"masks": masks.tolist(), "quality": quality.tolist()}
+    return SegmentationResponse(**response)
+

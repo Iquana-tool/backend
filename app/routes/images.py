@@ -1,62 +1,57 @@
 import os
 import logging
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import FileResponse
-from typing import List
-
-from app.services.image_loader import save_uploaded_image, validate_image_file
-import config
+from sqlalchemy.orm import Session
+from app.services.dataloader import save_image
+from app.database import get_session  # Import the dependency for the database session
+from app.database.images import Images  # Ensure this is the correct import for your models
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["images"])
+router = APIRouter(prefix="/images", tags=["images"])
 
-@router.post("/upload")
-async def upload_image(file: UploadFile = File(...)):
+
+@router.post("/upload_image")
+async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_session)):
     """Upload an image file"""
     try:
-        file_path = await save_uploaded_image(file)
-        if file_path is None:
+        image_id = await save_image(file)
+        if image_id is None:
             raise HTTPException(status_code=400, detail="Invalid file or upload failed")
-            
+
+        # Save the image record to the database
+        new_image = Images(id=image_id, path=file.filename, type=file.content_type, size=file.size)
+        db.add(new_image)
+        db.commit()
+
         return {
             "success": True,
-            "file_path": file_path,
-            "filename": os.path.basename(file_path)
+            "file_path": image_id
         }
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/list")
-def list_images():
+
+@router.get("/list_images")
+def list_images(db: Session = Depends(get_session)):
     """List all uploaded images"""
     try:
-        if not os.path.exists(config.UPLOADS_DIR):
-            return {"images": []}
-            
-        image_files = []
-        for filename in os.listdir(config.UPLOADS_DIR):
-            if validate_image_file(filename):
-                file_path = os.path.join(config.UPLOADS_DIR, filename)
-                image_files.append({
-                    "name": filename,
-                    "path": f"/uploads/{filename}",
-                    "size": os.path.getsize(file_path)
-                })
-                
-        return {"images": image_files}
+        images = db.query(Images).all()
+        return {"images": [image.id for image in images]}
     except Exception as e:
         logger.error(f"List images error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/{filename}")
-async def get_image(filename: str):
+
+@router.get("/get_image/{image_id}")
+async def get_image(image_id: int, db: Session = Depends(get_session)):
     """Get a specific image"""
-    if not validate_image_file(filename):
-        raise HTTPException(status_code=400, detail="Invalid file type")
-        
-    file_path = os.path.join(config.UPLOADS_DIR, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Image not found")
-        
-    return FileResponse(file_path)
+    try:
+        image = db.query(Images).filter(Images.id == image_id).first()
+        if not image:
+            raise HTTPException(status_code=404, detail="Image not found")
+        return FileResponse(image.path)
+    except Exception as e:
+        logger.error(f"Get image error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
