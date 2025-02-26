@@ -10,6 +10,7 @@ from app.services.dataloader import load_image, load_embedding
 from app.schemas.segmentation_schemas import SegmentationRequest, SegmentationResponse
 from app.database import get_session  # Import the dependency for the database session
 from app.database.images import ImageEmbeddings  # Ensure this is the correct import for your models
+from app.schemas.util import validate_request
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -20,11 +21,7 @@ router = APIRouter(prefix="/segmentation")
 @router.post('/segment_image')
 async def segment_image(request: Request, db: Session = Depends(get_session)):
     """Perform segmentation with optional prompts, using data validation."""
-    try:
-        request_data = await request.json()
-        validated_data = SegmentationRequest(**request_data)
-    except ValidationError as err:
-        raise HTTPException(status_code=400, detail=err.errors())
+    validated_data = validate_request(await request.json(), SegmentationRequest)
 
     if validated_data.use_prompts:
         prompts = Prompts()
@@ -43,8 +40,8 @@ async def segment_image(request: Request, db: Session = Depends(get_session)):
                 image_id=validated_data.image_id,
                 model=config.ModelConfig.selected_model,
                 dimensions=str(embedding["image_embed"].shape),
-                embed=embedding["image_embed"],
-                high_res_features=embedding["high_res_feats"]
+                embed=str(embedding["image_embed"].flatten().numpy()),
+                high_res_features=str(embedding["high_res_feats"].flatten().numpy())
             )
             db.add(new_embedding)
             db.commit()
