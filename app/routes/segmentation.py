@@ -6,10 +6,10 @@ from sqlalchemy.orm import Session
 import config
 from app.services.segmentation import segment_with_prompts, segment_without_prompts, embed_image
 from app.services.prompts import Prompts
-from app.services.dataloader import load_image, load_embedding
+from app.services.database_access import load_image, load_embedding
 from app.schemas.segmentation_schemas import SegmentationRequest, SegmentationResponse
-from app.database import get_session  # Import the dependency for the database session
-from app.database.images import ImageEmbeddings  # Ensure this is the correct import for your models
+from app.database import get_session
+from app.database.images import ImageEmbeddings
 from app.schemas.util import validate_request
 
 # Set up logging
