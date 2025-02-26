@@ -3,6 +3,7 @@ from PIL import Image
 from fastapi import UploadFile
 import config
 from app.database.images import Images, ImageEmbeddings
+from app.database import get_session
 
 
 def load_image(image_id):
