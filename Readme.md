@@ -1,26 +1,26 @@
-# Flask Backend for Coral Analysis
+# FastAPI Backend for Coral Analysis
 
 ## 📌 Overview
-This repository contains a Flask backend for coral analysis, integrating **Segment Anything Model (SAM)** for image segmentation. It follows a modular structure with clear separation between **routes, services, models, and schemas** to ensure scalability and maintainability.
+This repository contains a FastAPI backend for coral analysis, integrating **Segment Anything Model (SAM)** for image segmentation. It follows a modular structure with clear separation between **routes, services, models, and schemas** to ensure scalability and maintainability.
 
 ## 🏗️ Project Structure
 ```
 app/
-│── data             # Data folder. Saves images and CT Scans, and all other kind of data
-│   |── meso-scale   # Coral images 
-│   |── micro-scale  # Coral CT Scans
-│   |── *            # Other data
 │── database         # Database models (SQLAlchemy). Define the database scheme
 │   |── coral.py     
-│── schemas          # API request/response validation (Marshmallow). Define the data format for requests/responses
+│── schemas          # API request/response validation (PyDantic). Define the data format for requests/responses
 │   │── *.py         
 │── routes/          # API endpoints (Blueprints)
 │   │── *.py         
 │── services/        # Defines actual functionalities. Disconnected from routes.
 │   │── *.py  
-│── __init__.py      # Flask app factory function. Builds the app
+│── __init__.py      # FastAPI app factory function. Builds the app
+data/                # Data folder. Saves images and CT Scans, and all other kind of data
+|── meso-scale       # Coral images 
+|── micro-scale      # Coral CT Scans
+|── database.db      # SQLite database
+tests/*              # Tests for services and routes
 config.py            # Configuration settings (database, environment variables, paths etc.)
-migrations/          # Database migration scripts (Fastapi-Migrate) = Source control for db
 .env                 # Environment variables (e.g., DB credentials)
 requirements.txt     # Project dependencies
 Readme.md            # Project documentation
@@ -82,7 +82,7 @@ TODO: Add this.
 - Example: `SegmentedImage` stores segmentation results.
 
 ### **3. API Schemas (`schemas/*.py`)**
-- Handles **API request validation & response formatting** using Marshmallow.
+- Handles **API request validation & response formatting** using PyDantic.
 - Ensures data consistency in API responses.
 
 ### **4. Routes (`routes/*.py`)**
