@@ -9,6 +9,7 @@ class Images(database):
     path = Column(String, nullable=False)  # Path to the image file
     width = Column(Integer, nullable=False)  # Width of the image in pixels
     height = Column(Integer, nullable=False)  # Height of the image in pixels
+    hash_code = Column(String(64), nullable=False, unique=True)  # Hash of the image file
 
     def __repr__(self):
         return (f"<Image(id='{self.id}', "

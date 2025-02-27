@@ -25,9 +25,10 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_s
 
         return {
             "success": True,
-            "file_path": image_id
+            "image_id": image_id
         }
     except Exception as e:
+        raise e
         logger.error(f"Upload error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -36,8 +37,11 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_s
 def list_images(db: Session = Depends(get_session)):
     """List all uploaded image ids"""
     try:
-        images = db.query(Images.id).all()
-        return {"images": images}
+        images = db.query(Images).all()
+        return {
+            "success": True,
+            "images": images
+        }
     except Exception as e:
         logger.error(f"List images error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
