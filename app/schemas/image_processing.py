@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field, conlist, validator, field_serializer, field_validator
+from pydantic import BaseModel, Field, conlist, validator, field_serializer, field_validator, root_validator, \
+    model_validator
 from typing import List, Optional
 from app.database.images import Images
+from app.database import get_context_session
 import numpy as np
 
 
@@ -45,9 +47,9 @@ class ImagesRequest(BaseModel):
 
 
 class CutoutsRequest(BaseModel):
-    """ Model for validating the cutouts request. """
+    """Model for validating the cutouts request."""
     image_id: int
-    mask: np.ndarray[bool]
+    rle_mask: str
     resize_factor: float
     darken_outside_contours: bool
     darkening_factor: float
@@ -55,22 +57,55 @@ class CutoutsRequest(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-    @field_validator('image_id', 'mask')
+    @field_validator('image_id')
     def validate_image_id(cls, value):
         if value <= 0:
             raise ValueError("image_id must be a positive integer.")
         elif Images.query.filter_by(id=value).first() is None:
             raise ValueError("image_id does not exist in the database.")
+        return value
 
     @field_validator('resize_factor', 'darkening_factor')
     def validate_values(cls, value):
         if not 0 < value <= 1.0:
             raise ValueError("Values must be a float in ]0;1] (excluding 0).")
+        return value
 
-    @field_validator('mask')
-    def validate_mask(cls, value):
-        if np.all(value == 0) or np.all(value == 1):
+    @field_validator('rle_mask')
+    def validate_rle_mask(cls, value):
+        # Decode the RLE mask to check its validity
+        try:
+            mask = cls.rle_decode(value)
+        except Exception as e:
+            raise ValueError(f"Invalid RLE mask: {e}")
+
+        if np.all(mask == 0) or np.all(mask == 1):
             raise ValueError("Mask must contain both 0 and 1 values.")
+        return value
+
+    @model_validator(mode="after")
+    def decode_rle_mask(cls, values):
+        # Decode the RLE mask and store it as a numpy array
+        rle_mask = values.get('rle_mask')
+        if rle_mask:
+            values['mask'] = cls.rle_decode(rle_mask)
+        return values
+
+    @staticmethod
+    def rle_decode(rle_str):
+        """Decodes an RLE encoded mask."""
+        s = rle_str.split()
+        starts, lengths = [np.asarray(x, dtype=int) for x in (s[0::2], s[1::2])]
+        starts -= 1
+        ends = starts + lengths
+        mask = np.zeros(max(ends), dtype=np.uint8)
+        for start, end in zip(starts, ends):
+            mask[start:end] = 1
+        with get_context_session() as session:
+            image = session.query(Images).filter_by(id=1).first()
+        return mask.reshape((image.height, image.width))  # Replace height and width with actual dimensions
+
+
 
 class CutoutsResponse(BaseModel):
     """ Model for validating the cutouts response. """

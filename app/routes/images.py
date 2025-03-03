@@ -78,17 +78,16 @@ async def get_images(image_ids: list[int], db: Session = Depends(get_session)):
 
 
 @router.post("/get_cutouts")
-async def get_cutouts(request: Request, db: Session = Depends(get_session)):
+async def get_cutouts(request: CutoutsRequest, db: Session = Depends(get_session)):
     """Get cutouts from an image"""
     try:
-        validated_data = validate_request(await request.json(), CutoutsRequest)
-        cutouts = cutout_objects_on_mask_from_image(load_image(validated_data.image_id),
-                                                    validated_data.mask,
-                                                    validated_data.resize_factor,
-                                                    validated_data.darken_outside_contours,
-                                                    validated_data.darkening_factor)
+        cutouts = cutout_objects_on_mask_from_image(load_image(request.image_id),
+                                                    request.mask,
+                                                    request.resize_factor,
+                                                    request.darken_outside_contours,
+                                                    request.darkening_factor)
         for cutout, lower_left_x, lower_left_y in cutouts:
-            db.add(Cutouts(image_id=validated_data.image_id, width=cutout.shape[1], height=cutout.shape[0],
+            db.add(Cutouts(image_id=request.image_id, width=cutout.shape[1], height=cutout.shape[0],
                            lower_left_x=lower_left_x, lower_left_y=lower_left_y))
         return CutoutsResponse(cutouts=cutouts)
     except Exception as e:

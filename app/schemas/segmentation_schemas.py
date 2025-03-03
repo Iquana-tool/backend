@@ -1,13 +1,15 @@
 from pydantic import BaseModel, Field, conlist, validator, field_serializer, field_validator
-from typing import List, Optional
+from typing import List, Optional, Annotated
+
+from app.database import get_context_session
 from app.database.images import Images
 
 
 class PointPrompt(BaseModel):
     """ Model for validating a point annotation. """
-    x: float
-    y: float
-    label: int
+    x: Annotated[float, "Coordinates must be between 0 and 1."]
+    y: Annotated[float, "Coordinates must be between 0 and 1."]
+    label: Annotated[bool, "Label must be 0 (background) or 1 (foreground)."]
 
     @field_validator('label')
     def validate_label(cls, value):
@@ -22,10 +24,10 @@ class PointPrompt(BaseModel):
 
 class BoxPrompt(BaseModel):
     """ Model for validating a bounding box annotation. """
-    min_x: float
-    min_y: float
-    max_x: float
-    max_y: float
+    min_x: Annotated[float, "Coordinates must be between 0 and 1."]
+    min_y: Annotated[float, "Coordinates must be between 0 and 1."]
+    max_x: Annotated[float, "Coordinates must be between 0 and 1."]
+    max_y: Annotated[float, "Coordinates must be between 0 and 1."]
 
     @field_validator('min_x', 'min_y', 'max_x', 'max_y')
     def validate_coordinates(cls, value):
@@ -35,20 +37,21 @@ class BoxPrompt(BaseModel):
 
 class SegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
-    use_prompts: bool
-    image_id: int
-    point_prompts: Optional[List[PointPrompt]] = Field(default_factory=list)
-    box_prompts: Optional[List[BoxPrompt]] = Field(default_factory=list)
+    use_prompts: Annotated[bool, "Use prompts for segmentation (=true) or use automatic segmentation without prompts (=false)."]
+    image_id: Annotated[int, "ID of the image to segment."]
+    point_prompts: Annotated[Optional[List[PointPrompt]], "List of point prompts supplied by the user"] = Field(default_factory=list)
+    box_prompts: Annotated[Optional[List[PointPrompt]], "List of box prompts supplied by the user"] = Field(default_factory=list)
 
     @field_validator('image_id')
     def validate_image_id(cls, value):
-        if value <= 0:
-            raise ValueError("image_id must be a positive integer.")
-        elif Images.query.filter_by(id=value).first() is None:
-            raise ValueError("image_id does not exist in the database.")
+        with get_context_session() as session:
+            if value <= 0:
+                raise ValueError("image_id must be a positive integer.")
+            elif session.query(Images).filter_by(id=value).first() is None:
+                raise ValueError("image_id does not exist in the database.")
 
 
 class SegmentationResponse(BaseModel):
     """ Model for validating the segmentation response. """
-    masks: List[conlist(bool, min_length=1)]  # Nested list for masks
+    rle_masks: List[str]  # Nested list for masks
     quality: List[float]

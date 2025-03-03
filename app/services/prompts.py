@@ -20,9 +20,12 @@ class Prompts:
                 label (int): The label of the point. Must be 0 for background (negative annotation) or 1 for foreground
                              (positive annotation).
         """
-        if label not in [0, 1]:
-            raise ValueError("Label must be 0 for background (negative annotation) "
-                             "or 1 for foreground (positive annotation).")
+        if not isinstance(label, int):
+            try:
+                label = int(label)
+            except ValueError:
+                raise ValueError(f"Label must be 0 for background (negative annotation) "
+                                 f"or 1 for foreground (positive annotation). Got {label}.")
         if not (0 <= x <= 1 and 0 <= y <= 1):
             raise ValueError(f"x and y must be between 0 and 1. x: {x}, y: {y}")
         self.point_prompts.append([x, y])
