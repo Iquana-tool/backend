@@ -30,7 +30,8 @@ class SAM2:
         """
         with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
             self.prompt_predictor.set_image(image)
-            return {key: value.cpu().detach().numpy() for key, value in self.prompt_predictor._features}
+            print(self.prompt_predictor._features)
+            return {key: value.cpu().detach().numpy() for key, value in self.prompt_predictor._features.items()}
 
     def segment_with_prompts(self,
                              embedding: dict[str, np.ndarray],
