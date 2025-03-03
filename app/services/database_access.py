@@ -22,14 +22,17 @@ def generate_hash_for_image(image: UploadFile):
         hasher.update(data)
     return hasher.hexdigest()
 
+def get_meso_path(filename):
+    """Get the full path to the meso directory for the given filename."""
+    return os.path.join(config.Paths.meso_dir, filename)
+
 
 def load_image_as_base64(image_id):
     """Load an image from the database by its ID and return it as a base64 string."""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
     if image:
-        path = os.path.join(config.Paths.meso_dir, image.path)
-        with open(path, "rb") as file:
+        with open(get_meso_path(image.path), "rb") as file:
             return str(file.read())
     else:
         return None
@@ -40,13 +43,14 @@ def load_image(image_id):
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
     if image:
-        return np.array(Image.open(image.path))
+        return np.array(Image.open(get_meso_path(image.path)))
     else:
         return None
 
 def load_embedding(image_id):
     """Load an image embedding from the database by its image ID."""
-    embedding = ImageEmbeddings.query.filter_by(image_id=image_id).first()
+    with get_context_session() as session:
+        embedding = session.query(ImageEmbeddings).filter_by(image_id=image_id).first()
     if embedding:
         image_embed = np.fromstring(embedding.embed, sep=',')
         high_res_feats = np.fromstring(embedding.high_res_features, sep=',')
@@ -67,7 +71,7 @@ async def save_image(image: UploadFile):
             next_id = session.query(Images).count() + 1
     original_extension = image.filename.split(".")[-1]
     new_file_name = f"{next_id}.{original_extension}"
-    path = os.path.join(config.Paths.meso_dir, new_file_name)
+    path = get_meso_path(new_file_name)
     with open(path, "wb") as file:
         file.write(image_data)
     image_array = np.array(Image.open(path))
