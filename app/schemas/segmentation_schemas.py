@@ -13,13 +13,15 @@ class PointPrompt(BaseModel):
 
     @field_validator('label')
     def validate_label(cls, value):
-        if value not in [0, 1]:
+        if value not in [True, False]:
             raise ValueError("Label must be 0 (background) or 1 (foreground).")
+        return value
 
     @field_validator('x', 'y')
     def validate_coordinates(cls, value):
         if not (0 <= value <= 1):
             raise ValueError("Coordinates must be between 0 and 1.")
+        return value
 
 
 class BoxPrompt(BaseModel):
@@ -33,14 +35,15 @@ class BoxPrompt(BaseModel):
     def validate_coordinates(cls, value):
         if not (0 <= value <= 1):
             raise ValueError("Box coordinates must be between 0 and 1.")
+        return value
 
 
 class SegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
     use_prompts: Annotated[bool, "Use prompts for segmentation (=true) or use automatic segmentation without prompts (=false)."]
     image_id: Annotated[int, "ID of the image to segment."]
-    point_prompts: Annotated[Optional[List[PointPrompt]], "List of point prompts supplied by the user"] = Field(default_factory=list)
-    box_prompts: Annotated[Optional[List[PointPrompt]], "List of box prompts supplied by the user"] = Field(default_factory=list)
+    point_prompts: Annotated[List[PointPrompt], "List of point prompts supplied by the user"] = Field(default_factory=list)
+    box_prompts: Annotated[List[BoxPrompt], "List of box prompts supplied by the user"] = Field(default_factory=list)
 
     @field_validator('image_id')
     def validate_image_id(cls, value):
@@ -49,6 +52,7 @@ class SegmentationRequest(BaseModel):
                 raise ValueError("image_id must be a positive integer.")
             elif session.query(Images).filter_by(id=value).first() is None:
                 raise ValueError("image_id does not exist in the database.")
+            return value
 
 
 class SegmentationResponse(BaseModel):
