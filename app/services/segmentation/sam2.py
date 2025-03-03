@@ -19,7 +19,7 @@ class SAM2:
         self.prompt_predictor = SAM2ImagePredictor(self.model)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model)
 
-    def embed_image(self, image: np.ndarray) -> dict[str, torch.Tensor]:
+    def embed_image(self, image: np.ndarray) -> dict[str, Union[np.ndarray, list[np.ndarray]]]:
         """ Compute embeddings for image.
             Args:
                 image (Union[np.ndarray, Image.Image]): The image to embed.
@@ -35,10 +35,12 @@ class SAM2:
 
     def segment_with_prompts(self,
                              embedding: dict,
+                             original_height_width: tuple[int, int],
                              input_prompts: Prompts):
         """ Segment an image using prompts.
             Args:
                 embedding: (dict[str, np.ndarray]): The embedding of the image to segment.
+                original_height_width: (tuple[int, int]): The original height and width of the image.
                 input_prompts (Prompts): The prompts to use for segmentation.
 
             Returns:
@@ -50,6 +52,7 @@ class SAM2:
         with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
             self.prompt_predictor._features = embedding  # Sets the embedding
             self.prompt_predictor._is_image_set = True
+            self.prompt_predictor._orig_hw = [original_height_width]
             masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input())
         return masks, quality
 

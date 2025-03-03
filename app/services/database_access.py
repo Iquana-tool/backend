@@ -1,3 +1,5 @@
+from typing import Union
+
 import numpy as np
 from PIL import Image
 from fastapi import UploadFile
@@ -47,17 +49,40 @@ def load_image(image_id):
     else:
         return None
 
-def load_embedding(image_id):
+def load_embedding(embedding_id: int):
     """Load an image embedding from the database by its image ID."""
     with get_context_session() as session:
-        embedding = session.query(ImageEmbeddings).filter_by(image_id=image_id).first()
+        embedding = session.query(ImageEmbeddings).filter_by(id=embedding_id).first()
     if embedding:
-        image_embed = np.fromstring(embedding.embed, sep=',')
-        high_res_feats = np.fromstring(embedding.high_res_features, sep=',')
-        image_embed = image_embed.reshape(embedding.dimensions)
-        return {"image_embed": image_embed, "high_res_feats": high_res_feats}
+        try:
+            loaded_data = np.load(get_meso_path(str(embedding.id)) + ".npz")
+            files = set(loaded_data.files)
+            new_dict = {}
+            new_dict["image_embed"] = loaded_data["image_embed"]
+            files.remove("image_embed")
+            new_dict["high_res_feats"] = [loaded_data[high_res_feat] for high_res_feat in files]
+            print(new_dict)
+            return new_dict
+        except FileNotFoundError:
+            logger.warning(f"File not found for embedding ID {embedding_id}.")
+            return None
     else:
         return None
+
+
+def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], embedding_id: int) -> None:
+    """ Save an image embedding to disk.
+        Args:
+            embedding (dict[str, Union[np.ndarray, list[np.ndarray]]]): The embedding to save.
+            embedding_id (int): The ID of the image embedding.
+    """
+    path = get_meso_path(str(embedding_id)) + ".npz"
+    new_dict = {}
+    new_dict["image_embed"] = embedding["image_embed"]
+    for i, mask in enumerate(embedding["high_res_feats"]):
+        new_dict[f"high_res_feats_{i}"] = mask
+    np.savez_compressed(str(path), **new_dict)
+
 
 async def save_image(image: UploadFile):
     """Save an image to disk and to the database and return the new image ID."""

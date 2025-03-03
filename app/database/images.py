@@ -47,13 +47,7 @@ class ImageEmbeddings(database):
                       nullable=False)  # Image ID is the primary key
     model = Column(String(50), nullable=False)  # The model used to generate the embedding
     embed_dimensions = Column(String(50), nullable=False)  # The dimensions of the embedding
-    embed = Column(Text, nullable=False)  # The flattened embedding vector as a string
-    high_res_dimensions = Column(String(50), nullable=False)  # The dimensions of the high resolution features
-    high_res_features = Column(Text, nullable=False)  # The high resolution features as a string
-
     def __repr__(self):
         return (f"<ImageEmbedding(image_id='{self.image_id}', "
                 f"model='{self.model}', "
-                f"dimension='{self.dimensions}',"
-                f"embed='{self.embed}', "
-                f"high_res_features='{self.high_res_features}')>")
+                f"dimension='{self.embed_dimensions}'>")
