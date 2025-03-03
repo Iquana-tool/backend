@@ -34,22 +34,22 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
         if embedding is None:
             # Image has not been embedded yet
             embedding = embed_image(load_image(request.image_id))
-            new_embedding = ImageEmbeddings(
-                image_id=request.image_id,
-                model=config.ModelConfig.selected_model,
-                dimensions=str(embedding["image_embed"].shape),
-                embed=str(embedding["image_embed"].flatten().numpy()),
-                high_res_features=str(embedding["high_res_feats"].flatten().numpy())
-            )
-            db.add(new_embedding)
-            db.commit()
+            #new_embedding = ImageEmbeddings(
+            #    image_id=request.image_id,
+            #    model=config.ModelConfig.selected_model,
+            #    embed_dimensions=str(embedding["image_embed"].shape),
+            #    embed=str(embedding["image_embed"].flatten().numpy()),
+            #    high_res_features=str(embedding["high_res_feats"].flatten().numpy())
+            #)
+            #db.add(new_embedding)
+            #db.commit()
 
         masks, quality = segment_with_prompts(embedding, prompts)
     else:
         image = load_image(request.image_id)
         masks, quality = segment_without_prompts(image)
 
-    response = {"masks": [rle_encode(mask) for mask in masks.tolist()],
+    response = {"rle_masks": [rle_encode(mask) for mask in masks],
                 "quality": quality.tolist()}
     return SegmentationResponse(**response)
 

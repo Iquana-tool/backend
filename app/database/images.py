@@ -46,8 +46,9 @@ class ImageEmbeddings(database):
                       ForeignKey('images.id', ondelete='CASCADE'),
                       nullable=False)  # Image ID is the primary key
     model = Column(String(50), nullable=False)  # The model used to generate the embedding
-    dimensions = Column(String(50), nullable=False)  # The dimensions of the embedding
+    embed_dimensions = Column(String(50), nullable=False)  # The dimensions of the embedding
     embed = Column(Text, nullable=False)  # The flattened embedding vector as a string
+    high_res_dimensions = Column(String(50), nullable=False)  # The dimensions of the high resolution features
     high_res_features = Column(Text, nullable=False)  # The high resolution features as a string
 
     def __repr__(self):

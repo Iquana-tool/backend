@@ -30,11 +30,11 @@ class SAM2:
         """
         with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
             self.prompt_predictor.set_image(image)
-            print(self.prompt_predictor._features)
-            return {key: value.cpu().detach().numpy() for key, value in self.prompt_predictor._features.items()}
+            return {"image_embed": self.prompt_predictor._features['image_embed'].cpu().detach().numpy(),
+                    "high_res_feats": [feat.float().cpu().detach().numpy() for feat in self.prompt_predictor._features['high_res_feats']]}
 
     def segment_with_prompts(self,
-                             embedding: dict[str, np.ndarray],
+                             embedding: dict,
                              input_prompts: Prompts):
         """ Segment an image using prompts.
             Args:
@@ -45,7 +45,8 @@ class SAM2:
                 A tuple containing a CxHxW array, where C is the number of masks, and an array of length C,
                  where each entry is the quality of the corresponding mask.
         """
-        embedding = {key: torch.tensor(value, device=self.device) for key, value in embedding.items()}
+        embedding["image_embed"] = torch.from_numpy(embedding["image_embed"]).to(self.device)
+        embedding["high_res_feats"] = [torch.from_numpy(feat).to(self.device) for feat in embedding["high_res_feats"]]
         with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
             self.prompt_predictor._features = embedding  # Sets the embedding
             self.prompt_predictor._is_image_set = True
