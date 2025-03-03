@@ -2,7 +2,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import create_engine
 from contextlib import contextmanager
 
-from torch.ao.quantization import qconfig_equals
+# from torch.ao.quantization import qconfig_equals
 
 from config import Paths
 
@@ -33,4 +33,7 @@ def get_session():
 @contextmanager
 def get_context_session():
     session = SessionLocal()
-    return session
+    try:
+        yield session
+    finally:
+        session.close()

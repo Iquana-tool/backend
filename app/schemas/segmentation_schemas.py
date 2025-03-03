@@ -50,5 +50,5 @@ class SegmentationRequest(BaseModel):
 
 class SegmentationResponse(BaseModel):
     """ Model for validating the segmentation response. """
-    masks: List[conlist(int, min_length=1)]  # Nested list for masks
+    masks: List[conlist(bool, min_length=1)]  # Nested list for masks
     quality: List[float]

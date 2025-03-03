@@ -4,7 +4,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.schemas.image_processing import CutoutsRequest, CutoutsResponse, ImagesResponse, ImagesRequest
-from app.services.database_access import save_image
+from app.services.database_access import save_image, load_image_as_base64
 from app.services.cutouts import cutout_objects_on_mask_from_image
 from app.services.database_access import load_image
 from app.database import get_session
@@ -47,20 +47,31 @@ def list_images(db: Session = Depends(get_session)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/get_images")
-async def get_image(request: Request, db: Session = Depends(get_session)):
-    """Get a specific image"""
+@router.post("/get_images", response_model=dict[int, dict])
+async def get_images(image_ids: list[int], db: Session = Depends(get_session)):
+    """Get images via ids.
+
+    Args:
+        image_ids: List of image IDs to retrieve.
+
+    Returns:
+        A dictionary that has ids as keys and dictionaries as values.
+        The dictionary has base64, height, and width as keys.
+    """
     try:
-        validated_data = validate_request(await request.json(), ImagesRequest)
-        if len(validated_data.ids) > 100:
+        if len(image_ids) > 100:
             logger.warning("Requesting more than 100 images at once. This may take a while.")
         images = {}
-        for image_id in validated_data.ids:
-            image = load_image(image_id)
+        for image_id in image_ids:
+            image = load_image_as_base64(image_id)
             if not image:
                 raise HTTPException(status_code=404, detail="Image not found")
-            images[image_id] = image
-        return ImagesResponse(images=images)
+            images[image_id] = {
+                "base64": image,
+                "height": db.query(Images).filter_by(id=image_id).first().height,
+                "width": db.query(Images).filter_by(id=image_id).first().width
+            }
+        return images
     except Exception as e:
         logger.error(f"Get image error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
