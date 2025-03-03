@@ -22,10 +22,8 @@ router = APIRouter(prefix="/segmentation")
 @router.post('/segment_image')
 async def segment_image(request: SegmentationRequest, db: Session = Depends(get_session)):
     """Perform segmentation with optional prompts, using data validation."""
-    print(request)
     if request.use_prompts:
         prompts = Prompts()
-        print(request.point_prompts)
         for point in request.point_prompts:
             prompts.add_point_annotation(point.x, point.y, point.label)
 
