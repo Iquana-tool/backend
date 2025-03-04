@@ -1,4 +1,4 @@
-app/services/weights/*
+app/services/segmentation/weights/*
 
 # Byte-compiled / optimized Python files
 __pycache__/

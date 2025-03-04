@@ -10,67 +10,52 @@ app/
 │   |── coral.py     
 │── schemas          # API request/response validation (PyDantic). Define the data format for requests/responses
 │   │── *.py         
-│── routes/          # API endpoints (Blueprints)
+│── routes/          # API endpoints (FastAPI Routers)
 │   │── *.py         
 │── services/        # Defines actual functionalities. Disconnected from routes.
 │   │── *.py  
-│── __init__.py      # FastAPI app factory function. Builds the app
+│── __init__.py      # FastAPI app factory function. Builds the app and initialises the database
 data/                # Data folder. Saves images and CT Scans, and all other kind of data
-|── meso-scale       # Coral images 
-|── micro-scale      # Coral CT Scans
+|── meso-scale       # Coral images and embeddings
+|── micro-scale      # Coral CT Scans 
 |── database.db      # SQLite database
 tests/*              # Tests for services and routes
 config.py            # Configuration settings (database, environment variables, paths etc.)
-.env                 # Environment variables (e.g., DB credentials)
 requirements.txt     # Project dependencies
-Readme.md            # Project documentation
-run.py               # Entry point to start the Fastapi application
+Readme.md            # This file
+main.py              # Entry point to start the Fastapi application
 ```
 
 ## 🛠️ Installation & Setup
-### 1️⃣ Clone the Repository
+### 1. Clone the Repository
 ```sh
 git clone <repo-url>
 cd <repo-folder>
 ```
 
-### 2️⃣ Create a Virtual Environment
+### 2. Create a Virtual Environment
 ```sh
 python -m venv venv
 source venv/bin/activate  # On Windows use: venv\Scripts\activate
 ```
 
-### 3️⃣ Install Dependencies
+### 3. Install Dependencies
 ```sh
 pip install -r requirements.txt
 ```
 
-### 4️⃣ Set Up Environment Variables
-Create a **.env** file in the project root and define required environment variables:
-```ini
-FLASK_ENV=development
-SECRET_KEY=your_secret_key
-DATABASE_URL=sqlite:///database.db
-UPLOAD_FOLDER=uploads/
+### 4. Run the Flask Application
+```shell
+fastapi main.py
 ```
-
-### 5️⃣ Initialize the Database
-```sh
-flask db init
-flask db migrate -m "Initial migration."
-flask db upgrade
+or for developer mode
+```shell
+fastapi dev main.py
 ```
-
-### 6️⃣ Run the Flask Application
-```sh
-python run.py
-```
-Server will be accessible at: `http://127.0.0.1:5000/`
-
-## 🛠️ API Endpoints
-### 🔹 Segment an Image
-TODO: Add this.
-
+>Server will be accessible at: http://127.0.0.1:8000
+>
+>Swagger Docs can be accessed at: http://127.0.0.1:8000/docs
+---
 ## 🏗️ Understanding the Structure
 ### **1. Data folder (`data/`)**
 - Contains the data in two subfolders:
@@ -107,11 +92,14 @@ TODO: Add this.
    5. **Schema**: Puts the result in valid JSON response format.
 3. **Route**: Sends the response back to the user.
 4. Done!
+---
 ## Endpoint Scheme
+# Warning: This is not updated!
 ### **Authentication**
 > Do we need this?
 
 ### **Coral**
+
 > **GET** `/coral/get_coral`
 > - Parameters:
 >   - `coral_id` (int): Coral ID
