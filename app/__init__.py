@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import config
 from app.routes.segmentation import router as segmentation_router
 from app.routes.images import router as image_router
+from app.routes.masks import router as mask_router
 from app.database import init_db
 
 
@@ -32,7 +33,8 @@ def create_app():
     )
 
     # Include the router
-    app.include_router(segmentation_router, prefix="/api")
-    app.include_router(image_router, prefix="/api")
+    app.include_router(segmentation_router)
+    app.include_router(image_router)
+    app.include_router(mask_router)
 
     return app
