@@ -24,9 +24,27 @@ def generate_hash_for_image(image: UploadFile):
         hasher.update(data)
     return hasher.hexdigest()
 
+
 def get_meso_path(filename):
     """Get the full path to the meso directory for the given filename."""
     return os.path.join(config.Paths.meso_dir, filename)
+
+
+def delete_image_files(image_id: int):
+    """Deletes the image files and the embeddings"""
+    with get_context_session() as session:
+        image = session.query(Images).filter_by(id=image_id).first()
+        embeddings = session.query(ImageEmbeddings).filter_by(id=image_id).all()
+        for embedding in embeddings:
+            embedding_path = get_meso_path(str(embedding.id)) + ".npz"
+            if os.path.exists(embedding_path):
+                os.remove(embedding_path)
+            session.delete(embedding)
+        image_path = get_meso_path(str(image_id)) + ".jpg"
+        if os.path.exists(image_path):
+            os.remove(image_path)
+        session.delete(image)
+        session.commit()
 
 
 def load_image_as_base64(image_id):

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.schemas.image_processing import CutoutsRequest, CutoutsResponse, ImagesResponse, ImagesRequest
 from app.services.database_access import save_image, load_image_as_base64
 from app.services.cutouts import cutout_objects_on_mask_from_image
-from app.services.database_access import load_image
+from app.services.database_access import load_image, delete_image_files
 from app.database import get_session
 from app.database.images import Images, Cutouts
 from app.schemas.util import validate_request
@@ -25,11 +25,22 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_s
 
         return {
             "success": True,
-            "image_id": image_id
+            "image_id": image_id,
+            "message": f"Successfully uploaded image. Assigned id {image_id}"
         }
     except Exception as e:
-        raise e
         logger.error(f"Upload error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_image/{image_id}")
+async def delete_image(image_id: int):
+    try:
+        delete_image_files(image_id)
+        return {"success": True,
+                "message": f"Deleted image {image_id}."}
+    except Exception as e:
+        logger.error(f"Delete image error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

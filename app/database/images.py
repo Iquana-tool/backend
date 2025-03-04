@@ -21,7 +21,8 @@ class Images(database):
 class Cutouts(database):
     __tablename__ = 'cutouts'
     id = Column(Integer, primary_key=True, autoincrement=True)  # Unique ID for the cutout
-    image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'), nullable=False)  # Image ID is the primary key
+    image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'),
+                      nullable=False)  # Image ID is the primary key
     path = Column(String, nullable=False)  # Path to the cutout file
     width = Column(Integer, nullable=False)  # Width of the cutout in pixels
     height = Column(Integer, nullable=False)  # Height of the cutout in pixels
@@ -37,7 +38,6 @@ class Cutouts(database):
                 f"lower_left_y='{self.lower_left_y}')>")
 
 
-
 class ImageEmbeddings(database):
     __tablename__ = 'image_embeddings'
     id = Column(Integer, primary_key=True, autoincrement=True)  # Unique ID for the embedding
@@ -47,6 +47,7 @@ class ImageEmbeddings(database):
                       nullable=False)  # Image ID is the primary key
     model = Column(String(50), nullable=False)  # The model used to generate the embedding
     embed_dimensions = Column(String(50), nullable=False)  # The dimensions of the embedding
+
     def __repr__(self):
         return (f"<ImageEmbedding(image_id='{self.image_id}', "
                 f"model='{self.model}', "
