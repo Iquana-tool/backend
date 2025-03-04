@@ -21,6 +21,9 @@ class Paths:
     data_dir = os.path.join(base_dir, 'data')
     database = "sqlite:///" + os.path.join(data_dir, 'database.db')
     meso_dir = os.path.join(data_dir, 'meso-scale')
+    images_dir = os.path.join(meso_dir, 'images')
+    embedding_dir = os.path.join(meso_dir, 'embeddings')
+    masks_dir = os.path.join(meso_dir, 'masks')
     micro_dir = os.path.join(data_dir, 'micro-scale')
 
     app_dir = os.path.join(base_dir, 'app')

@@ -9,7 +9,7 @@ from app.services.segmentation import segment_with_prompts, segment_without_prom
 from app.services.prompts import Prompts
 from app.services.database_access import load_image, load_embedding, save_embeddings_to_disk
 from app.services.postprocessing import rle_encode
-from app.schemas.segmentation_schemas import SegmentationRequest, SegmentationResponse
+from app.schemas.segmentation import SegmentationRequest, SegmentationResponse
 from app.database import get_session
 from app.database.images import ImageEmbeddings, Images
 from app.schemas.util import validate_request
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Create router
 router = APIRouter(prefix="/segmentation")
+
 
 @router.post('/segment_image')
 async def segment_image(request: SegmentationRequest, db: Session = Depends(get_session)):

@@ -4,7 +4,8 @@ import numpy as np
 from PIL import Image
 from fastapi import UploadFile
 import config
-import os
+from os.path import join, exists
+from os import remove
 from app.database.images import Images, ImageEmbeddings
 from app.database import get_session, get_context_session
 from logging import getLogger
@@ -25,24 +26,19 @@ def generate_hash_for_image(image: UploadFile):
     return hasher.hexdigest()
 
 
-def get_meso_path(filename):
-    """Get the full path to the meso directory for the given filename."""
-    return os.path.join(config.Paths.meso_dir, filename)
-
-
 def delete_image_files(image_id: int):
     """Deletes the image files and the embeddings"""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
         embeddings = session.query(ImageEmbeddings).filter_by(id=image_id).all()
         for embedding in embeddings:
-            embedding_path = get_meso_path(str(embedding.id)) + ".npz"
-            if os.path.exists(embedding_path):
-                os.remove(embedding_path)
+            embedding_path = join(config.Paths.images_dir, embedding.filename)
+            if exists(embedding_path):
+                remove(embedding_path)
             session.delete(embedding)
-        image_path = get_meso_path(str(image_id)) + ".jpg"
-        if os.path.exists(image_path):
-            os.remove(image_path)
+        image_path = join(config.Paths.images_dir, image.filename)
+        if exists(image_path):
+            remove(image_path)
         session.delete(image)
         session.commit()
 
@@ -52,7 +48,7 @@ def load_image_as_base64(image_id):
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
     if image:
-        with open(get_meso_path(image.path), "rb") as file:
+        with open(join(config.Paths.images_dir, image.filename), "rb") as file:
             return str(file.read())
     else:
         return None
@@ -63,9 +59,10 @@ def load_image(image_id):
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
     if image:
-        return np.array(Image.open(get_meso_path(image.path)))
+        return np.array(Image.open(join(config.Paths.images_dir, image.filename)))
     else:
         return None
+
 
 def load_embedding(embedding_id: int):
     """Load an image embedding from the database by its image ID."""
@@ -73,13 +70,11 @@ def load_embedding(embedding_id: int):
         embedding = session.query(ImageEmbeddings).filter_by(id=embedding_id).first()
     if embedding:
         try:
-            loaded_data = np.load(get_meso_path(str(embedding.id)) + ".npz")
+            loaded_data = np.load(join(config.Paths.embedding_dir, embedding.filename))
             files = set(loaded_data.files)
-            new_dict = {}
-            new_dict["image_embed"] = loaded_data["image_embed"]
+            new_dict = {"image_embed": loaded_data["image_embed"]}
             files.remove("image_embed")
             new_dict["high_res_feats"] = [loaded_data[high_res_feat] for high_res_feat in files]
-            print(new_dict)
             return new_dict
         except FileNotFoundError:
             logger.warning(f"File not found for embedding ID {embedding_id}.")
@@ -94,9 +89,8 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
             embedding (dict[str, Union[np.ndarray, list[np.ndarray]]]): The embedding to save.
             embedding_id (int): The ID of the image embedding.
     """
-    path = get_meso_path(str(embedding_id)) + ".npz"
-    new_dict = {}
-    new_dict["image_embed"] = embedding["image_embed"]
+    path = join(config.Paths.embedding_dir, str(embedding_id) + ".npz")
+    new_dict = {"image_embed": embedding["image_embed"]}
     for i, mask in enumerate(embedding["high_res_feats"]):
         new_dict[f"high_res_feats_{i}"] = mask
     np.savez_compressed(str(path), **new_dict)
@@ -114,12 +108,12 @@ async def save_image(image: UploadFile):
             next_id = session.query(Images).count() + 1
     original_extension = image.filename.split(".")[-1]
     new_file_name = f"{next_id}.{original_extension}"
-    path = get_meso_path(new_file_name)
+    path = join(config.Paths.images_dir, new_file_name)
     with open(path, "wb") as file:
         file.write(image_data)
     image_array = np.array(Image.open(path))
     with get_context_session() as session:
-        session.add(Images(path=new_file_name,
+        session.add(Images(filename=new_file_name,
                            width=image_array.shape[1],
                            height=image_array.shape[0],
                            hash_code=hash_code))
