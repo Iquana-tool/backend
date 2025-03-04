@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import ValidationError
@@ -7,18 +8,17 @@ from sqlalchemy.orm import Session
 import config
 from app.services.segmentation import segment_with_prompts, segment_without_prompts, embed_image
 from app.services.prompts import Prompts
-from app.services.database_access import load_image, load_embedding, save_embeddings_to_disk
-from app.services.postprocessing import rle_encode
-from app.schemas.segmentation import SegmentationRequest, SegmentationResponse
+from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
+from app.services.postprocessing import base64_encode_image
+from app.schemas.segmentation import SegmentationRequest
 from app.database import get_session
 from app.database.images import ImageEmbeddings, Images
-from app.schemas.util import validate_request
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 # Create router
-router = APIRouter(prefix="/segmentation")
+router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 
 
 @router.post('/segment_image')
@@ -37,7 +37,11 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
         embedding = load_embedding(request.image_id)
         if embedding is None:
             # Image has not been embedded yet
-            embedding = embed_image(load_image(request.image_id))
+            image = load_image_as_array_from_disk(request.image_id)
+            if image.shape[-1] != 3:
+                logger.warning("Converting RGBA image to RGB.")
+                image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
+            embedding = embed_image(image)
             new_embedding = ImageEmbeddings(
                 image_id=request.image_id,
                 model=config.ModelConfig.selected_model,
@@ -48,10 +52,8 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
             save_embeddings_to_disk(embedding, new_embedding.id)
         masks, quality = segment_with_prompts(embedding, (width, height), prompts)
     else:
-        image = load_image(request.image_id)
+        image = load_image_as_array_from_disk(request.image_id)
         masks, quality = segment_without_prompts(image)
 
-    response = {"rle_masks": [rle_encode(mask) for mask in masks],
-                "quality": quality.tolist()}
-    return SegmentationResponse(**response)
-
+    return {"base64_masks": [base64_encode_image(mask) for mask in masks],
+            "quality": quality.tolist()}

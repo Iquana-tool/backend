@@ -53,9 +53,3 @@ class SegmentationRequest(BaseModel):
             elif session.query(Images).filter_by(id=value).first() is None:
                 raise ValueError("image_id does not exist in the database.")
             return value
-
-
-class SegmentationResponse(BaseModel):
-    """ Model for validating the segmentation response. """
-    rle_masks: List[str]  # Nested list for masks
-    quality: List[float]

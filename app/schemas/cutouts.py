@@ -1,15 +1,10 @@
 from pydantic import BaseModel, field_validator
-from typing import List
-from app.database.images import Images
-import numpy as np
-from app.schemas.images import ImageID, Base64Image
-from app.schemas.masks import RLEString
 
 
 class CutoutsRequest(BaseModel):
     """Model for validating the cutouts request."""
-    image_id: ImageID
-    rle_mask: RLEString
+    image_id: int
+    base64_mask: str
     resize_factor: float
     darken_outside_contours: bool
     darkening_factor: float

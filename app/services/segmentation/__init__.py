@@ -1,4 +1,3 @@
-from app.services.database_access import get_meso_path
 from app.services.segmentation.sam2 import SAM2
 from app.services.prompts import Prompts
 import numpy as np
@@ -6,8 +5,8 @@ from typing import Union
 from PIL import Image
 from torch import Tensor
 
-
 _model = SAM2()  # Initialize the model on import.
+
 
 def embed_image(image: Union[np.ndarray, Image.Image]) -> dict[str, Union[np.ndarray, list[np.ndarray]]]:
     """ Embed an image using the SAM2 model.
@@ -20,10 +19,11 @@ def embed_image(image: Union[np.ndarray, Image.Image]) -> dict[str, Union[np.nda
     """
     return _model.embed_image(image)
 
+
 def segment_with_prompts(
-    embedding: dict[str, np.ndarray],
-    original_height_width: tuple[int, int],
-    input_prompts: Prompts
+        embedding: dict[str, np.ndarray],
+        original_height_width: tuple[int, int],
+        input_prompts: Prompts
 ) -> tuple[np.ndarray, np.ndarray]:
     """ Segment an image using prompts.
         Args:
@@ -37,6 +37,7 @@ def segment_with_prompts(
     """
     return _model.segment_with_prompts(embedding, original_height_width, input_prompts)
 
+
 def segment_without_prompts(image: Union[np.ndarray, Image.Image]) -> tuple[np.ndarray, np.ndarray]:
     """ Segment an image without prompts.
         Args:
@@ -48,9 +49,10 @@ def segment_without_prompts(image: Union[np.ndarray, Image.Image]) -> tuple[np.n
     """
     return _model.segment_without_prompts(image)
 
+
 def segment_stack_with_prompts(
-    embedding: dict[str, np.ndarray],
-    input_prompts: Prompts
+        embedding: dict[str, np.ndarray],
+        input_prompts: Prompts
 ) -> tuple[np.ndarray, np.ndarray]:
     """ Segment a stack of images using prompts.
         Args:
@@ -62,6 +64,7 @@ def segment_stack_with_prompts(
              where each entry is the quality of the corresponding mask.
     """
     raise NotImplementedError("Stack segmentation with prompts is not implemented yet.")
+
 
 def segment_stack_without_prompts(image: Union[np.ndarray, Image.Image]) -> tuple[np.ndarray, np.ndarray]:
     """ Segment a stack of images without prompts.

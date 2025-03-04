@@ -26,7 +26,7 @@ def generate_hash_for_image(image: UploadFile):
     return hasher.hexdigest()
 
 
-def delete_image_files(image_id: int):
+def delete_image_from_disk_and_db(image_id: int):
     """Deletes the image files and the embeddings"""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
@@ -43,7 +43,7 @@ def delete_image_files(image_id: int):
         session.commit()
 
 
-def load_image_as_base64(image_id):
+def load_image_as_base64_from_disk(image_id):
     """Load an image from the database by its ID and return it as a base64 string."""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
@@ -51,10 +51,10 @@ def load_image_as_base64(image_id):
         with open(join(config.Paths.images_dir, image.filename), "rb") as file:
             return str(file.read())
     else:
-        return None
+        raise ValueError(f"Image with ID {image_id} not found in database.")
 
 
-def load_image(image_id):
+def load_image_as_array_from_disk(image_id):
     """Load an image from the database by its ID."""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
@@ -70,7 +70,7 @@ def load_embedding(embedding_id: int):
         embedding = session.query(ImageEmbeddings).filter_by(id=embedding_id).first()
     if embedding:
         try:
-            loaded_data = np.load(join(config.Paths.embedding_dir, embedding.filename))
+            loaded_data = np.load(join(config.Paths.embedding_dir, str(embedding.id) + ".npz"))
             files = set(loaded_data.files)
             new_dict = {"image_embed": loaded_data["image_embed"]}
             files.remove("image_embed")
@@ -96,22 +96,30 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
     np.savez_compressed(str(path), **new_dict)
 
 
-async def save_image(image: UploadFile):
+async def save_image_to_disk_and_db(image: UploadFile):
     """Save an image to disk and to the database and return the new image ID."""
     image_data = image.file.read()
+
+    # Generate hash for the image
     hash_code = generate_hash_for_image(image)
+
+    # Check if image already exists in the database
     with get_context_session() as session:
         if session.query(Images).filter_by(hash_code=hash_code).first():
             logger.info("Image already exists in the database.")
             return session.query(Images).filter_by(hash_code=hash_code).first().id
         else:
             next_id = session.query(Images).count() + 1
+
+    # Save the new image to disk
     original_extension = image.filename.split(".")[-1]
     new_file_name = f"{next_id}.{original_extension}"
     path = join(config.Paths.images_dir, new_file_name)
     with open(path, "wb") as file:
         file.write(image_data)
     image_array = np.array(Image.open(path))
+
+    # Save the new image to the database
     with get_context_session() as session:
         session.add(Images(filename=new_file_name,
                            width=image_array.shape[1],

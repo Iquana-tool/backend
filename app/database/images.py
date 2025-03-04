@@ -25,7 +25,6 @@ class ImageEmbeddings(database):
                       # Foreign key to the images table, cascade on delete to remove embeddings when image is deleted
                       ForeignKey('images.id', ondelete='CASCADE'),
                       nullable=False)  # Image ID is the primary key
-    filename = Column(String, nullable=False)  # Path to the embedding file
     model = Column(String(50), nullable=False)  # The model used to generate the embedding
     embed_dimensions = Column(String(50), nullable=False)  # The dimensions of the embedding
 

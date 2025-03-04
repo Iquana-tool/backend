@@ -27,6 +27,17 @@ def rle_encode(mask: np.ndarray) -> str:
     return ' '.join(map(str, rle))
 
 
+def rle_decode(rle_str: str, height: int, width: int) -> np.ndarray:
+    s = rle_str.split()
+    starts, lengths = [np.asarray(x, dtype=int) for x in (s[0::2], s[1::2])]
+    starts -= 1
+    ends = starts + lengths
+    mask = np.zeros(max(ends), dtype=np.uint8)
+    for start, end in zip(starts, ends):
+        mask[start:end] = 1
+    return mask.reshape((height, width))  # Replace height and width with actual dimensions
+
+
 def base64_encode_image(image: Union[np.ndarray, str]) -> str:
     """Encode an image to base64.
     Args:
@@ -42,3 +53,13 @@ def base64_encode_image(image: Union[np.ndarray, str]) -> str:
             return base64.b64encode(image_file.read()).decode('utf-8')
     else:
         raise ValueError("Input must be a numpy array or a file path.")
+
+
+def base64_decode_string(image: str) -> np.ndarray:
+    """Decode a base64 string to a numpy array.
+    Args:
+        image: Base64 encoded image.
+    Returns:
+        Numpy array of the image.
+    """
+    return cv2.imdecode(np.frombuffer(base64.b64decode(image), np.uint8), cv2.IMREAD_COLOR)

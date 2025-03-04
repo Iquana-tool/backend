@@ -1,4 +1,4 @@
-from app.services.database_access import load_image
+from app.services.database_access import load_image_as_array_from_disk
 from app.database import get_session
 from app.database.cutouts import Cutouts
 import logging
@@ -7,7 +7,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.schemas.cutouts import CutoutsRequest
-from app.services.database_access import save_image, load_image_as_base64
+from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
 from app.services.cutouts import cutout_objects_on_mask_from_image
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/cutouts", tags=["cutouts"])
 async def get_cutouts(request: CutoutsRequest, db: Session = Depends(get_session)):
     """Get cutouts from an image"""
     try:
-        cutouts = cutout_objects_on_mask_from_image(load_image(request.image_id),
+        cutouts = cutout_objects_on_mask_from_image(load_image_as_array_from_disk(request.image_id),
                                                     request.mask,
                                                     request.resize_factor,
                                                     request.darken_outside_contours,
