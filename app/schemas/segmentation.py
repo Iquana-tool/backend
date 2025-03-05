@@ -40,9 +40,12 @@ class BoxPrompt(BaseModel):
 
 class SegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
-    use_prompts: Annotated[bool, "Use prompts for segmentation (=true) or use automatic segmentation without prompts (=false)."]
+    use_prompts: Annotated[bool, ("Use prompts for segmentation (=true) or use automatic segmentation "
+                                  "without prompts (=false).")]
     image_id: Annotated[int, "ID of the image to segment."]
-    point_prompts: Annotated[List[PointPrompt], "List of point prompts supplied by the user"] = Field(default_factory=list)
+    model: Annotated[str, "Model to use for segmentation."]
+    point_prompts: Annotated[List[PointPrompt], "List of point prompts supplied by the user"] = (
+        Field(default_factory=list))
     box_prompts: Annotated[List[BoxPrompt], "List of box prompts supplied by the user"] = Field(default_factory=list)
 
     @field_validator('image_id')

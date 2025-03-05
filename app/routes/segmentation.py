@@ -31,11 +31,12 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
 
         for box in request.box_prompts:
             prompts.add_box_annotation(box.min_x, box.min_y, box.max_x, box.max_y)
-
+        embedding = db.query(ImageEmbeddings).filter_by(image_id=request.image_id, model=request.model).first()
         width = db.query(Images).filter_by(id=request.image_id).first().width
         height = db.query(Images).filter_by(id=request.image_id).first().height
-        embedding = load_embedding(request.image_id)
-        if embedding is None:
+        if embedding is not None:
+            embedding = load_embedding(embedding.id)
+        else:
             # Image has not been embedded yet
             image = load_image_as_array_from_disk(request.image_id)
             if image.shape[-1] != 3:
@@ -44,13 +45,13 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
             embedding = embed_image(image)
             new_embedding = ImageEmbeddings(
                 image_id=request.image_id,
-                model=config.ModelConfig.selected_model,
+                model=request.model,
                 embed_dimensions=str(embedding["image_embed"].shape),
             )
             db.add(new_embedding)
             db.commit()
             save_embeddings_to_disk(embedding, new_embedding.id)
-        masks, quality = segment_with_prompts(embedding, (width, height), prompts)
+        masks, quality = segment_with_prompts(embedding, (height, width), prompts)
     else:
         image = load_image_as_array_from_disk(request.image_id)
         masks, quality = segment_without_prompts(image)
