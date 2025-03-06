@@ -8,6 +8,10 @@ from app.routes.segmentation import router as segmentation_router
 from app.routes.images import router as image_router
 from app.routes.masks import router as mask_router
 from app.database import init_db
+from logging import getLogger
+
+
+logger = getLogger(__name__)
 
 
 def create_app():
