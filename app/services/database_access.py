@@ -1,3 +1,4 @@
+import os
 from typing import Union
 
 import numpy as np
@@ -83,13 +84,17 @@ def load_embedding(embedding_id: int):
         return None
 
 
-def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], embedding_id: int) -> None:
+def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]],
+                            image_id: int, model_name: str) -> None:
     """ Save an image embedding to disk.
         Args:
             embedding (dict[str, Union[np.ndarray, list[np.ndarray]]]): The embedding to save.
-            embedding_id (int): The ID of the image embedding.
+            image_id (int): The ID of the image embedding.
+            model_name (str): The name of the model used to generate the embedding.
     """
-    path = join(config.Paths.embedding_dir, str(embedding_id) + ".npz")
+    base_path = join(config.Paths.embedding_dir, str(image_id))
+    os.makedirs(base_path, exist_ok=True)
+    path = join(base_path, model_name + ".npz")
     new_dict = {"image_embed": embedding["image_embed"]}
     for i, mask in enumerate(embedding["high_res_feats"]):
         new_dict[f"high_res_feats_{i}"] = mask

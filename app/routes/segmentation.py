@@ -24,7 +24,7 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 @router.post('/segment_image')
 async def segment_image(request: SegmentationRequest, db: Session = Depends(get_session)):
     """Perform segmentation with optional prompts, using data validation."""
-    model = SAM2(config.ModelConfig.available_models[request.model])
+    model = SAM2(config.ModelConfig.available_models[request.model]())
     if request.use_prompts:
         prompts = Prompts()
         for point in request.point_prompts:
@@ -51,7 +51,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
             )
             db.add(new_embedding)
             db.commit()
-            save_embeddings_to_disk(embedding, new_embedding.id)
+            save_embeddings_to_disk(embedding, new_embedding.image_id, new_embedding.model)
         masks, quality = model.segment_with_prompts(embedding, (height, width), prompts)
     else:
         image = load_image_as_array_from_disk(request.image_id)
