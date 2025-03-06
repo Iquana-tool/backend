@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, conlist, validator, field_serializer, field_validator
 from typing import List, Optional, Annotated
 
+import config
 from app.database import get_context_session
 from app.database.images import Images
 
@@ -41,9 +42,9 @@ class BoxPrompt(BaseModel):
 class SegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
     use_prompts: Annotated[bool, ("Use prompts for segmentation (=true) or use automatic segmentation "
-                                  "without prompts (=false).")]
-    image_id: Annotated[int, "ID of the image to segment."]
-    model: Annotated[str, "Model to use for segmentation."]
+                                  "without prompts (=false).")] = True
+    image_id: Annotated[int, "ID of the image to segment."] = 0
+    model: Annotated[str, "Model to use for segmentation."] = "SAM2Tiny"
     point_prompts: Annotated[List[PointPrompt], "List of point prompts supplied by the user"] = (
         Field(default_factory=list))
     box_prompts: Annotated[List[BoxPrompt], "List of box prompts supplied by the user"] = Field(default_factory=list)
@@ -56,3 +57,9 @@ class SegmentationRequest(BaseModel):
             elif session.query(Images).filter_by(id=value).first() is None:
                 raise ValueError("image_id does not exist in the database.")
             return value
+
+    @field_validator("model")
+    def validate_model(cls, value):
+        if not value in config.ModelConfig.available_models.keys():
+            raise ValueError("Model must be one of {}.".format(config.ModelConfig.available_models.keys()))
+        return value

@@ -35,25 +35,31 @@ class Paths:
     weights_dir = os.path.join(segmentation_dir, 'weights')
 
 
-class SAM2Tiny:
+class SAM2Config:
+    """ Base class for SAM2 model configurations. """
+    weights = None
+    config = None
+
+
+class SAM2Tiny(SAM2Config):
     """ This class contains the configuration options for the tiny SAM2 model. """
     weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.pt')
     config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.yaml')
 
 
-class SAM2Small:
+class SAM2Small(SAM2Config):
     """ This class contains the configuration options for the small SAM2 model. """
     weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_small.pt')
     config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_small.yaml')
 
 
-class SAM2Large:
+class SAM2Large(SAM2Config):
     """ This class contains the configuration options for the large SAM2 model. """
     weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.pt')
     config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.yaml')
 
 
-class SAM2BasePlus:
+class SAM2BasePlus(SAM2Config):
     """ This class contains the configuration options for the base plus SAM2 model. """
     weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_base_plus.pt')
     config = os.path.join(Paths.weights_dir, 'sam2.1_hiera_base_plus.yaml')

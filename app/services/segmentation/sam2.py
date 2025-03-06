@@ -6,16 +6,16 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor, SAM2Base
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from typing import Union
 from app.services.prompts import Prompts
-from config import ModelConfig
+from config import ModelConfig, SAM2Config
 
 
 class SAM2:
-    def __init__(self, device='auto'):
+    def __init__(self, model_config: SAM2Config, device='auto'):
         self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = build(ckpt_path=ModelConfig.get_active_model_config().weights,
-                           config_file=ModelConfig.get_active_model_config().config,
+        self.model = build(ckpt_path=model_config.weights,
+                           config_file=model_config.config,
                            device=self.device)
-        self.model_name = ModelConfig.get_active_model_config().__name__
+        self.model_name = model_config.__name__
         self.prompt_predictor = SAM2ImagePredictor(self.model)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model)
 

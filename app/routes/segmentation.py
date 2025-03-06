@@ -6,7 +6,7 @@ import logging
 from sqlalchemy.orm import Session
 
 import config
-from app.services.segmentation import segment_with_prompts, segment_without_prompts, embed_image
+from app.services.segmentation.sam2 import SAM2
 from app.services.prompts import Prompts
 from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
 from app.services.postprocessing import base64_encode_image
@@ -24,6 +24,7 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 @router.post('/segment_image')
 async def segment_image(request: SegmentationRequest, db: Session = Depends(get_session)):
     """Perform segmentation with optional prompts, using data validation."""
+    model = SAM2(config.ModelConfig.available_models[request.model])
     if request.use_prompts:
         prompts = Prompts()
         for point in request.point_prompts:
@@ -42,7 +43,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
             if image.shape[-1] != 3:
                 logger.warning("Converting RGBA image to RGB.")
                 image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
-            embedding = embed_image(image)
+            embedding = model.embed_image(image)
             new_embedding = ImageEmbeddings(
                 image_id=request.image_id,
                 model=request.model,
@@ -51,10 +52,10 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
             db.add(new_embedding)
             db.commit()
             save_embeddings_to_disk(embedding, new_embedding.id)
-        masks, quality = segment_with_prompts(embedding, (height, width), prompts)
+        masks, quality = model.segment_with_prompts(embedding, (height, width), prompts)
     else:
         image = load_image_as_array_from_disk(request.image_id)
-        masks, quality = segment_without_prompts(image)
+        masks, quality = model.segment_without_prompts(image)
 
     return {"base64_masks": [base64_encode_image(mask) for mask in masks],
             "quality": quality.tolist()}
