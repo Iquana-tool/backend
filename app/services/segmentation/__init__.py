@@ -1,3 +1,4 @@
+import config
 from app.services.segmentation.sam2 import SAM2
 from app.services.prompts import Prompts
 import numpy as np
@@ -5,7 +6,7 @@ from typing import Union
 from PIL import Image
 from torch import Tensor
 
-_model = SAM2()  # Initialize the model on import.
+_model = SAM2(config.SAM2Tiny())  # Initialize the model on import.
 
 
 def embed_image(image: Union[np.ndarray, Image.Image]) -> dict[str, Union[np.ndarray, list[np.ndarray]]]:
