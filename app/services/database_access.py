@@ -65,13 +65,13 @@ def load_image_as_array_from_disk(image_id):
         return None
 
 
-def load_embedding(embedding_id: int):
+def load_embedding(embedding_id: int, model_name: str):
     """Load an image embedding from the database by its image ID."""
     with get_context_session() as session:
         embedding = session.query(ImageEmbeddings).filter_by(id=embedding_id).first()
     if embedding:
         try:
-            loaded_data = np.load(join(config.Paths.embedding_dir, str(embedding.id) + ".npz"))
+            loaded_data = np.load(join(config.Paths.embedding_dir, str(embedding.image_id), model_name + ".npz"))
             files = set(loaded_data.files)
             new_dict = {"image_embed": loaded_data["image_embed"]}
             files.remove("image_embed")
