@@ -27,24 +27,41 @@ main.py              # Entry point to start the Fastapi application
 ```
 
 ## 🛠️ Installation & Setup
-### 1. Clone the Repository
+### Option 1: Using [podman](https://podman.io)
+Install podman and build the image using
+```sh
+podman build -t coral-backend .
+```
+Then run the container using
+```sh
+podman run -p 8000:8000 coral-backend
+```
+### Option 2: Using venv
+#### 1. Clone the Repository
 ```sh
 git clone <repo-url>
 cd <repo-folder>
 ```
 
-### 2. Create a Virtual Environment
+#### 2. Create a Virtual Environment
 ```sh
 python -m venv venv
 source venv/bin/activate  # On Windows use: venv\Scripts\activate
 ```
 
-### 3. Install Dependencies
+#### 3. Install Dependencies
+> **Note:** If you want to use CUDA for GPU acceleration, make sure to install the correct version of PyTorch that 
+> matches your CUDA version **before** installing the requirements. You can find the correct command for your system 
+> [here](https://pytorch.org/get-started/locally/). The requirements.txt file contains the CPU version of PyTorch, which
+> will be installed by default, if you do not install the CUDA version first.
+
+Install the required packages:
 ```sh
 pip install -r requirements.txt
 ```
 
-### 4. Run the Flask Application
+
+#### 4. Run the Flask Application
 ```shell
 fastapi main.py
 ```
