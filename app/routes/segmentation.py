@@ -26,17 +26,18 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
     """Perform segmentation with optional prompts, using data validation."""
     model = SAM2(config.ModelConfig.available_models[request.model]())
     if request.use_prompts:
+        embedding = db.query(ImageEmbeddings).filter_by(image_id=request.image_id, model=request.model).first()
+        width = db.query(Images).filter_by(id=request.image_id).first().width
+        height = db.query(Images).filter_by(id=request.image_id).first().height
+
         prompts = Prompts()
         for point in request.point_prompts:
             prompts.add_point_annotation(point.x, point.y, point.label)
 
         for box in request.box_prompts:
             prompts.add_box_annotation(box.min_x, box.min_y, box.max_x, box.max_y)
-        embedding = db.query(ImageEmbeddings).filter_by(image_id=request.image_id, model=request.model).first()
-        width = db.query(Images).filter_by(id=request.image_id).first().width
-        height = db.query(Images).filter_by(id=request.image_id).first().height
         if embedding is not None:
-            embedding = load_embedding(embedding.id)
+            embedding = load_embedding(embedding.id, request.model)
         else:
             # Image has not been embedded yet
             image = load_image_as_array_from_disk(request.image_id)
@@ -57,5 +58,5 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
         image = load_image_as_array_from_disk(request.image_id)
         masks, quality = model.segment_without_prompts(image)
 
-    return {"base64_masks": [base64_encode_image(mask) for mask in masks],
+    return {"base64_masks": [base64_encode_image(mask * 255) for mask in masks],
             "quality": quality.tolist()}
