@@ -1,3 +1,4 @@
+import base64
 import os
 from typing import Union
 
@@ -49,8 +50,11 @@ def load_image_as_base64_from_disk(image_id):
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
     if image:
-        with open(join(config.Paths.images_dir, image.filename), "rb") as file:
-            return str(file.read())
+        path = join(config.Paths.images_dir, image.filename)
+        with open(path, "rb") as image_file:
+            image = image_file.read()
+        # Encode the image to base64
+        return base64.b64encode(image)
     else:
         raise ValueError(f"Image with ID {image_id} not found in database.")
 
@@ -110,12 +114,14 @@ async def save_image_to_disk_and_db(image: UploadFile):
 
     # Check if image already exists in the database
     with get_context_session() as session:
-        if session.query(Images).filter_by(hash_code=hash_code).first():
-            logger.info("Image already exists in the database.")
-            return session.query(Images).filter_by(hash_code=hash_code).first().id
-        else:
-            next_id = session.query(Images).count() + 1
-
+    #    if session.query(Images).filter_by(hash_code=hash_code).first():
+    #        print(f"New hash code: {hash_code}")
+    #        print(f"Old hash code: {session.query(Images).filter_by(hash_code=hash_code).first().hash_code}")
+    #        print("Image already exists in the database.")
+    #        return session.query(Images).filter_by(hash_code=hash_code).first().id
+    #    else:
+    #        next_id = session.query(Images).count() + 1
+        next_id = session.query(Images).count() + 1
     # Save the new image to disk
     original_extension = image.filename.split(".")[-1]
     new_file_name = f"{next_id}.{original_extension}"
@@ -129,7 +135,7 @@ async def save_image_to_disk_and_db(image: UploadFile):
         session.add(Images(filename=new_file_name,
                            width=image_array.shape[1],
                            height=image_array.shape[0],
-                           hash_code=hash_code))
+                           hash_code=next_id ))
         session.commit()
     logger.info("New image saved to disk and database.")
     return session.query(Images).order_by(Images.id.desc()).first().id
