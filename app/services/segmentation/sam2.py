@@ -53,7 +53,7 @@ class SAM2:
             self.prompt_predictor._features = embedding  # Sets the embedding
             self.prompt_predictor._is_image_set = True
             self.prompt_predictor._orig_hw = [original_height_width]
-            masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input())
+            masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(), normalize_coords=False)
         return masks, quality
 
     def segment_without_prompts(self, image: np.ndarray):
