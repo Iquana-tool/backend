@@ -33,9 +33,10 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
         prompts = Prompts()
         for point in request.point_prompts:
             prompts.add_point_annotation(point.x, point.y, point.label)
-
         for box in request.box_prompts:
             prompts.add_box_annotation(box.min_x, box.min_y, box.max_x, box.max_y)
+        for polygon in request.polygon_prompts:
+            prompts.add_polygon_annotation(polygon.vertices)
         if embedding is not None:
             embedding = load_embedding(embedding.id, request.model)
         else:

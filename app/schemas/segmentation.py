@@ -38,6 +38,21 @@ class BoxPrompt(BaseModel):
             raise ValueError("Box coordinates must be between 0 and 1.")
         return value
 
+class PolygonPrompt(BaseModel):
+    """ Model for validating a polygon annotation. """
+    vertices: Annotated[List[List[float]], "List of vertices of the polygon."] = Field(default_factory=list)
+
+    @field_validator('vertices')
+    def validate_vertices(cls, value):
+        if len(value) < 3:
+            raise ValueError("Polygon must have at least 3 vertices.")
+        for vertex in value:
+            if len(vertex) != 2:
+                raise ValueError("Each vertex must have exactly 2 coordinates.")
+            if not all(0 <= coord <= 1 for coord in vertex):
+                raise ValueError("Coordinates must be between 0 and 1.")
+        return value
+
 
 class SegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """

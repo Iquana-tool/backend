@@ -1,5 +1,6 @@
 # This file contains classes for prompts
 import numpy as np
+import cv2
 
 
 class Prompts:
@@ -61,6 +62,14 @@ class Prompts:
             raise IndexError("Index out of range. Make sure to only count the box prompts excluding point prompts!")
         self.box_prompts.pop(index)
 
+    def add_polygon_annotation(self, vertices: list[list[float]]):
+        """ Add a polygon prompt to the list of prompts. The polygon vertices should be in the format [(x1, y1), (x2, y2), ...].
+            Every point enclosed by the polygon will be treated as a positive annotation.
+        """
+        positive_annotations = self.convert_polygon_vertices_to_point_annotations(vertices)
+        for x, y in positive_annotations:
+            self.add_point_annotation(x, y, 1)
+
     def get_prompts_as_ndarray(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """ Get the prompts as numpy arrays. The returned arrays should be used as input to the SAM2 model.
             Returns:
@@ -93,3 +102,27 @@ class Prompts:
             return_dict['box'] = box_prompts
         return return_dict
 
+    @staticmethod
+    def convert_polygon_vertices_to_point_annotations(vertices: list[list[float]]) -> list[tuple[int, int]]:
+        """ Convert a list of polygon vertices to a list of point annotations. The polygon vertices should be in the
+            format [(x1, y1), (x2, y2), ...]. Every point enclosed by the polygon will be treated as a positive
+            annotation. The method will return a dictionary with two keys: True and False. The
+            True key will contain the positive annotations, and the False key will contain the negative annotations.
+            The method will return the points as integer coordinates."""
+        positive_annotations = []
+        # Create an empty canvas and plot the polygon on it
+        canvas = np.zeros((1000, 1000))
+        polygon = np.array(vertices, np.int32)
+        canvas = cv2.fillPoly(canvas, [polygon], 1)
+        # Compute the general span of the polygon to identify the samnpling frequency
+        stretch_x = max(polygon[:, 0]) - min(polygon[:, 0])
+        stretch_y = max(polygon[:, 1]) - min(polygon[:, 1])
+        # We want about 3 points per row and column to be sampled
+        sampling_freq_x = stretch_x // 3
+        sampling_freq_y = stretch_y // 3
+        # Find all points enclosed by the polygon
+        for x in range(0, 1000, sampling_freq_x):
+            for y in range(0, 1000, sampling_freq_y):
+                if canvas[y, x] == 1:
+                    positive_annotations.append((x, y))
+        return positive_annotations
