@@ -1,6 +1,7 @@
 # This file contains classes for prompts
 import numpy as np
 import cv2
+from sympy.codegen.ast import int32
 
 
 class Prompts:
@@ -125,17 +126,20 @@ class Prompts:
         positive_annotations = []
         # Create an empty canvas and plot the polygon on it
         canvas = np.zeros((1000, 1000))
-        polygon = np.array(vertices, np.int32)
-        canvas = cv2.fillPoly(canvas, [polygon], 1)
+        polygon = np.array(vertices) * 1000
+        print(polygon)
+        canvas = cv2.fillPoly(canvas, [polygon.astype(dtype=np.int32)], 1)
         # Compute the general span of the polygon to identify the samnpling frequency
         stretch_x = max(polygon[:, 0]) - min(polygon[:, 0])
         stretch_y = max(polygon[:, 1]) - min(polygon[:, 1])
         # We want about 3 points per row and column to be sampled
-        sampling_freq_x = stretch_x // 3
-        sampling_freq_y = stretch_y // 3
+        sampling_freq_x = int(stretch_x / 3 )
+        sampling_freq_y = int(stretch_y / 3 )
+
+        print(stretch_x, stretch_y, sampling_freq_x, sampling_freq_y)
         # Find all points enclosed by the polygon
         for x in range(0, 1000, sampling_freq_x):
             for y in range(0, 1000, sampling_freq_y):
                 if canvas[y, x] == 1:
-                    positive_annotations.append((x, y))
+                    positive_annotations.append((x / 1000, y / 1000))
         return positive_annotations
