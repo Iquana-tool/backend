@@ -1,6 +1,6 @@
 from app.services.database_access import load_image_as_array_from_disk
 from app.database import get_session
-from app.database.cutouts import Cutouts
+from app.database.images import Images
 import logging
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
@@ -23,11 +23,23 @@ async def get_cutouts(request: CutoutsRequest, db: Session = Depends(get_session
                                                     request.resize_factor,
                                                     request.darken_outside_contours,
                                                     request.darkening_factor)
+        cutout_ids = []
         for cutout, lower_left_x, lower_left_y in cutouts:
-            db.add(Cutouts(image_id=request.image_id.image_id,
-                           lower_left_x=lower_left_x, lower_left_y=lower_left_y))
+            cutout_id = await save_image_to_disk_and_db(cutout)
+            cutout_ids.append(cutout_id)
+            db.add(Images(
+                id=cutout_id,
+                filename=f"{cutout_id}.png",
+                width=cutout.shape[1],
+                height=cutout.shape[0],
+                parent_image_id=request.image_id,
+                lower_left_x=lower_left_x,
+                lower_left_y=lower_left_y))
             db.commit()
-        return
+        return {
+            "success": True,
+            "cutout_ids": cutout_ids
+        }
     except Exception as e:
         logger.error(f"Get cutouts error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

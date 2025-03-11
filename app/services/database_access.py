@@ -1,7 +1,7 @@
 import base64
 import logging
 import os
-from typing import Union
+from typing import Union, AnyStr
 
 import numpy as np
 from PIL import Image
@@ -108,7 +108,7 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
     np.savez_compressed(str(path), **new_dict)
 
 
-async def save_image_to_disk_and_db(image: UploadFile):
+async def save_image_to_disk_and_db(image: AnyStr, parent_image_id = None, lower_left_x = None, lower_left_y = None):
     """Save an image to disk and to the database and return the new image ID."""
     image_data = image.file.read()
 
@@ -129,14 +129,21 @@ async def save_image_to_disk_and_db(image: UploadFile):
     with open(path, "wb") as file:
         file.write(image_data)
     image_array = np.array(Image.open(path))
-
-    # Save the new image to the database
-    with get_context_session() as session:
-        session.add(Images(filename=new_file_name,
-                           width=image_array.shape[1],
-                           height=image_array.shape[0],
-                           hash_code=hash_code))
-        session.commit()
+    try:
+        # Save the new image to the database
+        with get_context_session() as session:
+            session.add(Images(filename=new_file_name,
+                               width=image_array.shape[1],
+                               height=image_array.shape[0],
+                               hash_code=hash_code,
+                               parent_image_id=parent_image_id,
+                               lower_left_x=lower_left_x,
+                               lower_left_y=lower_left_y))
+            session.commit()
+    except Exception as e:
+        logger.error(f"Error saving image to database: {str(e)}")
+        logger.error(f"Deleting image '{new_file_name}' from disk to ensure consistency.")
+        os.remove(path)
     logger.info("New image saved to disk and database.")
     return session.query(Images).order_by(Images.id.desc()).first().id
 
