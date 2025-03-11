@@ -127,7 +127,6 @@ class Prompts:
         # Create an empty canvas and plot the polygon on it
         canvas = np.zeros((1000, 1000))
         polygon = np.array(vertices) * 1000
-        print(polygon)
         canvas = cv2.fillPoly(canvas, [polygon.astype(dtype=np.int32)], 1)
         # Compute the general span of the polygon to identify the samnpling frequency
         min_x = min(polygon[:, 0])
@@ -139,8 +138,6 @@ class Prompts:
         # We want about 3 points per row and column to be sampled
         sampling_freq_x = int(stretch_x / 3)
         sampling_freq_y = int(stretch_y / 3)
-
-        print(stretch_x, stretch_y, sampling_freq_x, sampling_freq_y)
         # Find all points enclosed by the polygon
         for x in range(int(min_x), int(max_x), sampling_freq_x):
             for y in range(int(min_y), int(max_y), sampling_freq_y):
