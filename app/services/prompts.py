@@ -70,6 +70,19 @@ class Prompts:
         for x, y in positive_annotations:
             self.add_point_annotation(x, y, 1)
 
+    def add_circle_annotation(self, x: float, y: float, radius: float):
+        """ Add a circle prompt to the list of prompts. The circle prompt will add a positive annotation for all points
+            within the circle.
+        """
+        # Add the center point
+        self.add_point_annotation(x, y, 1)
+        # In a circular manner add points within the circle
+        for _radius in np.arange(0, radius, radius / 3):
+            for angle in range(0, 360, 45):
+                x_coord = x + _radius * np.cos(np.radians(angle))
+                y_coord = y + _radius * np.sin(np.radians(angle))
+                self.add_point_annotation(x_coord, y_coord, 1)
+
     def get_prompts_as_ndarray(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """ Get the prompts as numpy arrays. The returned arrays should be used as input to the SAM2 model.
             Returns:

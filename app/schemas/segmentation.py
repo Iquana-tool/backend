@@ -54,6 +54,25 @@ class PolygonPrompt(BaseModel):
         return value
 
 
+class CirclePrompt(BaseModel):
+    """ Model for validating a circle annotation. """
+    center_x: Annotated[float, "Coordinates must be between 0 and 1."]
+    center_y: Annotated[float, "Coordinates must be between 0 and 1."]
+    radius: Annotated[float, "Radius must be a positive float."]
+
+    @field_validator('center_x', 'center_y')
+    def validate_coordinates(cls, value):
+        if not (0 <= value <= 1):
+            raise ValueError("Coordinates must be between 0 and 1.")
+        return value
+
+    @field_validator('radius')
+    def validate_radius(cls, value):
+        if value <= 0:
+            raise ValueError("Radius must be a positive float.")
+        return value
+
+
 class SegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
     use_prompts: Annotated[bool, ("Use prompts for segmentation (=true) or use automatic segmentation "
@@ -63,6 +82,12 @@ class SegmentationRequest(BaseModel):
     point_prompts: Annotated[List[PointPrompt], "List of point prompts supplied by the user"] = (
         Field(default_factory=list))
     box_prompts: Annotated[List[BoxPrompt], "List of box prompts supplied by the user"] = Field(default_factory=list)
+    polygon_prompts: Annotated[List[PolygonPrompt], "List of polygon prompts supplied by the user"] = (
+        Field(default_factory=list)
+    )
+    circle_prompts: Annotated[List[CirclePrompt], "List of circle prompts supplied by the user"] = (
+        Field(default_factory=list)
+    )
 
     @field_validator('image_id')
     def validate_image_id(cls, value):
