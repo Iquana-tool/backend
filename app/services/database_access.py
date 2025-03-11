@@ -35,6 +35,12 @@ def delete_image_from_disk_and_db(image_id: int):
     """Deletes the image files and the embeddings"""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
+        cutouts_to_delete = session.query(Images).filter_by(parent_image_id=image_id).all()
+        for cutout in cutouts_to_delete:
+            cutout_path = join(config.Paths.images_dir, cutout.filename)
+            if exists(cutout_path):
+                remove(cutout_path)
+            session.delete(cutout)
         embeddings = session.query(ImageEmbeddings).filter_by(id=image_id).all()
         for embedding in embeddings:
             embedding_path = join(config.Paths.images_dir, embedding.filename)
@@ -133,8 +139,8 @@ async def save_image_to_disk_and_db(image: AnyStr, parent_image_id = None, lower
         # Save the new image to the database
         with get_context_session() as session:
             session.add(Images(filename=new_file_name,
-                               width=image_array.shape[1],
-                               height=image_array.shape[0],
+                               width=image_array.shape[0],
+                               height=image_array.shape[1],
                                hash_code=hash_code,
                                parent_image_id=parent_image_id,
                                lower_left_x=lower_left_x,
