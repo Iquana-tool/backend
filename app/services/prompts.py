@@ -130,16 +130,20 @@ class Prompts:
         print(polygon)
         canvas = cv2.fillPoly(canvas, [polygon.astype(dtype=np.int32)], 1)
         # Compute the general span of the polygon to identify the samnpling frequency
-        stretch_x = max(polygon[:, 0]) - min(polygon[:, 0])
-        stretch_y = max(polygon[:, 1]) - min(polygon[:, 1])
+        min_x = min(polygon[:, 0])
+        min_y = min(polygon[:, 1])
+        max_x = max(polygon[:, 0])
+        max_y = max(polygon[:, 1])
+        stretch_x = max_x - min_x
+        stretch_y = max_y - min_y
         # We want about 3 points per row and column to be sampled
-        sampling_freq_x = int(stretch_x / 3 )
-        sampling_freq_y = int(stretch_y / 3 )
+        sampling_freq_x = int(stretch_x / 3)
+        sampling_freq_y = int(stretch_y / 3)
 
         print(stretch_x, stretch_y, sampling_freq_x, sampling_freq_y)
         # Find all points enclosed by the polygon
-        for x in range(0, 1000, sampling_freq_x):
-            for y in range(0, 1000, sampling_freq_y):
+        for x in range(int(min_x), int(max_x), sampling_freq_x):
+            for y in range(int(min_y), int(max_y), sampling_freq_y):
                 if canvas[y, x] == 1:
                     positive_annotations.append((x / 1000, y / 1000))
         return positive_annotations
