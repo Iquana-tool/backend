@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, ForeignKey
+
 from . import database
 
 
@@ -35,6 +36,3 @@ class ImageEmbeddings(database):
         return (f"<ImageEmbedding(image_id='{self.image_id}', "
                 f"model='{self.model}', "
                 f"dimension='{self.embed_dimensions}'>")
-
-
-

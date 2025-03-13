@@ -1,8 +1,6 @@
-from pydantic import BaseModel, Field, field_validator
-from app.database.images import Images
-from app.database import get_context_session
-import numpy as np
-from typing import List, Annotated
+from typing import Annotated
+
+from pydantic import BaseModel
 
 
 class MaskRequest(BaseModel):

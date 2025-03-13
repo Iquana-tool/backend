@@ -2,16 +2,14 @@ import logging
 import os.path
 
 import cv2
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 
 import config
-from app.schemas.masks import MaskRequest
 from app.database import get_session
 from app.database.masks import Masks
+from app.schemas.masks import MaskRequest
 from app.services.postprocessing import base64_decode_string, base64_encode_image
-from app.services.database_access import load_image_as_base64_from_disk
-
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])

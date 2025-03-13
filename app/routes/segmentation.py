@@ -1,18 +1,17 @@
-import cv2
-import numpy as np
-from fastapi import APIRouter, Request, HTTPException, Depends
-from pydantic import ValidationError
 import logging
+
+import cv2
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 import config
-from app.services.segmentation.sam2 import SAM2
-from app.services.prompts import Prompts
-from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
-from app.services.postprocessing import base64_encode_image
-from app.schemas.segmentation import SegmentationRequest
 from app.database import get_session
 from app.database.images import ImageEmbeddings, Images
+from app.schemas.segmentation import SegmentationRequest
+from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
+from app.services.postprocessing import base64_encode_image
+from app.services.prompts import Prompts
+from app.services.segmentation.sam2 import SAM2
 
 # Set up logging
 logger = logging.getLogger(__name__)

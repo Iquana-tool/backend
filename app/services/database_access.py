@@ -1,18 +1,19 @@
 import base64
+import hashlib
 import logging
 import os
+from logging import getLogger
+from os import remove
+from os.path import join, exists
 from typing import Union, AnyStr
 
 import numpy as np
 from PIL import Image
 from fastapi import UploadFile
+
 import config
-from os.path import join, exists
-from os import remove
+from app.database import get_context_session
 from app.database.images import Images, ImageEmbeddings
-from app.database import get_session, get_context_session
-from logging import getLogger
-import hashlib
 
 logger = getLogger(__name__)
 
@@ -102,8 +103,8 @@ def load_embedding(embedding_id: int, model_name: str):
         return None
 
 
-def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]],
-                            image_id: int, model_name: str) -> None:
+def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], image_id: int,
+                            model_name: str) -> None:
     """ Save an image embedding to disk.
         Args:
             embedding (dict[str, Union[np.ndarray, list[np.ndarray]]]): The embedding to save.
@@ -119,7 +120,7 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
     np.savez_compressed(str(path), **new_dict)
 
 
-async def save_image_to_disk_and_db(image: AnyStr, parent_image_id = None, lower_left_x = None, lower_left_y = None):
+async def save_image_to_disk_and_db(image: AnyStr, parent_image_id=None, lower_left_x=None, lower_left_y=None):
     """Save an image to disk and to the database and return the new image ID."""
     image_data = image.file.read()
 
@@ -143,12 +144,8 @@ async def save_image_to_disk_and_db(image: AnyStr, parent_image_id = None, lower
     try:
         # Save the new image to the database
         with get_context_session() as session:
-            session.add(Images(filename=new_file_name,
-                               width=image_array.shape[1],
-                               height=image_array.shape[0],
-                               hash_code=hash_code,
-                               parent_image_id=parent_image_id,
-                               lower_left_x=lower_left_x,
+            session.add(Images(filename=new_file_name, width=image_array.shape[1], height=image_array.shape[0],
+                               hash_code=hash_code, parent_image_id=parent_image_id, lower_left_x=lower_left_x,
                                lower_left_y=lower_left_y))
             session.commit()
     except Exception as e:
@@ -157,4 +154,3 @@ async def save_image_to_disk_and_db(image: AnyStr, parent_image_id = None, lower
         os.remove(path)
     logger.info("New image saved to disk and database.")
     return session.query(Images).order_by(Images.id.desc()).first().id
-

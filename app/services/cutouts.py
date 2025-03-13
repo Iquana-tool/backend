@@ -1,7 +1,5 @@
-import warnings
-
-import numpy as np
 import cv2
+import numpy as np
 
 
 def get_contours(mask: np.ndarray) -> np.ndarray:
@@ -54,7 +52,7 @@ def cutout_contour_from_image(image: np.ndarray,
 
 
 def cutout_objects_on_mask_from_image(image: np.ndarray, mask: np.ndarray, size_factor: float = 1.0,
-                                        darken_outside_contours: bool = False, darkening_factor: float = 0.7) \
+                                      darken_outside_contours: bool = False, darkening_factor: float = 0.7) \
         -> list[np.ndarray]:
     """ Cut out a box from the image, which includes the mask. The box is the smallest box that includes the mask unless
         size_factor is specified.
@@ -73,5 +71,6 @@ def cutout_objects_on_mask_from_image(image: np.ndarray, mask: np.ndarray, size_
     contours = get_contours(mask)
     cutouts = []
     for contour in contours:
-        cutouts.append(cutout_contour_from_image(image, contour, size_factor, darken_outside_contours, darkening_factor))
+        cutouts.append(
+            cutout_contour_from_image(image, contour, size_factor, darken_outside_contours, darkening_factor))
     return cutouts
