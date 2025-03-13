@@ -1,11 +1,12 @@
 # Use an official Python runtime as the base image
-FROM python:3.9-slim
+FROM python:3.13-slim
 
-# Install system dependencies required by OpenCV
+# Install system dependencies required by Python libraries
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Set environment variables
