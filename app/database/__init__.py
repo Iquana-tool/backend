@@ -6,6 +6,9 @@ from contextlib import contextmanager
 
 from config import Paths
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 # Define the declarative base
 database = declarative_base()
 
@@ -19,6 +22,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db():
+    logger.debug("\tInitializing database")
     database.metadata.create_all(bind=engine)
 
 

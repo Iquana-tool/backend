@@ -12,12 +12,14 @@ from logging import getLogger
 
 
 logger = getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 def create_app():
     # Initialize the directories
     for directory in [directory for directory in dir(config.Paths) if "dir" in directory and not "__" in directory]:
         os.makedirs(getattr(config.Paths, directory), exist_ok=True)
+        logger.debug(f"Created directory {getattr(config.Paths, directory)}")
 
     init_db()
 
