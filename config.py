@@ -34,6 +34,8 @@ class Paths:
     segmentation_dir = os.path.join(services_dir, 'segmentation')
     weights_dir = os.path.join(segmentation_dir, 'weights')
 
+    SAM2p1_BASE_URL = "https://dl.fbaipublicfiles.com/segment_anything_2/092824"
+
 
 class SAM2Config:
     """ Base class for SAM2 model configurations. """
