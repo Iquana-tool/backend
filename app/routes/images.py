@@ -1,12 +1,12 @@
 import logging
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 
-from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
-from app.services.database_access import delete_image_from_disk_and_db
 from app.database import get_session
 from app.database.images import Images
+from app.services.database_access import delete_image_from_disk_and_db
+from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])

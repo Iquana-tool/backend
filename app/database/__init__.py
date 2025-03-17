@@ -1,10 +1,13 @@
-from sqlalchemy.orm import declarative_base, sessionmaker
-from sqlalchemy import create_engine
+import logging
 from contextlib import contextmanager
 
-# from torch.ao.quantization import qconfig_equals
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from config import Paths
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # Define the declarative base
 database = declarative_base()
@@ -19,6 +22,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db():
+    logger.debug("\tInitializing database")
     database.metadata.create_all(bind=engine)
 
 

@@ -3,7 +3,6 @@ import unittest
 import numpy as np
 from io import BytesIO
 from PIL import Image
-from flask import Flask
 from app import create_app
 
 
@@ -13,7 +12,7 @@ class SAM2EndpointTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up test client before running tests."""
-        app = create_app()  # Initialize Flask app
+        app = create_app()  # Initialize FastAPI app
         app.config["TESTING"] = True
         cls.client = app.test_client()
 

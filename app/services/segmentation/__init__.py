@@ -1,10 +1,11 @@
-import config
-from app.services.segmentation.sam2 import SAM2
-from app.services.prompts import Prompts
-import numpy as np
 from typing import Union
+
+import numpy as np
 from PIL import Image
-from torch import Tensor
+
+import config
+from app.services.prompts import Prompts
+from app.services.segmentation.sam2 import SAM2
 
 _model = SAM2(config.SAM2Tiny())  # Initialize the model on import.
 

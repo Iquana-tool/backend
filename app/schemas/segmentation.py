@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field, conlist, validator, field_serializer, field_validator
-from typing import List, Optional, Annotated
+from typing import List, Annotated
+
+from pydantic import BaseModel, Field, field_validator
 
 import config
 from app.database import get_context_session
@@ -37,6 +38,7 @@ class BoxPrompt(BaseModel):
         if not (0 <= value <= 1):
             raise ValueError("Box coordinates must be between 0 and 1.")
         return value
+
 
 class PolygonPrompt(BaseModel):
     """ Model for validating a polygon annotation. """

@@ -1,7 +1,6 @@
 # This file contains classes for prompts
-import numpy as np
 import cv2
-from sympy.codegen.ast import int32
+import numpy as np
 
 
 class Prompts:
@@ -9,6 +8,7 @@ class Prompts:
         track multiple objects, create multiple instances of this class. The prompts can be added and removed as needed.
         The prompts can be converted to the format expected by the SAM2 model using the `to_SAM2_input` method.
     """
+
     def __init__(self):
         self.point_prompts = []
         self.point_labels = []
