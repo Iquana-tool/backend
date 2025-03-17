@@ -25,17 +25,11 @@ async def get_cutouts(request: CutoutsRequest, db: Session = Depends(get_session
                                                     request.darkening_factor)
         cutout_ids = []
         for cutout, lower_left_x, lower_left_y in cutouts:
-            cutout_id = await save_image_to_disk_and_db(cutout)
+            cutout_id = await save_image_to_disk_and_db(cutout,
+                                                        parent_image_id=request.image_id,
+                                                        lower_left_x=lower_left_x,
+                                                        lower_left_y=lower_left_y)
             cutout_ids.append(cutout_id)
-            db.add(Images(
-                id=cutout_id,
-                filename=f"{cutout_id}.png",
-                width=cutout.shape[1],
-                height=cutout.shape[0],
-                parent_image_id=request.image_id,
-                lower_left_x=lower_left_x,
-                lower_left_y=lower_left_y))
-            db.commit()
         return {
             "success": True,
             "message": "Cutouts successfully created!",
