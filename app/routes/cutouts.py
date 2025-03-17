@@ -38,6 +38,7 @@ async def get_cutouts(request: CutoutsRequest, db: Session = Depends(get_session
             db.commit()
         return {
             "success": True,
+            "message": "Cutouts successfully created!",
             "cutout_ids": cutout_ids
         }
     except Exception as e:
