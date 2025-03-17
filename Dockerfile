@@ -40,7 +40,7 @@ RUN apt-get update && \
 COPY . .
 
 # Expose the port the app runs on
-EXPOSE 3000
+EXPOSE 8000
 
 # Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
