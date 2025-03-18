@@ -55,7 +55,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
             db.add(new_embedding)
             db.commit()
             save_embeddings_to_disk(embedding, new_embedding.image_id, new_embedding.model)
-        masks, quality = model.segment_with_prompts(embedding, (width, height), prompts)
+        masks, quality = model.segment_with_prompts(embedding, (height, width), prompts)
     else:
         image = load_image_as_array_from_disk(request.image_id)
         masks, quality = model.segment_without_prompts(image)
