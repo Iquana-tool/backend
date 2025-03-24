@@ -16,6 +16,15 @@ from config import SAM2Config
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+# Global variable to store the current image_id being processed
+_current_image_id = None
+
+
+def set_current_image_id(image_id):
+    """Set the current image_id being processed"""
+    global _current_image_id
+    _current_image_id = image_id
+
 
 def download_checkpoint(ckpt_path: str) -> int:
     """
@@ -98,14 +107,54 @@ class SAM2:
                 A tuple containing a CxHxW array, where C is the number of masks, and an array of length C,
                  where each entry is the quality of the corresponding mask.
         """
-        embedding["image_embed"] = torch.from_numpy(embedding["image_embed"]).to(self.device)
-        embedding["high_res_feats"] = [torch.from_numpy(feat).to(self.device) for feat in embedding["high_res_feats"]]
-        with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
-            self.prompt_predictor._features = embedding  # Sets the embedding
-            self.prompt_predictor._is_image_set = True
-            self.prompt_predictor._orig_hw = [original_height_width]
-            masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(), normalize_coords=False)
-        return masks, quality
+        try:
+            # Load the embeddings onto the device
+            embedding["image_embed"] = torch.from_numpy(embedding["image_embed"]).to(self.device)
+            embedding["high_res_feats"] = [torch.from_numpy(feat).to(self.device) for feat in embedding["high_res_feats"]]
+            
+            # Set up the predictor with the embeddings
+            with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
+                self.prompt_predictor._features = embedding  # Sets the embedding
+                self.prompt_predictor._is_image_set = True
+                self.prompt_predictor._orig_hw = [original_height_width]
+                masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(), normalize_coords=False)
+            
+            return masks, quality
+        except RuntimeError as e:
+            # Handle tensor dimension mismatch
+            if "must match the size of tensor" in str(e):
+                logger.warning(f"Tensor dimension mismatch: {e}. Falling back to direct image segmentation.")
+                # Fall back to direct image segmentation without using stored embeddings
+                image = self._load_image_for_fallback()
+                if image is not None:
+                    with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
+                        self.prompt_predictor.set_image(image)
+                        masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(), normalize_coords=False)
+                    return masks, quality
+                else:
+                    # If we can't load the image, raise the original error
+                    raise
+            else:
+                # For other types of errors, re-raise
+                raise
+    
+    def _load_image_for_fallback(self):
+        """
+        Attempt to load the original image for fallback processing using the global image_id.
+        """
+        from app.services.database_access import load_image_as_array_from_disk
+        try:
+            global _current_image_id
+            if _current_image_id is None:
+                logger.error("No current image_id is set for fallback.")
+                return None
+                
+            logger.info(f"Loading image {_current_image_id} for fallback processing.")
+            image = load_image_as_array_from_disk(_current_image_id)
+            return image
+        except Exception as e:
+            logger.error(f"Failed to load image for fallback: {e}")
+            return None
 
     def segment_without_prompts(self, image: np.ndarray):
         """ Segment an image without prompts.
