@@ -1,4 +1,5 @@
 app/services/segmentation/weights/*
+!app/services/segmentation/weights/.gitkeep
 
 # Byte-compiled / optimized Python files
 __pycache__/
