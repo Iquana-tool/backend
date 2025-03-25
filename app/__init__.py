@@ -47,7 +47,17 @@ def create_app():
         allow_headers=["*"],
     )
 
-    # Include the router
+    # Root endpoint
+    @app.get("/")
+    async def root():
+        return {"message": "This is the API for DFKI"}
+
+    # Status endpoint
+    @app.get("/status")
+    async def status():
+        return {"status": "ok", "message": "API is running"}
+
+    # Include the routers
     app.include_router(segmentation_router)
     app.include_router(image_router)
     app.include_router(mask_router)
