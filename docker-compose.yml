@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  coral-back:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: coral-back
+    container_name: coral-back
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+      - ./app/services/segmentation/weights:/app/services/segmentation/weights
+    environment:
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://coral.ni.dfki.de,http://localhost:3000}
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 

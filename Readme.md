@@ -27,7 +27,15 @@ main.py              # Entry point to start the Fastapi application
 ```
 
 ## 🛠️ Installation & Setup
-### Option 1: Using [podman](https://podman.io)
+### Option 1: Using Docker Compose
+#### 1. Build and Run the Project
+Ensure you have Docker and Docker Compose installed on your system. Then, use the following command to build and run the project:
+```sh
+docker-compose up --build
+```
+This command will build the Docker image as specified in the `Dockerfile` and start the service defined in the `docker-compose.yml` file. The application will be accessible at: http://127.0.0.1:8000
+
+### Option 2: Using Podman
 Install podman and build the image using
 ```sh
 podman build -t coral-backend .
@@ -36,7 +44,7 @@ Then run the container using
 ```sh
 podman run -p 8000:8000 coral-backend
 ```
-### Option 2: Using venv
+### Option 3: Using venv
 #### 1. Clone the Repository
 ```sh
 git clone <repo-url>
@@ -59,7 +67,6 @@ Install the required packages:
 ```sh
 pip install -r requirements.txt
 ```
-
 
 #### 4. Run the Flask Application
 ```shell
