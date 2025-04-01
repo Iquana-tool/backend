@@ -9,7 +9,7 @@ import config
 from app.database import get_session
 from app.database.masks import Masks
 from app.schemas.masks import MaskRequest
-from app.services.postprocessing import base64_decode_string, base64_encode_image
+from app.services.encoding import base64_decode_string, base64_encode_image
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
