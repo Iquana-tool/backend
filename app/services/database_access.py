@@ -144,7 +144,8 @@ async def save_image_to_disk_and_db(image: AnyStr, parent_image_id=None, lower_l
     try:
         # Save the new image to the database
         with get_context_session() as session:
-            session.add(Images(filename=new_file_name, width=image_array.shape[1], height=image_array.shape[0],
+            # Image comes in WHC format because of PIL
+            session.add(Images(filename=new_file_name, width=image_array.shape[0], height=image_array.shape[1],
                                hash_code=hash_code, parent_image_id=parent_image_id, lower_left_x=lower_left_x,
                                lower_left_y=lower_left_y))
             session.commit()

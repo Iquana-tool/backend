@@ -11,7 +11,7 @@ from app.schemas.segmentation import SegmentationRequest
 from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
 from app.services.encoding import base64_encode_image
 from app.services.prompts import Prompts
-from app.services.segmentation.sam2 import SAM2
+from app.services.segmentation.sam2 import SAM2, set_current_image_id
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -23,6 +23,9 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 @router.post('/segment_image')
 async def segment_image(request: SegmentationRequest, db: Session = Depends(get_session)):
     """Perform segmentation with optional prompts, using data validation."""
+    # Set the current image_id for fallback mechanism
+    set_current_image_id(request.image_id)
+    
     model = SAM2(config.ModelConfig.available_models[request.model]())
     if request.use_prompts:
         embedding = db.query(ImageEmbeddings).filter_by(image_id=request.image_id, model=request.model).first()
@@ -55,7 +58,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
             db.add(new_embedding)
             db.commit()
             save_embeddings_to_disk(embedding, new_embedding.image_id, new_embedding.model)
-        masks, quality = model.segment_with_prompts(embedding, (width, height), prompts)
+        masks, quality = model.segment_with_prompts(embedding, (height, width), prompts)
     else:
         image = load_image_as_array_from_disk(request.image_id)
         masks, quality = model.segment_without_prompts(image)
