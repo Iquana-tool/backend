@@ -85,7 +85,7 @@ def load_image_as_array_from_disk(image_id):
 
 
 def load_embedding(embedding_id: int, model_name: str):
-    """Load an image embedding from the database by its image ID."""
+    """Load an image embedding from the database by its embedding ID."""
     with get_context_session() as session:
         embedding = session.query(ImageEmbeddings).filter_by(id=embedding_id).first()
     if embedding:
