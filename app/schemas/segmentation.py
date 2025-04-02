@@ -1,5 +1,4 @@
 from typing import List, Annotated
-
 from pydantic import BaseModel, Field, field_validator
 
 import config
@@ -88,6 +87,7 @@ class SegmentationRequest(BaseModel):
     circle_prompts: Annotated[List[CirclePrompt], "List of circle prompts supplied by the user"] = (
         Field(default_factory=list)
     )
+    label: Annotated[int, "Label of the mask."] = 0
 
     @field_validator('image_id')
     def validate_image_id(cls, value):
@@ -109,3 +109,27 @@ class SegmentationRequest(BaseModel):
         if not (0 <= value <= 1):
             raise ValueError("Coordinates must be between 0 and 1.")
         return value
+
+
+class Contour(BaseModel):
+    """ Model for the contour. """
+    x: List[float]
+    y: List[float]
+    label: Annotated[int, "Label of the mask."] = 0
+    area: float
+    perimeter: float
+    circularity: float
+    diameters: List[float]
+
+
+class Mask(BaseModel):
+    """ Model for the mask. """
+    contours: List[Contour]
+    predicted_iou: Annotated[float, "Predicted IoU of the mask."] = 0.0
+
+
+class SegmentationResponse(BaseModel):
+    """ Model for the segmentation response. """
+    masks: List[Mask]
+    image_id: int = 0
+    model: str = "SAM2Tiny"
