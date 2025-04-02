@@ -62,16 +62,10 @@ class CirclePrompt(BaseModel):
     center_y: Annotated[float, "Coordinates must be between 0 and 1."]
     radius: Annotated[float, "Radius must be a positive float."]
 
-    @field_validator('center_x', 'center_y')
+    @field_validator('center_x', 'center_y', 'radius')
     def validate_coordinates(cls, value):
         if not (0 <= value <= 1):
             raise ValueError("Coordinates must be between 0 and 1.")
-        return value
-
-    @field_validator('radius')
-    def validate_radius(cls, value):
-        if value <= 0:
-            raise ValueError("Radius must be a positive float.")
         return value
 
 
