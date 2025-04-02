@@ -111,7 +111,7 @@ class SegmentationRequest(BaseModel):
         return value
 
 
-class Contour(BaseModel):
+class ContourResponse(BaseModel):
     """ Model for the contour. """
     x: List[float]
     y: List[float]
@@ -122,14 +122,14 @@ class Contour(BaseModel):
     diameters: List[float]
 
 
-class Mask(BaseModel):
+class MaskResponse(BaseModel):
     """ Model for the mask. """
-    contours: List[Contour]
+    contours: List[ContourResponse]
     predicted_iou: Annotated[float, "Predicted IoU of the mask."] = 0.0
 
 
 class SegmentationResponse(BaseModel):
     """ Model for the segmentation response. """
-    masks: List[Mask]
+    masks: List[MaskResponse]
     image_id: int = 0
     model: str = "SAM2Tiny"
