@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 import config
 from app.database import get_session
 from app.database.images import ImageEmbeddings, Images
-from app.schemas.segmentation import SegmentationRequest, SegmentationResponse, ContourResponse, MaskResponse
+from app.schemas.segmentation_and_masks import SegmentationRequest, SegmentationResponse, ContourModel, SegmentationMaskModel
 from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
 from app.services.prompts import Prompts
 from app.services.segmentation.sam2 import SAM2, set_current_image_id
@@ -83,7 +83,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
                 # Skip contours with less than 3 points
                 continue
             contour = Contour(contour)
-            contours_response.append(ContourResponse(
+            contours_response.append(ContourModel(
                 x=[list_val[0] / width for list_val in contour.contour[..., 0].tolist()],
                 y=[list_val[0] / height for list_val in contour.contour[..., 1].tolist()],
                 area=contour.area,
@@ -92,5 +92,5 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
                 label=request.label,
                 diameters=contour.get_diameters(100)
             ))
-        masks_response.append(MaskResponse(contours=contours_response, predicted_iou=quality))
+        masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
