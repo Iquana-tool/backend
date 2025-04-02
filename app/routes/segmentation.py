@@ -12,6 +12,7 @@ from app.services.database_access import load_image_as_array_from_disk, load_emb
 from app.services.encoding import base64_encode_image
 from app.services.prompts import Prompts
 from app.services.segmentation.sam2 import SAM2, set_current_image_id
+from app.services.cutouts import get_contours
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -62,6 +63,9 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
     else:
         image = load_image_as_array_from_disk(request.image_id)
         masks, quality = model.segment_without_prompts(image)
-
+    contours = get_contours(masks)
     return {"base64_masks": [base64_encode_image(mask * 255) for mask in masks],
+            "contours": [
+                {"x": contour[..., 0].tolist(), "y": contour[..., 1].tolist()} for contour in contours
+            ],
             "quality": quality.tolist()}
