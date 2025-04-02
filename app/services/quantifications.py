@@ -1,6 +1,5 @@
 import cv2 as cv
 import numpy as np
-from app.services.cutouts import get_contours
 from logging import getLogger
 
 # Set up logging
@@ -41,25 +40,27 @@ class Contour:
             list: The diameters of the objects in the mask.
         """
         measuring_degrees = np.linspace(0, 180, step_size)
-        contour_mask = np.zeros_like(self.mask)
-        contour_mask = cv.drawContours(contour_mask, [self.contour], -1, color=1)
-        Cx, Cy = np.mean(self.contour, axis=0)
+        contour_mask = np.zeros((np.max(self.contour[..., 1] + 1), np.max(self.contour[..., 0] + 1)), dtype=np.uint8)
+        contour_mask = cv.drawContours(contour_mask, [self.contour], 0, 1, 1)
+        Cx, Cy = np.mean(self.contour[..., 0]), np.mean(self.contour[..., 1])
         diameters = []
         for degree in measuring_degrees:
             radian = np.deg2rad(degree)
-            x = int(Cx + np.cos(radian) * 1000)
-            y = int(Cy + np.sin(radian) * 1000)
+            x1 = int(Cx + np.cos(radian) * 1000)
+            y1 = int(Cy + np.sin(radian) * 1000)
+            x2 = int(Cx - np.cos(radian) * 1000)
+            y2 = int(Cy - np.sin(radian) * 1000)
             # Get the line between the center and the point
-            line = cv.line(np.zeros_like(self.mask), (int(Cx), int(Cy)), (x, y), color=1, thickness=1)
+            line = cv.line(np.zeros_like(
+                contour_mask, dtype=np.uint8),
+                (x1, y1), (x2, y2),
+                   color=1, thickness=1
+            )
             # Get the intersection of the line and the contour
             intersection = cv.bitwise_and(line, contour_mask)
-            if np.count_nonzero(intersection) > 2:
-                logger.warning("More than 2 points in the intersection. This indicates non spherical shape.")
-            elif np.count_nonzero(intersection) == 2:
+            if np.count_nonzero(intersection) == 2:
                 # Get the distance between the two intersecting points
+                # It can happen that there are more or less than 2 points, but we should ignore these cases
                 distance = np.linalg.norm(np.argwhere(intersection))
                 diameters.append(distance)
-            else:
-                logger.error("Less than 2 points in the intersection. This indicates one dimensional shape or "
-                             "empty contour.")
         return diameters
