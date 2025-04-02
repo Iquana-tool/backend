@@ -62,16 +62,10 @@ class CirclePrompt(BaseModel):
     center_y: Annotated[float, "Coordinates must be between 0 and 1."]
     radius: Annotated[float, "Radius must be a positive float."]
 
-    @field_validator('center_x', 'center_y')
+    @field_validator('center_x', 'center_y', 'radius')
     def validate_coordinates(cls, value):
         if not (0 <= value <= 1):
             raise ValueError("Coordinates must be between 0 and 1.")
-        return value
-
-    @field_validator('radius')
-    def validate_radius(cls, value):
-        if value <= 0:
-            raise ValueError("Radius must be a positive float.")
         return value
 
 
@@ -81,6 +75,10 @@ class SegmentationRequest(BaseModel):
                                   "without prompts (=false).")] = True
     image_id: Annotated[int, "ID of the image to segment."] = 0
     model: Annotated[str, "Model to use for segmentation."] = "SAM2Tiny"
+    min_x: Annotated[float, "Coordinates must be between 0 and 1."] = 0
+    min_y: Annotated[float, "Coordinates must be between 0 and 1."] = 0
+    max_x: Annotated[float, "Coordinates must be between 0 and 1."] = 1
+    max_y: Annotated[float, "Coordinates must be between 0 and 1."] = 1
     point_prompts: Annotated[List[PointPrompt], "List of point prompts supplied by the user"] = (
         Field(default_factory=list))
     box_prompts: Annotated[List[BoxPrompt], "List of box prompts supplied by the user"] = Field(default_factory=list)
@@ -104,4 +102,10 @@ class SegmentationRequest(BaseModel):
     def validate_model(cls, value):
         if not value in config.ModelConfig.available_models.keys():
             raise ValueError("Model must be one of {}.".format(config.ModelConfig.available_models.keys()))
+        return value
+
+    @field_validator('min_x', 'min_y', 'max_x', 'max_y')
+    def validate_coordinates(cls, value):
+        if not (0 <= value <= 1):
+            raise ValueError("Coordinates must be between 0 and 1.")
         return value
