@@ -7,12 +7,13 @@ from sqlalchemy.orm import Session
 import config
 from app.database import get_session
 from app.database.images import ImageEmbeddings, Images
-from app.schemas.segmentation import SegmentationRequest
+from app.schemas.segmentation import SegmentationRequest, SegmentationResponse, ContourResponse, MaskResponse
 from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
 from app.services.encoding import base64_encode_image
 from app.services.prompts import Prompts
 from app.services.segmentation.sam2 import SAM2, set_current_image_id
 from app.services.cutouts import get_contours
+from app.services.quantifications import Contour
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -73,9 +74,21 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
     else:
         image = load_image_as_array_from_disk(request.image_id)
         masks, quality = model.segment_without_prompts(image)
-    contours = get_contours(masks)
-    return {"base64_masks": [base64_encode_image(mask * 255) for mask in masks],
-            "contours": [
-                {"x": contour[..., 0].tolist(), "y": contour[..., 1].tolist()} for contour in contours
-            ],
-            "quality": quality.tolist()}
+
+    masks_response = []
+    for mask, quality in zip(masks, quality):
+        contours = get_contours(mask)
+        contours_response = []
+        for contour in contours:
+            contour = Contour(contour)
+            contours_response.append(ContourResponse(
+                x=contour.contour[..., 0].tolist(),
+                y=contour.contour[..., 1].tolist(),
+                area=contour.area,
+                perimeter=contour.perimeter,
+                circularity=contour.circularity,
+                label=request.label,
+                diameters=contour.get_diameters(50)
+            ))
+        masks_response.append(MaskResponse(contours=contours_response, predicted_iou=quality))
+    return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
