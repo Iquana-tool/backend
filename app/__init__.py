@@ -59,8 +59,8 @@ def create_app():
         return {"status": "ok", "message": "API is running"}
 
     # Include the routers
-    app.include_router(segmentation_router)
     app.include_router(image_router)
+    app.include_router(segmentation_router)
     app.include_router(mask_router)
     app.include_router(label_router)
 
