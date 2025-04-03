@@ -111,15 +111,39 @@ class SegmentationRequest(BaseModel):
         return value
 
 
+class QuantificationsModel(BaseModel):
+    """ Model for the quantifications. """
+    area: float
+    perimeter: float
+    circularity: float
+    diameters: List[float]
+
+    @field_validator('area', 'perimeter', 'circularity')
+    def validate_positive(cls, value):
+        if value <= 0:
+            raise ValueError("Area, perimeter, and circularity must be positive values.")
+        return value
+
+    @field_validator('diameters')
+    def validate_diameters(cls, value):
+        if not all(isinstance(diameter, (int, float)) and diameter > 0 for diameter in value):
+            raise ValueError("Diameters must be a list of positive values.")
+        return value
+
+
 class ContourModel(BaseModel):
     """ Model for the contour. """
     x: List[float]
     y: List[float]
     label: Annotated[int, "Label of the mask."] = 0
-    area: float
-    perimeter: float
-    circularity: float
-    diameters: List[float]
+    quantifications: QuantificationsModel
+
+    @field_validator('x', 'y')
+    def validate_coordinates(cls, value):
+        if not all(0 <= coord <= 1 for coord in value):
+            raise ValueError("Coordinates must be between 0 and 1.")
+        return value
+
 
 
 class SegmentationMaskModel(BaseModel):
