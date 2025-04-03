@@ -1,5 +1,4 @@
 from typing import List, Annotated
-
 from pydantic import BaseModel, Field, field_validator
 
 import config
@@ -62,16 +61,10 @@ class CirclePrompt(BaseModel):
     center_y: Annotated[float, "Coordinates must be between 0 and 1."]
     radius: Annotated[float, "Radius must be a positive float."]
 
-    @field_validator('center_x', 'center_y')
+    @field_validator('center_x', 'center_y', 'radius')
     def validate_coordinates(cls, value):
         if not (0 <= value <= 1):
             raise ValueError("Coordinates must be between 0 and 1.")
-        return value
-
-    @field_validator('radius')
-    def validate_radius(cls, value):
-        if value <= 0:
-            raise ValueError("Radius must be a positive float.")
         return value
 
 
@@ -81,6 +74,10 @@ class SegmentationRequest(BaseModel):
                                   "without prompts (=false).")] = True
     image_id: Annotated[int, "ID of the image to segment."] = 0
     model: Annotated[str, "Model to use for segmentation."] = "SAM2Tiny"
+    min_x: Annotated[float, "Coordinates must be between 0 and 1."] = 0
+    min_y: Annotated[float, "Coordinates must be between 0 and 1."] = 0
+    max_x: Annotated[float, "Coordinates must be between 0 and 1."] = 1
+    max_y: Annotated[float, "Coordinates must be between 0 and 1."] = 1
     point_prompts: Annotated[List[PointPrompt], "List of point prompts supplied by the user"] = (
         Field(default_factory=list))
     box_prompts: Annotated[List[BoxPrompt], "List of box prompts supplied by the user"] = Field(default_factory=list)
@@ -90,6 +87,7 @@ class SegmentationRequest(BaseModel):
     circle_prompts: Annotated[List[CirclePrompt], "List of circle prompts supplied by the user"] = (
         Field(default_factory=list)
     )
+    label: Annotated[int, "Label of the mask."] = 0
 
     @field_validator('image_id')
     def validate_image_id(cls, value):
@@ -105,3 +103,57 @@ class SegmentationRequest(BaseModel):
         if not value in config.ModelConfig.available_models.keys():
             raise ValueError("Model must be one of {}.".format(config.ModelConfig.available_models.keys()))
         return value
+
+    @field_validator('min_x', 'min_y', 'max_x', 'max_y')
+    def validate_coordinates(cls, value):
+        if not (0 <= value <= 1):
+            raise ValueError("Coordinates must be between 0 and 1.")
+        return value
+
+
+class QuantificationsModel(BaseModel):
+    """ Model for the quantifications. """
+    area: float
+    perimeter: float
+    circularity: float
+    diameters: List[float]
+
+    @field_validator('area', 'perimeter', 'circularity')
+    def validate_positive(cls, value):
+        if value <= 0:
+            raise ValueError("Area, perimeter, and circularity must be positive values.")
+        return value
+
+    @field_validator('diameters')
+    def validate_diameters(cls, value):
+        if not all(isinstance(diameter, (int, float)) and diameter > 0 for diameter in value):
+            raise ValueError("Diameters must be a list of positive values.")
+        return value
+
+
+class ContourModel(BaseModel):
+    """ Model for the contour. """
+    x: List[float]
+    y: List[float]
+    label: Annotated[int, "Label of the mask."] = 0
+    quantifications: QuantificationsModel
+
+    @field_validator('x', 'y')
+    def validate_coordinates(cls, value):
+        if not all(0 <= coord <= 1 for coord in value):
+            raise ValueError("Coordinates must be between 0 and 1.")
+        return value
+
+
+
+class SegmentationMaskModel(BaseModel):
+    """ Model for the mask. """
+    contours: List[ContourModel]
+    predicted_iou: Annotated[float, "Predicted IoU of the mask."] = 0.0
+
+
+class SegmentationResponse(BaseModel):
+    """ Model for the segmentation response. """
+    masks: List[SegmentationMaskModel]
+    image_id: int = 0
+    model: str = "SAM2Tiny"

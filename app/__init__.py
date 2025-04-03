@@ -8,7 +8,8 @@ from dotenv import load_dotenv
 import config
 from app.routes.segmentation import router as segmentation_router
 from app.routes.images import router as image_router
-from app.routes.masks import router as mask_router
+from app.routes.mask_generation import router as mask_router
+from app.routes.labels import router as label_router
 from app.database import init_db
 from logging import getLogger
 
@@ -58,8 +59,9 @@ def create_app():
         return {"status": "ok", "message": "API is running"}
 
     # Include the routers
-    app.include_router(segmentation_router)
     app.include_router(image_router)
+    app.include_router(segmentation_router)
     app.include_router(mask_router)
+    app.include_router(label_router)
 
     return app
