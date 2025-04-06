@@ -7,7 +7,10 @@ from sqlalchemy.orm import Session
 import config
 from app.database import get_session
 from app.database.images import ImageEmbeddings, Images
-from app.schemas.segmentation_and_masks import SegmentationRequest, SegmentationResponse, ContourModel, SegmentationMaskModel
+from app.schemas.segmentation_and_masks import (
+    SegmentationRequest, SegmentationResponse, ContourModel, 
+    SegmentationMaskModel, QuantificationsModel
+)
 from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
 from app.services.prompts import Prompts
 from app.services.segmentation.sam2 import SAM2, set_current_image_id
@@ -86,11 +89,13 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
             contours_response.append(ContourModel(
                 x=[list_val[0] / width for list_val in contour.contour[..., 0].tolist()],
                 y=[list_val[0] / height for list_val in contour.contour[..., 1].tolist()],
-                area=contour.area,
-                perimeter=contour.perimeter,
-                circularity=contour.circularity,
                 label=request.label,
-                diameters=contour.get_diameters(100)
+                quantifications=QuantificationsModel(
+                    area=contour.area,
+                    perimeter=contour.perimeter,
+                    circularity=contour.circularity,
+                    diameters=contour.get_diameters(100)
+                )
             ))
         masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
