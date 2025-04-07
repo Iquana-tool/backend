@@ -29,8 +29,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV PATH=/root/.local/bin:$PATH
 
 # Install system dependencies required for running the application
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apt-get update --allow-unauthenticated && \
+    apt-get install -y --no-install-recommends --allow-unauthenticated \
     libgl1 \
     libglib2.0-0 \
     wget \
