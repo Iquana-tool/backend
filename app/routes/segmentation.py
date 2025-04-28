@@ -66,7 +66,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
                 image = image[int(request.min_y * height):int(request.max_y * height),
                               int(request.min_x * width):int(request.max_x * width)]
             embedding = model.embed_image(image)
-            if not use_crop:
+            if not use_crop and not request.model == "Mockup":
                 # Only save the embedding for the full image
                 new_embedding = ImageEmbeddings(
                     image_id=request.image_id,
