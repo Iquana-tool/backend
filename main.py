@@ -1,5 +1,4 @@
 import logging
-
 from app import create_app
 
 # Set up logging
