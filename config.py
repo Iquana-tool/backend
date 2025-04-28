@@ -76,6 +76,7 @@ class ModelConfig:
     """ This class contains the configuration options for the model. """
     selected_model = 'SAM2Tiny'
     available_models = {
+        'Mockup': None,
         'SAM2Tiny': SAM2Tiny,
         'SAM2Small': SAM2Small,
         'SAM2Large': SAM2Large,
