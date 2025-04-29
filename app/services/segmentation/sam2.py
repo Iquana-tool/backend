@@ -8,11 +8,14 @@ import torch
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2 as build
 from sam2.sam2_image_predictor import SAM2ImagePredictor
-
+from app.database import get_context_session
+from app.database.images import ImageEmbeddings
 import config
 from app.services.prompts import Prompts
 from app.services.segmentation import SegmentationBaseModel
+from app.services.database_access import load_image_as_array_from_disk, save_embedding, get_height_width
 from config import SAM2Config
+from schemas.segmentation_and_masks import SegmentationRequest
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -84,6 +87,70 @@ class SAM2(SegmentationBaseModel):
         self.model_name = model_config.__name__
         self.prompt_predictor = SAM2ImagePredictor(self.model)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model)
+
+    def process_request(self, request: SegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
+        """ Process the segmentation request.
+            Args:
+                request (SegmentationRequest): The segmentation request containing the image and prompts.
+
+            Returns:
+                tuple: A tuple containing an array of masks and an array of predicted iou scores.
+        """
+        # Check if cropping is needed
+        use_crop = request.min_x > 0 or request.min_y > 0 or request.max_x < 1 or request.max_y < 1
+        # If we do not have a crop, we can load the embedding directly
+        embedding = self.load_embedding(request.image_id)
+        if embedding is None or use_crop:
+            # If we do not have an embedding or we have a crop, we need to load the image and embed it
+            image = load_image_as_array_from_disk(request.image_id,
+                                                  request.min_x, request.min_y,
+                                                  request.max_x, request.max_y)
+            embedding = self.embed_image(image)
+            if not use_crop:
+                # Save the embedding for the full image
+                save_embedding(request, embedding)
+        # Save the original height and width of the image
+        height, width = get_height_width(request.image_id)
+        if use_crop:
+            # Save the new height and width of the image after cropping
+            width = int((request.max_x - request.min_x) * width)
+            height = int((request.max_y - request.min_y) * height)
+        if request.use_prompts:
+            prompts = Prompts().from_segmentation_request(request)
+            return self.segment_with_prompts(embedding, (height, width), prompts)
+        else:
+            image = load_image_as_array_from_disk(request.image_id)
+            return self.segment_without_prompts(image)
+
+    def load_embedding(self, image_id: int):
+        """Load an image embedding from the database by its embedding ID."""
+        with get_context_session() as session:
+            embedding = session.query(ImageEmbeddings).filter_by(image_id=image_id, model=self.model_name).first()
+        if embedding:
+            try:
+                loaded_data = np.load(join(config.Paths.embedding_dir,
+                                           str(embedding.image_id),
+                                           self.model_name + ".npz"))
+                files = set(loaded_data.files)
+                new_dict = {"image_embed": loaded_data["image_embed"]}
+                files.remove("image_embed")
+                new_dict["high_res_feats"] = [loaded_data[high_res_feat] for high_res_feat in files]
+                return new_dict
+            except FileNotFoundError:
+                logger.warning(f"File not found for embedding ID {embedding.id}.")
+                return None
+        else:
+            return None
+
+    def prepare_input(self, **kwargs):
+        """ Prepare the input for the model.
+            Args:
+                kwargs: The keyword arguments containing the image to segment.
+
+            Returns:
+                dict: A dictionary containing the image to segment.
+        """
+        pass
 
     def embed_image(self, image: np.ndarray) -> dict[str, Union[np.ndarray, list[np.ndarray]]]:
         """ Compute embeddings for image.

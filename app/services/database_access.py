@@ -93,33 +93,25 @@ def load_image_as_array_from_disk(image_id, min_x=0, min_y=0, max_x=1, max_y=1):
         return None
 
 
-def load_embedding(embedding_id: int, model_name: str):
-    """Load an image embedding from the database by its embedding ID."""
+def get_height_width(image_id: int) -> tuple[int, int]:
+    """Get the height and width of an image from the database by its ID."""
     with get_context_session() as session:
-        embedding = session.query(ImageEmbeddings).filter_by(id=embedding_id).first()
-    if embedding:
-        try:
-            loaded_data = np.load(join(config.Paths.embedding_dir, str(embedding.image_id), model_name + ".npz"))
-            files = set(loaded_data.files)
-            new_dict = {"image_embed": loaded_data["image_embed"]}
-            files.remove("image_embed")
-            new_dict["high_res_feats"] = [loaded_data[high_res_feat] for high_res_feat in files]
-            return new_dict
-        except FileNotFoundError:
-            logger.warning(f"File not found for embedding ID {embedding_id}.")
-            return None
+        image = session.query(Images).filter_by(id=image_id).first()
+    if image:
+        return image.height, image.width
     else:
-        return None
+        raise ValueError(f"Image with ID {image_id} not found in database.")
 
 
-def save_embedding(request: SegmentationRequest, embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], db: Session):
-    new_embedding = ImageEmbeddings(
-        image_id=request.image_id,
-        model=request.model,
-        embed_dimensions=str(embedding["image_embed"].shape),
-    )
-    db.add(new_embedding)
-    db.commit()
+def save_embedding(request: SegmentationRequest, embedding: dict[str, Union[np.ndarray, list[np.ndarray]]]):
+    with get_context_session() as db:
+        new_embedding = ImageEmbeddings(
+            image_id=request.image_id,
+            model=request.model,
+            embed_dimensions=str(embedding["image_embed"].shape),
+        )
+        db.add(new_embedding)
+        db.commit()
     save_embeddings_to_disk(embedding, new_embedding.image_id, new_embedding.model)
 
 
