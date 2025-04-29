@@ -26,7 +26,7 @@ def create_random_mask(height: int, width: int) -> np.ndarray:
     return mask
 
 
-class MockupSegmentation:
+class MockupSegmentationModel:
     def embed_image(self, image: np.ndarray) -> dict[str, Union[np.ndarray, list[np.ndarray]]]:
         """ Compute embeddings for image.
             Args:
