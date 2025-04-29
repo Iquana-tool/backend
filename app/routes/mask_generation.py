@@ -87,10 +87,10 @@ async def add_contour(mask_id: int, contour: ContourModel, db: Session = Depends
             mask_id=mask_id,
             coords=json.dumps(coords),
             label=contour.label,
-            area=contour.area,
-            perimeter=contour.perimeter,
-            circularity=contour.circularity,
-            diameters=json.dumps(contour.diameters),
+            area=contour.quantifications.area,
+            perimeter=contour.quantifications.perimeter,
+            circularity=contour.quantifications.circularity,
+            diameters=json.dumps(contour.quantifications.diameters),
         )
         db.add(new_contour)
         db.commit()
