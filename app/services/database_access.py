@@ -2,10 +2,12 @@ import base64
 import hashlib
 import logging
 import os
+import cv2 as cv
 from logging import getLogger
 from os import remove
 from os.path import join, exists
 from typing import Union, AnyStr
+from sqlalchemy.orm import Session
 
 import numpy as np
 from PIL import Image
@@ -14,6 +16,7 @@ from fastapi import UploadFile
 import config
 from app.database import get_context_session
 from app.database.images import Images, ImageEmbeddings
+from app.schemas.segmentation_and_masks import SegmentationRequest
 
 logger = getLogger(__name__)
 
@@ -69,17 +72,23 @@ def load_image_as_base64_from_disk(image_id):
         raise ValueError(f"Image with ID {image_id} not found in database.")
 
 
-def load_image_as_array_from_disk(image_id):
+def load_image_as_array_from_disk(image_id, min_x=0, min_y=0, max_x=1, max_y=1):
     """Load an image from the database by its ID."""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
     if image:
-        return_image = np.array(Image.open(join(config.Paths.images_dir, image.filename)))
+        return_image = np.array(cv.imread(join(config.Paths.images_dir, image.filename)))
         if return_image.shape[0] == image.width and return_image.shape[1] == image.height:
             logger.warning(f"Image {image_id} has different dimensions than expected.")
-            return np.moveaxis(return_image, 1, 0)
-        else:
-            return return_image
+            image = np.moveaxis(return_image, 1, 0)
+        if image.shape[-1] != 3:
+            logger.warning("Converting RGBA image to RGB.")
+            image = cv.cvtColor(image, cv.COLOR_RGBA2RGB)
+        if min_x > 0 or min_y > 0 or max_x < 1 or max_y < 1:
+            # Crop the image to the specified range
+            image = image[int(min_y * image.shape[0]):int(max_y * image.shape[0]),
+                            int(min_x * image.shape[1]):int(max_x * image.shape[1])]
+        return np.array(image)
     else:
         return None
 
@@ -101,6 +110,17 @@ def load_embedding(embedding_id: int, model_name: str):
             return None
     else:
         return None
+
+
+def save_embedding(request: SegmentationRequest, embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], db: Session):
+    new_embedding = ImageEmbeddings(
+        image_id=request.image_id,
+        model=request.model,
+        embed_dimensions=str(embedding["image_embed"].shape),
+    )
+    db.add(new_embedding)
+    db.commit()
+    save_embeddings_to_disk(embedding, new_embedding.image_id, new_embedding.model)
 
 
 def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], image_id: int,

@@ -11,7 +11,7 @@ from app.schemas.segmentation_and_masks import (
     SegmentationRequest, SegmentationResponse, ContourModel, 
     SegmentationMaskModel, QuantificationsModel
 )
-from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
+from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embedding
 from app.services.prompts import Prompts
 from app.services.segmentation.sam2 import SAM2, set_current_image_id
 from app.services.segmentation.mockup import MockupSegmentation
@@ -49,25 +49,13 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
             embedding = load_embedding(embedding.id, request.model)
         else:
             # Image has not been embedded yet
-            image = load_image_as_array_from_disk(request.image_id)
-            if image.shape[-1] != 3:
-                logger.warning("Converting RGBA image to RGB.")
-                image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
-            if use_crop:
-                # Crop the image to the specified range
-                image = image[int(request.min_y * height):int(request.max_y * height),
-                              int(request.min_x * width):int(request.max_x * width)]
+            image = load_image_as_array_from_disk(request.image_id,
+                                                  request.min_x, request.min_y,
+                                                  request.max_x, request.max_y)
             embedding = model.embed_image(image)
             if not use_crop and not request.model == "Mockup":
                 # Only save the embedding for the full image
-                new_embedding = ImageEmbeddings(
-                    image_id=request.image_id,
-                    model=request.model,
-                    embed_dimensions=str(embedding["image_embed"].shape),
-                )
-                db.add(new_embedding)
-                db.commit()
-                save_embeddings_to_disk(embedding, new_embedding.image_id, new_embedding.model)
+                save_embedding(request, embedding, db)
         masks, quality = model.segment_with_prompts(embedding, (height, width), prompts)
     else:
         image = load_image_as_array_from_disk(request.image_id)
