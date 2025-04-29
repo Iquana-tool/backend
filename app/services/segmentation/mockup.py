@@ -1,5 +1,6 @@
 import numpy as np
 from app.services.segmentation import Prompts
+from app.services.segmentation import SegmentationBaseModel
 from typing import Union
 
 
@@ -26,7 +27,7 @@ def create_random_mask(height: int, width: int) -> np.ndarray:
     return mask
 
 
-class MockupSegmentationModel:
+class MockupSegmentationModel(SegmentationBaseModel):
     def embed_image(self, image: np.ndarray) -> dict[str, Union[np.ndarray, list[np.ndarray]]]:
         """ Compute embeddings for image.
             Args:
@@ -36,7 +37,7 @@ class MockupSegmentationModel:
                 dict[str, torch.Tensor]: A dictionary containing the embeddings. The dict has two entries: 'image_embed'
                  and 'high_res_feats'.
         """
-        pass
+        return {}
 
     def segment_with_prompts(self,
                              embedding: dict,
@@ -55,13 +56,6 @@ class MockupSegmentationModel:
         masks = [create_random_mask(original_height_width[0], original_height_width[1]) for _ in range(3)]
         scores = np.random.rand(len(masks))
         return np.array(masks), scores
-
-
-    def _load_image_for_fallback(self):
-        """
-        Attempt to load the original image for fallback processing using the global image_id.
-        """
-        pass
 
     def segment_without_prompts(self, image: np.ndarray):
         """ Segment an image without prompts.

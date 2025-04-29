@@ -11,6 +11,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 import config
 from app.services.prompts import Prompts
+from app.services.segmentation import SegmentationBaseModel
 from config import SAM2Config
 
 logger = logging.getLogger(__name__)
@@ -67,8 +68,14 @@ def download_checkpoint(ckpt_path: str) -> int:
         raise
 
 
-class SAM2:
+class SAM2(SegmentationBaseModel):
     def __init__(self, model_config: SAM2Config, device='auto'):
+        """ Initialize the SAM2 model.
+            Args:
+                model_config (SAM2Config): The configuration for the SAM2 model.
+                device (str): The device to run the model on. Can be 'cpu', 'cuda', or 'auto'.
+        """
+        super().__init__()
         self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
         download_checkpoint(ckpt_path=model_config.weights)
         self.model = build(ckpt_path=model_config.weights,
