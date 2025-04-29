@@ -15,7 +15,7 @@ from app.services.prompts import Prompts
 from app.services.segmentation import SegmentationBaseModel
 from app.services.database_access import load_image_as_array_from_disk, save_embedding, get_height_width
 from config import SAM2Config
-from schemas.segmentation_and_masks import SegmentationRequest
+from app.schemas.segmentation_and_masks import SegmentationRequest
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -115,9 +115,11 @@ class SAM2(SegmentationBaseModel):
             # Save the new height and width of the image after cropping
             width = int((request.max_x - request.min_x) * width)
             height = int((request.max_y - request.min_y) * height)
+        logger.info("Starting segmentation...")
         if request.use_prompts:
-            prompts = Prompts().from_segmentation_request(request)
-            return self.segment_with_prompts(embedding, (height, width), prompts)
+            prompts = Prompts()
+            prompts.from_segmentation_request(request)
+            return self.segment_with_prompts(embedding, (width, height), prompts)
         else:
             image = load_image_as_array_from_disk(request.image_id)
             return self.segment_without_prompts(image)
@@ -128,18 +130,21 @@ class SAM2(SegmentationBaseModel):
             embedding = session.query(ImageEmbeddings).filter_by(image_id=image_id, model=self.model_name).first()
         if embedding:
             try:
-                loaded_data = np.load(join(config.Paths.embedding_dir,
-                                           str(embedding.image_id),
-                                           self.model_name + ".npz"))
+                loaded_data = np.load(os.path.join(config.Paths.embedding_dir,
+                                                   str(embedding.image_id),
+                                                   self.model_name + ".npz"))
                 files = set(loaded_data.files)
                 new_dict = {"image_embed": loaded_data["image_embed"]}
                 files.remove("image_embed")
                 new_dict["high_res_feats"] = [loaded_data[high_res_feat] for high_res_feat in files]
+                logger.info(f"Loaded embedding for image ID {image_id} for model {self.model_name}.")
                 return new_dict
             except FileNotFoundError:
-                logger.warning(f"File not found for embedding ID {embedding.id}.")
+                logger.warning(f"File not found for embedding ID {embedding.id}. "
+                               f"Path: {os.path.join(config.Paths.embedding_dir, str(embedding.image_id), self.model_name + '.npz')}")
                 return None
         else:
+            logger.info(f"No embedding found for image ID {image_id} for model {self.model_name}.")
             return None
 
     def prepare_input(self, **kwargs):
@@ -181,54 +186,29 @@ class SAM2(SegmentationBaseModel):
                 A tuple containing a CxHxW array, where C is the number of masks, and an array of length C,
                  where each entry is the quality of the corresponding mask.
         """
+        # Load the embeddings onto the device
+        embedding["image_embed"] = torch.from_numpy(embedding["image_embed"]).to(self.device)
+        embedding["high_res_feats"] = [torch.from_numpy(feat).to(self.device) for feat in
+                                       embedding["high_res_feats"]]
+
+        # Set up the predictor with the embeddings
+        # Hacky solution here. There is some mismatch between the height and the width and im not entirely sure, how
+        # to resolve it.
         try:
-            # Load the embeddings onto the device
-            embedding["image_embed"] = torch.from_numpy(embedding["image_embed"]).to(self.device)
-            embedding["high_res_feats"] = [torch.from_numpy(feat).to(self.device) for feat in embedding["high_res_feats"]]
-            
-            # Set up the predictor with the embeddings
             with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
                 self.prompt_predictor._features = embedding  # Sets the embedding
                 self.prompt_predictor._is_image_set = True
                 self.prompt_predictor._orig_hw = [original_height_width]
-                masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(), normalize_coords=False)
-            
-            return masks, quality
-        except RuntimeError as e:
-            # Handle tensor dimension mismatch
-            if "must match the size of tensor" in str(e):
-                logger.warning(f"Tensor dimension mismatch: {e}. Falling back to direct image segmentation.")
-                # Fall back to direct image segmentation without using stored embeddings
-                image = self._load_image_for_fallback()
-                if image is not None:
-                    with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
-                        self.prompt_predictor.set_image(image)
-                        masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(), normalize_coords=False)
-                    return masks, quality
-                else:
-                    # If we can't load the image, raise the original error
-                    raise
-            else:
-                # For other types of errors, re-raise
-                raise
-    
-    def _load_image_for_fallback(self):
-        """
-        Attempt to load the original image for fallback processing using the global image_id.
-        """
-        from app.services.database_access import load_image_as_array_from_disk
-        try:
-            global _current_image_id
-            if _current_image_id is None:
-                logger.error("No current image_id is set for fallback.")
-                return None
-                
-            logger.info(f"Loading image {_current_image_id} for fallback processing.")
-            image = load_image_as_array_from_disk(_current_image_id)
-            return image
-        except Exception as e:
-            logger.error(f"Failed to load image for fallback: {e}")
-            return None
+                masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(),
+                                                                  normalize_coords=False)
+        except RuntimeError:
+            with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
+                self.prompt_predictor._features = embedding  # Sets the embedding
+                self.prompt_predictor._is_image_set = True
+                self.prompt_predictor._orig_hw = [original_height_width[::-1]]
+                masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(),
+                                                                  normalize_coords=False)
+        return masks, quality
 
     def segment_without_prompts(self, image: np.ndarray):
         """ Segment an image without prompts.
