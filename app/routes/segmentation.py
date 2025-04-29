@@ -44,15 +44,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
         width = int((request.max_x - request.min_x) * width)
         height = int((request.max_y - request.min_y) * height)
     if request.use_prompts:
-        prompts = Prompts()
-        for point in request.point_prompts:
-            prompts.add_point_annotation(point.x, point.y, point.label)
-        for box in request.box_prompts:
-            prompts.add_box_annotation(box.min_x, box.min_y, box.max_x, box.max_y)
-        for polygon in request.polygon_prompts:
-            prompts.add_polygon_annotation(polygon.vertices)
-        for circle in request.circle_prompts:
-            prompts.add_circle_annotation(circle.center_x, circle.center_y, circle.radius)
+        prompts = Prompts().from_segmentation_request(request)
         if embedding is not None and not use_crop:
             embedding = load_embedding(embedding.id, request.model)
         else:
