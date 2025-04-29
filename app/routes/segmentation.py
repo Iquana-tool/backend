@@ -13,8 +13,7 @@ from app.schemas.segmentation_and_masks import (
 )
 from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embedding
 from app.services.prompts import Prompts
-from app.services.segmentation.sam2 import SAM2, set_current_image_id
-from app.services.segmentation.mockup import MockupSegmentation
+from app.services.segmentation import get_model_via_identifier
 from app.services.contours import get_contours
 from app.services.quantifications import Contour
 
@@ -29,12 +28,7 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 async def segment_image(request: SegmentationRequest, db: Session = Depends(get_session)):
     """Perform segmentation with optional prompts, using data validation."""
     # Set the current image_id for fallback mechanism
-    if request.model == "Mockup":
-        # Mockup model returns three random masks
-        model = MockupSegmentation()
-    else:
-        set_current_image_id(request.image_id)
-        model = SAM2(config.ModelConfig.available_models[request.model]())
+    model = get_model_via_identifier(request.model)
     embedding = db.query(ImageEmbeddings).filter_by(image_id=request.image_id, model=request.model).first()
     width = db.query(Images).filter_by(id=request.image_id).first().width
     height = db.query(Images).filter_by(id=request.image_id).first().height
