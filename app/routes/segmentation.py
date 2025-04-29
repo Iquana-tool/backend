@@ -27,34 +27,9 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 @router.post('/segment_image')
 async def segment_image(request: SegmentationRequest, db: Session = Depends(get_session)):
     """Perform segmentation with optional prompts, using data validation."""
-    # Set the current image_id for fallback mechanism
     model = get_model_via_identifier(request.model)
-    embedding = db.query(ImageEmbeddings).filter_by(image_id=request.image_id, model=request.model).first()
-    width = db.query(Images).filter_by(id=request.image_id).first().width
-    height = db.query(Images).filter_by(id=request.image_id).first().height
-    use_crop = request.min_x > 0 or request.min_y > 0 or request.max_x < 1 or request.max_y < 1
-    if use_crop:
-        # At least one boundary is not 0 or 1
-        width = int((request.max_x - request.min_x) * width)
-        height = int((request.max_y - request.min_y) * height)
-    if request.use_prompts:
-        prompts = Prompts().from_segmentation_request(request)
-        if embedding is not None and not use_crop:
-            embedding = load_embedding(embedding.id, request.model)
-        else:
-            # Image has not been embedded yet
-            image = load_image_as_array_from_disk(request.image_id,
-                                                  request.min_x, request.min_y,
-                                                  request.max_x, request.max_y)
-            embedding = model.embed_image(image)
-            if not use_crop and not request.model == "Mockup":
-                # Only save the embedding for the full image
-                save_embedding(request, embedding, db)
-        masks, quality = model.segment_with_prompts(embedding, (height, width), prompts)
-    else:
-        image = load_image_as_array_from_disk(request.image_id)
-        masks, quality = model.segment_without_prompts(image)
-
+    logger.debug(f"Using model: {model.__name__}")
+    masks, quality = model.process_request(request)
     masks_response = []
     for mask, quality in zip(masks, quality):
         contours = get_contours(mask)
