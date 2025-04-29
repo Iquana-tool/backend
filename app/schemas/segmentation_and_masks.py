@@ -2,6 +2,7 @@ from typing import List, Annotated
 from pydantic import BaseModel, Field, field_validator
 
 import config
+import numpy as np
 from app.database import get_context_session
 from app.database.images import Images
 
@@ -140,10 +141,7 @@ class ContourModel(BaseModel):
 
     @field_validator('x', 'y')
     def validate_coordinates(cls, value):
-        if not all(0 <= coord <= 1 for coord in value):
-            raise ValueError("Coordinates must be between 0 and 1.")
-        return value
-
+        return [min(max(coord, 0), 1) for coord in value]
 
 
 class SegmentationMaskModel(BaseModel):
