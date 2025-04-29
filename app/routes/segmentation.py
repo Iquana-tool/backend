@@ -17,6 +17,7 @@ from app.services.segmentation.sam2 import SAM2, set_current_image_id
 from app.services.segmentation.mockup import MockupSegmentation
 from app.services.contours import get_contours
 from app.services.quantifications import Contour
+from app.services.postprocessing import postprocess_binary_mask
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -83,6 +84,8 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
 
     masks_response = []
     for mask, quality in zip(masks, quality):
+        if request.apply_post_processing:
+            mask = postprocess_binary_mask(mask)
         contours = get_contours(mask)
         contours_response = []
         for contour in contours:
