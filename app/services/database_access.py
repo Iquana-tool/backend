@@ -93,7 +93,7 @@ def load_image_as_array_from_disk(image_id, min_x=0, min_y=0, max_x=1, max_y=1):
         return None
 
 
-def get_height_width(image_id: int) -> tuple[int, int]:
+def get_height_width_of_image(image_id: int) -> tuple[int, int]:
     """Get the height and width of an image from the database by its ID."""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
