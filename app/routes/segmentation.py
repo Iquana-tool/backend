@@ -9,7 +9,7 @@ from app.schemas.segmentation_and_masks import (
 from app.services.segmentation import get_model_via_identifier
 from app.services.contours import get_contours
 from app.services.quantifications import Contour
-from app.services.database_access import get_height_width
+from app.services.database_access import get_height_width_of_image
 from app.services.postprocessing import postprocess_binary_mask
 
 # Set up logging
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 
 
 @router.post('/segment_image')
-async def segment_image(request: SegmentationRequest, db: Session = Depends(get_session)):
+async def segment_image(request: SegmentationRequest):
     """Perform segmentation with optional prompts, using data validation."""
     # Get the model based on the identifier
     model = get_model_via_identifier(request.model)
@@ -33,7 +33,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
     logger.debug(f"Segmentation completed for image_id: {request.image_id} with {len(masks)} masks.")
 
     # Postprocess the masks and get contours
-    height, width = get_height_width(request.image_id)
+    height, width = get_height_width_of_image(request.image_id)
     masks_response = []
     for mask, quality in zip(masks, quality):
         # Get contours of the postprocessed mask if postprocessing is enabled
@@ -53,7 +53,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
                     area=contour.area,
                     perimeter=contour.perimeter,
                     circularity=contour.circularity,
-                    diameters=contour.get_diameters(100)
+                    diameters=contour.get_diameters()
                 )
             ))
         masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
