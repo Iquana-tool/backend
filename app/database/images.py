@@ -14,12 +14,19 @@ class Images(database):
     parent_image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'))  # Parent image ID for cutouts
     lower_left_x = Column(Integer)  # Lower left x coordinate of the cutout
     lower_left_y = Column(Integer)  # Lower left y coordinate of the cutout
+    scale_x = Column(Float, nullable=True)  # mm per pixel in X
+    scale_y = Column(Float, nullable=True)  # mm per pixel in Y
+    unit = Column(String(10), default="mm")  # Default unit: mm
+
 
     def __repr__(self):
         return (f"<Image(id='{self.id}', "
                 f"path='{self.filename}', "
                 f"width='{self.width}',"
                 f"height='{self.height}')>")
+                f"scale_x='{self.scale_x}', "
+                f"scale_y='{self.scale_y}', "
+                f"unit='{self.unit}')>")
 
 
 class ImageEmbeddings(database):
