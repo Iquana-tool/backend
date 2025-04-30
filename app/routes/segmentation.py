@@ -1,7 +1,7 @@
 import logging
 
 import cv2
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 import config
@@ -11,34 +11,32 @@ from app.schemas.segmentation_and_masks import (
     SegmentationRequest, SegmentationResponse, ContourModel, 
     SegmentationMaskModel, QuantificationsModel
 )
+from app.schemas.scale import ScaleInput
 from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
 from app.services.prompts import Prompts
 from app.services.segmentation.sam2 import SAM2, set_current_image_id
 from app.services.contours import get_contours
 from app.services.quantifications import Contour
+from app.services.scale_computation import compute_pixel_scale_from_points
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
-# Create router
 router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 
 
 @router.post('/segment_image')
 async def segment_image(request: SegmentationRequest, db: Session = Depends(get_session)):
-    """Perform segmentation with optional prompts, using data validation."""
-    # Set the current image_id for fallback mechanism
     set_current_image_id(request.image_id)
-    
     model = SAM2(config.ModelConfig.available_models[request.model]())
     embedding = db.query(ImageEmbeddings).filter_by(image_id=request.image_id, model=request.model).first()
-    width = db.query(Images).filter_by(id=request.image_id).first().width
-    height = db.query(Images).filter_by(id=request.image_id).first().height
+    image_record = db.query(Images).filter_by(id=request.image_id).first()
+    width, height = image_record.width, image_record.height
     use_crop = request.min_x > 0 or request.min_y > 0 or request.max_x < 1 or request.max_y < 1
+
     if use_crop:
-        # At least one boundary is not 0 or 1
         width = int((request.max_x - request.min_x) * width)
         height = int((request.max_y - request.min_y) * height)
+
     if request.use_prompts:
         prompts = Prompts()
         for point in request.point_prompts:
@@ -49,21 +47,19 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
             prompts.add_polygon_annotation(polygon.vertices)
         for circle in request.circle_prompts:
             prompts.add_circle_annotation(circle.center_x, circle.center_y, circle.radius)
+
         if embedding is not None and not use_crop:
             embedding = load_embedding(embedding.id, request.model)
         else:
-            # Image has not been embedded yet
             image = load_image_as_array_from_disk(request.image_id)
             if image.shape[-1] != 3:
                 logger.warning("Converting RGBA image to RGB.")
                 image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
             if use_crop:
-                # Crop the image to the specified range
                 image = image[int(request.min_y * height):int(request.max_y * height),
                               int(request.min_x * width):int(request.max_x * width)]
             embedding = model.embed_image(image)
             if not use_crop:
-                # Only save the embedding for the full image
                 new_embedding = ImageEmbeddings(
                     image_id=request.image_id,
                     model=request.model,
@@ -72,6 +68,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
                 db.add(new_embedding)
                 db.commit()
                 save_embeddings_to_disk(embedding, new_embedding.image_id, new_embedding.model)
+
         masks, quality = model.segment_with_prompts(embedding, (height, width), prompts)
     else:
         image = load_image_as_array_from_disk(request.image_id)
@@ -83,7 +80,6 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
         contours_response = []
         for contour in contours:
             if len(contour) < 3:
-                # Skip contours with less than 3 points
                 continue
             contour = Contour(contour)
             contours_response.append(ContourModel(
@@ -98,4 +94,25 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
                 )
             ))
         masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
+
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
+
+
+@router.post('/set_scale')
+def set_pixel_scale(scale_input: ScaleInput, db: Session = Depends(get_session)):
+    image = db.query(Images).filter_by(id=scale_input.image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    scale_x, scale_y = compute_pixel_scale_from_points(
+        (scale_input.x1, scale_input.y1),
+        (scale_input.x2, scale_input.y2),
+        scale_input.known_distance
+    )
+
+    image.scale_x = scale_x
+    image.scale_y = scale_y
+    image.unit = scale_input.unit or "mm"
+    db.commit()
+
+    return {"message": "Scale set successfully", "scale_x": scale_x, "scale_y": scale_y, "unit": image.unit}
