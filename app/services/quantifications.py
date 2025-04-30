@@ -42,7 +42,7 @@ class Contour:
         else:
             self.circularity = (4 * np.pi * self.area) / (self.perimeter ** 2)
 
-    def get_diameters(self, step_size=25):
+    def get_diameters(self, step_size=16):
         """ Get the diameters of the objects in the mask.
         Args:
             step_size (int): The number of times to measure the diameter. This will measure the diameter each
