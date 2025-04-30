@@ -20,6 +20,18 @@ class Contour:
         self.contour = contour
         self.parse_contour()
 
+    @property
+    def x_coords(self):
+        """ Get the x-coordinates of the contour.
+        """
+        return self.contour[..., 0]
+
+    @property
+    def y_coords(self):
+        """ Get the y-coordinates of the contour.
+        """
+        return self.contour[..., 1]
+
     def parse_contour(self):
         """ Parse the contour to get the area, perimeter, circularity and diameters.
         """
@@ -30,7 +42,7 @@ class Contour:
         else:
             self.circularity = (4 * np.pi * self.area) / (self.perimeter ** 2)
 
-    def get_diameters(self, step_size=25):
+    def get_diameters(self, step_size=16):
         """ Get the diameters of the objects in the mask.
         Args:
             step_size (int): The number of times to measure the diameter. This will measure the diameter each
