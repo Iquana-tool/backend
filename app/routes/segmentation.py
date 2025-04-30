@@ -29,18 +29,17 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
     height, width = get_height_width(request.image_id)
     masks_response = []
     for mask, quality in zip(masks, quality):
-        if request.apply_post_processing:
-            mask = postprocess_binary_mask(mask)
-        contours = get_contours(mask)
+        # Get contours of the postprocessed mask if postprocessing is enabled
+        # Postprocessing might improve performance by removing noise
+        contours = get_contours(postprocess_binary_mask(mask) if request.apply_post_processing else mask)
         contours_response = []
         for contour in contours:
-            if len(contour) < 3:
-                # Skip contours with less than 3 points
-                continue
             contour = Contour(contour)
+            if contour.area <= 0 or contour.perimeter <= 0:
+                continue
             contours_response.append(ContourModel(
-                x=[list_val[0] / width for list_val in contour.contour[..., 0].tolist()],
-                y=[list_val[0] / height for list_val in contour.contour[..., 1].tolist()],
+                x=[x_coord / width for x_coord in contour.x_coords],  # Scale x-coordinates to [0, 1]
+                y=[y_coord / height for y_coord in contour.y_coords],  # Scale y-coordinates to [0, 1]
                 label=request.label,
                 quantifications=QuantificationsModel(
                     area=contour.area,
