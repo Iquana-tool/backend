@@ -1,6 +1,6 @@
 import numpy as np
 from app.services.segmentation import SegmentationBaseModel
-from app.services.database_access import get_height_width_of_image, get_height_width_of_contour
+from app.services.database_access import get_height_width_of_image
 from typing import Union
 
 
