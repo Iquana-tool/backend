@@ -22,10 +22,17 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 @router.post('/segment_image')
 async def segment_image(request: SegmentationRequest, db: Session = Depends(get_session)):
     """Perform segmentation with optional prompts, using data validation."""
+    # Get the model based on the identifier
     model = get_model_via_identifier(request.model)
     logger.debug(f"Using model: {model.model_name}")
+
+    # Process the request with the model
+    # This method should handle the image preprocessing and segmentation
+    # All model specific logic should be encapsulated in the model class
     masks, quality = model.process_request(request)
     logger.debug(f"Segmentation completed for image_id: {request.image_id} with {len(masks)} masks.")
+
+    # Postprocess the masks and get contours
     height, width = get_height_width(request.image_id)
     masks_response = []
     for mask, quality in zip(masks, quality):
@@ -36,6 +43,7 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
         for contour in contours:
             contour = Contour(contour)
             if contour.area <= 0 or contour.perimeter <= 0:
+                # We could filter here based on the area or perimeter or other quantifications from the contour
                 continue
             contours_response.append(ContourModel(
                 x=[x_coord / width for x_coord in contour.x_coords],  # Scale x-coordinates to [0, 1]
