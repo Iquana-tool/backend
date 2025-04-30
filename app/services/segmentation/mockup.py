@@ -1,6 +1,6 @@
 import numpy as np
 from app.services.segmentation import SegmentationBaseModel
-from app.services.database_access import get_height_width
+from app.services.database_access import get_height_width_of_image, get_height_width_of_contour
 from typing import Union
 
 
@@ -32,8 +32,15 @@ class MockupSegmentationModel(SegmentationBaseModel):
     def prepare_input(self, **kwargs):
         """ Does not do anything and returns None.
         """
-        shape = get_height_width(kwargs["image_id"])
-        return {"height": shape[0], "width": shape[1]}
+
+        shape = get_height_width_of_image(kwargs["image_id"])
+        if kwargs["min_x"] > 0 or kwargs["min_y"] > 0 or kwargs["max_x"] < 1 or kwargs["max_y"] < 1:
+            scale_x = kwargs["max_x"] - kwargs["min_x"]
+            scale_y = kwargs["max_y"] - kwargs["min_y"]
+        else:
+            scale_x = 1
+            scale_y = 1
+        return {"height": int(shape[0] * scale_y), "width": int(shape[1] * scale_x)}
 
     def segment(self, height, width, **kwargs):
         """ Returns random masks and scores.
