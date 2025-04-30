@@ -10,6 +10,7 @@ from app.services.segmentation import get_model_via_identifier
 from app.services.contours import get_contours
 from app.services.quantifications import Contour
 from app.services.database_access import get_height_width
+from app.services.postprocessing import postprocess_binary_mask
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -28,6 +29,8 @@ async def segment_image(request: SegmentationRequest, db: Session = Depends(get_
     height, width = get_height_width(request.image_id)
     masks_response = []
     for mask, quality in zip(masks, quality):
+        if request.apply_post_processing:
+            mask = postprocess_binary_mask(mask)
         contours = get_contours(mask)
         contours_response = []
         for contour in contours:
