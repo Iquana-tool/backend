@@ -202,6 +202,7 @@ class SAM2(SegmentationBaseModel):
                 masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(),
                                                                   normalize_coords=False)
         except RuntimeError:
+            logger.warning("RuntimeError: Mismatch between height and width. Trying to fix it.")
             with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
                 self.prompt_predictor._features = embedding  # Sets the embedding
                 self.prompt_predictor._is_image_set = True
