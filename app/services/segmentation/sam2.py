@@ -13,7 +13,7 @@ from app.database.images import ImageEmbeddings
 import config
 from app.services.prompts import Prompts
 from app.services.segmentation import SegmentationBaseModel
-from app.services.database_access import load_image_as_array_from_disk, save_embedding, get_height_width
+from app.services.database_access import load_image_as_array_from_disk, save_embedding, get_height_width_of_image
 from config import SAM2Config
 from app.schemas.segmentation_and_masks import SegmentationRequest
 
@@ -110,7 +110,7 @@ class SAM2(SegmentationBaseModel):
                 # Save the embedding for the full image
                 save_embedding(request, embedding)
         # Save the original height and width of the image
-        height, width = get_height_width(request.image_id)
+        height, width = get_height_width_of_image(request.image_id)
         if use_crop:
             # Save the new height and width of the image after cropping
             width = int((request.max_x - request.min_x) * width)
