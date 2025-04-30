@@ -20,6 +20,18 @@ class Contour:
         self.contour = contour
         self.parse_contour()
 
+    @property
+    def x_coords(self):
+        """ Get the x-coordinates of the contour.
+        """
+        return self.contour[..., 0]
+
+    @property
+    def y_coords(self):
+        """ Get the y-coordinates of the contour.
+        """
+        return self.contour[..., 1]
+
     def parse_contour(self):
         """ Parse the contour to get the area, perimeter, circularity and diameters.
         """
