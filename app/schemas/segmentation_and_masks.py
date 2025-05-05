@@ -2,6 +2,7 @@ from typing import List, Annotated
 from pydantic import BaseModel, Field, field_validator
 
 import config
+import numpy as np
 from app.database import get_context_session
 from app.database.images import Images
 
@@ -72,6 +73,7 @@ class SegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
     use_prompts: Annotated[bool, ("Use prompts for segmentation (=true) or use automatic segmentation "
                                   "without prompts (=false).")] = True
+    apply_post_processing: Annotated[bool, "Apply post-processing to the segmentation."] = True
     image_id: Annotated[int, "ID of the image to segment."] = 0
     model: Annotated[str, "Model to use for segmentation."] = "SAM2Tiny"
     min_x: Annotated[float, "Coordinates must be between 0 and 1."] = 0
@@ -140,10 +142,7 @@ class ContourModel(BaseModel):
 
     @field_validator('x', 'y')
     def validate_coordinates(cls, value):
-        if not all(0 <= coord <= 1 for coord in value):
-            raise ValueError("Coordinates must be between 0 and 1.")
-        return value
-
+        return [min(max(coord, 0), 1) for coord in value]
 
 
 class SegmentationMaskModel(BaseModel):

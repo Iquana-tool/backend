@@ -14,7 +14,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY requirements.txt .
 
 # Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
 # Stage 2: Final stage
 FROM python:3.13-slim
@@ -29,8 +29,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV PATH=/root/.local/bin:$PATH
 
 # Install system dependencies required for running the application
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apt-get update --allow-unauthenticated && \
+    apt-get install -y --no-install-recommends --allow-unauthenticated \
     libgl1 \
     libglib2.0-0 \
     wget \
