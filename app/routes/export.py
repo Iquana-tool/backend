@@ -23,7 +23,7 @@ def query_to_streaming_response(query, filename: str):
     return response
 
 
-@router.post("/quantification/{mask_id}")
+@router.post("/download_quantification/{mask_id}")
 def export_quantification(mask_id: int, labels: list[int] = None, db: Session = Depends(get_session)):
     """ Export quantification data for the given mask_id and labels. """
     query = db.query(Contours).filter_by(mask_id=mask_id)
@@ -32,10 +32,16 @@ def export_quantification(mask_id: int, labels: list[int] = None, db: Session = 
     return query_to_streaming_response(query, f"quantification_{mask_id}.csv")
 
 
-@router.post("/quantifications")
+@router.post("/download_multiple_quantifications")
 def export_multiple_quantifications(mask_ids: list[int], labels: list[int] = None, db: Session = Depends(get_session)):
     """ Export quantification data for the given mask_ids and labels. """
     query = db.query(Contours).filter(Contours.mask_id.in_(mask_ids))
     if labels:
         query = query.filter(Contours.label.in_(labels))
     return query_to_streaming_response(query, "quantifications.csv")
+
+@router.get("/get_quantification/{mask_id}")
+def get_quantification(mask_id: int, db: Session = Depends(get_session)):
+    """ Get quantification data for the given mask_id. """
+    return db.query(Contours).filter_by(mask_id=mask_id).first()
+
