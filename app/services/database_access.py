@@ -16,6 +16,7 @@ from fastapi import UploadFile
 import config
 from app.database import get_context_session
 from app.database.images import Images, ImageEmbeddings
+from app.database.scans import Scans, Slices
 from app.schemas.segmentation_and_masks import SegmentationRequest
 
 logger = getLogger(__name__)
@@ -160,6 +161,34 @@ async def save_image_to_disk_and_db(image: AnyStr, parent_image_id=None, lower_l
             session.add(Images(filename=new_file_name, width=image_array.shape[1], height=image_array.shape[0],
                                hash_code=hash_code, parent_image_id=parent_image_id, lower_left_x=lower_left_x,
                                lower_left_y=lower_left_y))
+            session.commit()
+    except Exception as e:
+        logger.error(f"Error saving image to database: {str(e)}")
+        logger.error(f"Deleting image '{new_file_name}' from disk to ensure consistency.")
+        os.remove(path)
+    logger.info("New image saved to disk and database.")
+    return session.query(Images).order_by(Images.id.desc()).first().id
+
+
+async def save_slice_to_disk_and_db(image: AnyStr, scan_id: int):
+    """Save an image to disk and to the database and return the new image ID."""
+    image_data = image.file.read()
+
+    # Check if image already exists in the database
+    with get_context_session() as session:
+        next_id = session.query(Slices).filter_by(scan_id=scan_id).count() + 1
+    # Save the new image to disk
+    original_extension = image.filename.split(".")[-1]
+    new_file_name = f"{scan_id}_{next_id}.{original_extension}"
+    path = join(config.Paths.slices_dir, new_file_name)
+    with open(path, "wb") as file:
+        file.write(image_data)
+    image_array = np.array(Image.open(path))
+    try:
+        # Save the new image to the database
+        with get_context_session() as session:
+            # Image comes in WHC format because of PIL
+            session.add(Slices(filename=new_file_name, width=image_array.shape[1], height=image_array.shape[0]))
             session.commit()
     except Exception as e:
         logger.error(f"Error saving image to database: {str(e)}")
