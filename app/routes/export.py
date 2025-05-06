@@ -40,8 +40,9 @@ def export_multiple_quantifications(mask_ids: list[int], labels: list[int] = Non
         query = query.filter(Contours.label.in_(labels))
     return query_to_streaming_response(query, "quantifications.csv")
 
+
 @router.get("/get_quantification/{mask_id}")
 def get_quantification(mask_id: int, db: Session = Depends(get_session)):
     """ Get quantification data for the given mask_id. """
-    return db.query(Contours).filter_by(mask_id=mask_id).first()
+    return db.query(Contours).filter_by(mask_id=mask_id).all()
 
