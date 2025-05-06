@@ -132,7 +132,7 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
     np.savez_compressed(str(path), **new_dict)
 
 
-async def save_image_to_disk_and_db(image: AnyStr, parent_image_id=None, lower_left_x=None, lower_left_y=None):
+async def save_image_to_disk_and_db(image: AnyStr):
     """Save an image to disk and to the database and return the new image ID."""
     image_data = image.file.read()
 
@@ -158,8 +158,7 @@ async def save_image_to_disk_and_db(image: AnyStr, parent_image_id=None, lower_l
         with get_context_session() as session:
             # Image comes in WHC format because of PIL
             session.add(Images(filename=new_file_name, width=image_array.shape[1], height=image_array.shape[0],
-                               hash_code=hash_code, parent_image_id=parent_image_id, lower_left_x=lower_left_x,
-                               lower_left_y=lower_left_y))
+                               hash_code=hash_code))
             session.commit()
     except Exception as e:
         logger.error(f"Error saving image to database: {str(e)}")
