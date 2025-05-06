@@ -100,7 +100,7 @@ class SAM2(SegmentationBaseModel):
         use_crop = request.min_x > 0 or request.min_y > 0 or request.max_x < 1 or request.max_y < 1
         # If we do not have a crop, we can load the embedding directly
         embedding = self.load_embedding(request.image_id)
-        if True and embedding is None or use_crop:
+        if False and embedding is None or use_crop:
             # If we do not have an embedding or we have a crop, we need to load the image and embed it
             image = load_image_as_array_from_disk(request.image_id,
                                                   request.min_x, request.min_y,
