@@ -11,6 +11,7 @@ class Images(database):
     height = Column(Integer, nullable=False)  # Height of the image in pixels
     hash_code = Column(String(64), nullable=False, unique=True)  # Hash of the image file
     scan_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'))  # Scan id for CT or MRI or OCT, etc.
+    index_in_scan = Column(Integer)  # Index of the image in the scan
 
     def __repr__(self):
         return (f"<Image(id='{self.id}', "
