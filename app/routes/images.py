@@ -99,7 +99,7 @@ async def upload_scan(files: list[UploadFile] = File(...),
     db.commit()
     try:
         image_ids = []
-        for file in files:
+        for i, file in enumerate(files):
             image_id = await save_image_to_disk_and_db(file, new_scan.id)
             if image_id is None:
                 raise HTTPException(status_code=400, detail="Invalid file or upload failed")
