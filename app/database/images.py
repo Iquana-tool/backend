@@ -1,5 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
-
+from sqlalchemy import Column, Integer, String, ForeignKey, JSON
 from . import database
 
 
@@ -11,9 +10,7 @@ class Images(database):
     width = Column(Integer, nullable=False)  # Width of the image in pixels
     height = Column(Integer, nullable=False)  # Height of the image in pixels
     hash_code = Column(String(64), nullable=False, unique=True)  # Hash of the image file
-    parent_image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'))  # Parent image ID for cutouts
-    lower_left_x = Column(Integer)  # Lower left x coordinate of the cutout
-    lower_left_y = Column(Integer)  # Lower left y coordinate of the cutout
+    scan_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'))  # Scan id for CT or MRI or OCT, etc.
 
     def __repr__(self):
         return (f"<Image(id='{self.id}', "
@@ -36,3 +33,13 @@ class ImageEmbeddings(database):
         return (f"<ImageEmbedding(image_id='{self.image_id}', "
                 f"model='{self.model}', "
                 f"dimension='{self.embed_dimensions}'>")
+
+
+class Scans(database):
+    __tablename__ = 'scans'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)  # Name of the scan
+    type = Column(String)  # Type of scan (e.g., 'CT', 'MRI')
+    description = Column(String)  # Description of the scan
+    number_of_slices = Column(Integer, nullable=False)  # Number of slices in the scan
+    meta_data = Column(JSON)  # Save any additional metadata about the scan

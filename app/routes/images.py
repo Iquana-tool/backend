@@ -4,7 +4,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.database.images import Images
+from app.database.images import Images, Scans
 from app.services.database_access import delete_image_from_disk_and_db
 from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
 
@@ -74,4 +74,43 @@ async def get_image(image_id: int):
         return response
     except Exception as e:
         logger.error(f"Get image error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload_scan")
+async def upload_scan(files: list[UploadFile] = File(...),
+                      name: str = "Scan",
+                      scan_type: str = "CT",
+                      description: str = "Scan description",
+                      number_of_slices: int = 0,
+                      #meta_data: dict = None,
+                      db: Session = Depends(get_session)):
+    """Upload a scan file"""
+    # First create a new scan entry in the database
+    # Then save each image file to disk and the database
+    # and associate them with the scan entry
+    new_scan = Scans(
+        name=name,
+        type=scan_type,
+        description=description,
+        number_of_slices=number_of_slices,
+        #meta_data=meta_data
+    )
+    db.commit()
+    try:
+        image_ids = []
+        for file in files:
+            image_id = await save_image_to_disk_and_db(file, new_scan.id)
+            if image_id is None:
+                raise HTTPException(status_code=400, detail="Invalid file or upload failed")
+            image_ids.append(image_id)
+
+        return {
+            "success": True,
+            "image_ids": image_ids,
+            "message": f"Successfully uploaded {len(files)} images belonging to scan {new_scan.id}. "
+                       f"Assigned image ids {image_ids}"
+        }
+    except Exception as e:
+        logger.error(f"Upload error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
