@@ -116,7 +116,7 @@ async def upload_scan(files: list[UploadFile] = File(...),
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("upload_scan_with_log_file")
+@router.post("/upload_scan_with_log_file")
 async def upload_scan_with_log_file(
     files: list[UploadFile] = File(...),
     log_file: UploadFile = File(...),
@@ -128,7 +128,7 @@ async def upload_scan_with_log_file(
     # First create a new scan entry in the database
     # Then save each image file to disk and the database
     # and associate them with the scan entry
-    log_data = parse_log_file(log_file)
+    log_data = parse_log_file(log_file.file.read())
     return await upload_scan(
         files=files,
         name=log_data["Filename Prefix"],
