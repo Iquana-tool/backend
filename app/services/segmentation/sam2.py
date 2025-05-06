@@ -119,7 +119,15 @@ class SAM2(SegmentationBaseModel):
         if request.use_prompts:
             prompts = Prompts()
             prompts.from_segmentation_request(request)
-            return self.segment_with_prompts(embedding, (width, height), prompts)
+
+            # Temporary fix for embedding loading
+            image = load_image_as_array_from_disk(request.image_id)
+            self.prompt_predictor.set_image(image)
+            mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(),normalize_coords=False)
+            return mask, scores
+            # Fix end
+
+            # return self.segment_with_prompts(embedding, (width, height), prompts)
         else:
             image = load_image_as_array_from_disk(request.image_id)
             return self.segment_without_prompts(image)
