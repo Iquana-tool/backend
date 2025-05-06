@@ -24,13 +24,13 @@ class Contour:
     def x_coords(self):
         """ Get the x-coordinates of the contour.
         """
-        return self.contour[..., 0]
+        return self.contour[..., 1]
 
     @property
     def y_coords(self):
         """ Get the y-coordinates of the contour.
         """
-        return self.contour[..., 1]
+        return self.contour[..., 0]
 
     def parse_contour(self):
         """ Parse the contour to get the area, perimeter, circularity and diameters.
