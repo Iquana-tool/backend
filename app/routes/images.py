@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.images import Images, Scans
-from app.services.database_access import delete_image_from_disk_and_db
+from app.services.database_access import delete_image_from_disk_and_db, parse_log_file
 from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ async def upload_scan(files: list[UploadFile] = File(...),
     try:
         image_ids = []
         for i, file in enumerate(files):
-            image_id = await save_image_to_disk_and_db(file, new_scan.id)
+            image_id = await save_image_to_disk_and_db(file, new_scan.id, index_in_scan=i)
             if image_id is None:
                 raise HTTPException(status_code=400, detail="Invalid file or upload failed")
             image_ids.append(image_id)
@@ -113,4 +113,51 @@ async def upload_scan(files: list[UploadFile] = File(...),
         }
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("upload_scan_with_log_file")
+async def upload_scan_with_log_file(
+    files: list[UploadFile] = File(...),
+    log_file: UploadFile = File(...),
+    type: str = "CT",
+    description: str = "Scan description",
+    db: Session = Depends(get_session)
+):
+    """Upload a scan file with logging."""
+    # First create a new scan entry in the database
+    # Then save each image file to disk and the database
+    # and associate them with the scan entry
+    log_data = parse_log_file(log_file)
+    return await upload_scan(
+        files=files,
+        name=log_data["Filename Prefix"],
+        scan_type=log_data["type"],
+        description=log_data["description"],
+        number_of_slices=len(files),
+        #meta_data=log_data,
+        db=db
+    )
+
+
+@router.delete("/delete_scan/{scan_id}")
+async def delete_scan(scan_id: int):
+    """Delete a scan and all its associated images."""
+    try:
+        # Get the scan and its associated images
+        with get_session() as db:
+            images = db.query(Images).filter(Images.scan_id == scan_id).first()
+            if not images:
+                raise HTTPException(status_code=404, detail="Scan not found")
+
+            # Delete the scan and its associated images
+            for image in images:
+                delete_image_from_disk_and_db(image.id)
+
+            scan = db.query(Scans).filter(Scans.id == scan_id).first()
+            db.delete(scan)
+            db.commit()
+        return {"success": True, "message": f"Deleted scan {scan_id} and its associated images."}
+    except Exception as e:
+        logger.error(f"Delete scan error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
