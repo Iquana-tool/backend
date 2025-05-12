@@ -53,30 +53,3 @@ logs/
 *.log
 debug.log
 
-# Ignore image datasets (to avoid uploading heavy images)
-coral_dataset/
-polyp_dataset/
-
-# Ignore outputs and results
-output/
-output_masks/
-area_graph.png
-measurements.csv
-calculated_image_areas.csv
-
-# Ignore all large media files globally
-*.jpg
-*.jpeg
-*.png
-*.bmp
-*.tif
-*.tiff
-*.webp
-*.mp4
-*.avi
-*.mov
-
-# Ignore test folders if they exist
-test/
-test/images/
-
