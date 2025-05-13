@@ -87,7 +87,7 @@ def load_image_as_array_from_disk(image_id, min_x=0, min_y=0, max_x=1, max_y=1):
         if min_x > 0 or min_y > 0 or max_x < 1 or max_y < 1:
             # Crop the image to the specified range
             image = image[int(min_y * image.shape[0]):int(max_y * image.shape[0]),
-                          int(min_x * image.shape[1]):int(max_x * image.shape[1])]
+                    int(min_x * image.shape[1]):int(max_x * image.shape[1])]
         return np.array(image)
     else:
         return None
@@ -132,8 +132,7 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
     np.savez_compressed(str(path), **new_dict)
 
 
-async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int):
-async def save_image_to_disk_and_db(image: AnyStr, scan_id=None, index_in_scan=None) -> int:
+async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None, index_in_scan=None) -> int:
     """Save an image to disk and to the database and return the new image ID."""
     image_data = image.file.read()
 
@@ -164,6 +163,8 @@ async def save_image_to_disk_and_db(image: AnyStr, scan_id=None, index_in_scan=N
                                    dataset_id=dataset_id,
                                    width=image_array.shape[1],
                                    height=image_array.shape[0],
+                                   scan_id=scan_id,
+                                   index_in_scan=index_in_scan,
                                    hash_code=hash_code)
                 session.add(new_entry)
                 session.commit()

@@ -13,7 +13,7 @@ router = APIRouter(prefix="/images", tags=["images"])
 
 
 @router.post("/upload_image")
-async def upload_image(dataset_id: int,file: UploadFile = File(...), db: Session = Depends(get_session)):
+async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Session = Depends(get_session)):
     """Upload an image file"""
     try:
         image_id = await save_image_to_disk_and_db(file, dataset_id)
