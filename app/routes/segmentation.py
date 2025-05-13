@@ -1,22 +1,16 @@
 import logging
-import cv2
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-
-import config
 from app.database import get_session
-from app.database.images import ImageEmbeddings, Images
 from app.schemas.segmentation_and_masks import (
-    SegmentationRequest, SegmentationResponse, ContourModel,
+    SegmentationRequest, SegmentationResponse, ContourModel, 
     SegmentationMaskModel, QuantificationsModel
 )
-from app.schemas.scale import ScaleInput
-from app.services.database_access import load_image_as_array_from_disk, load_embedding, save_embeddings_to_disk
-from app.services.prompts import Prompts
-from app.services.segmentation.sam2 import SAM2, set_current_image_id
+from app.services.segmentation import get_model_via_identifier
 from app.services.contours import get_contours
 from app.services.quantifications import Contour
-from app.services.scale_computation import compute_pixel_scale_from_points
+from app.services.database_access import get_height_width_of_image
+from app.services.postprocessing import postprocess_binary_mask
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -27,7 +21,18 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 
 @router.post('/segment_image')
 async def segment_image(request: SegmentationRequest):
-    """Perform segmentation with optional prompts, using data validation."""
+    """Perform segmentation with optional prompts, using data validation.
+    This function handles the segmentation of images based on the provided request.
+    It validates the request, retrieves the appropriate model, and processes the image.
+
+    Args:
+        request (SegmentationRequest): The request object containing image data and parameters. When using cropping,
+        make sure to remap the annotation coordinates to the cropped image.
+
+    Returns:
+        SegmentationResponse: The response object containing the segmentation results. When using cropping,
+        the contours will be remapped to the original image size.
+    """
     # Get the model based on the identifier
     model = get_model_via_identifier(request.model)
     logger.debug(f"Using model: {model.model_name}")
@@ -52,8 +57,9 @@ async def segment_image(request: SegmentationRequest):
                 # We could filter here based on the area or perimeter or other quantifications from the contour
                 continue
             contours_response.append(ContourModel(
-                x=[x_coord / width for x_coord in contour.x_coords],  # Scale x-coordinates to [0, 1]
-                y=[y_coord / height for y_coord in contour.y_coords],  # Scale y-coordinates to [0, 1]
+                # We have to rescale the images to the original size
+                x=[(x_coord + int(request.min_x * width)) / width for x_coord in contour.x_coords],
+                y=[(y_coord + int(request.min_y * height)) / height for y_coord in contour.y_coords],
                 label=request.label,
                 quantifications=QuantificationsModel(
                     area=contour.area,
@@ -64,35 +70,3 @@ async def segment_image(request: SegmentationRequest):
             ))
         masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
-
-@router.post('/set_pixel_scale_via_drawn_line')
-def set_pixel_scale_via_drawn_line(scale_input: ScaleInput, db: Session = Depends(get_session)):
-    """
-    Set the pixel scale based on a known distance between two points drawn on the image.
-    """
-    image = db.query(Images).filter_by(id=scale_input.image_id).first()
-    if not image:
-        raise HTTPException(status_code=404, detail="Image not found")
-
-    if not scale_input.unit:
-        raise HTTPException(status_code=400, detail="Unit must be provided (e.g., mm)")
-
-    # Compute the scale in both directions
-    scale_x, scale_y = compute_pixel_scale_from_points(
-        (scale_input.x1, scale_input.y1),
-        (scale_input.x2, scale_input.y2),
-        scale_input.known_distance
-    )
-
-    # Save scale information in the DB
-    image.scale_x = scale_x
-    image.scale_y = scale_y
-    image.unit = scale_input.unit
-    db.commit()
-
-    return {
-        "message": "Scale set successfully",
-        "scale_x": scale_x,
-        "scale_y": scale_y,
-        "unit": image.unit
-    }
