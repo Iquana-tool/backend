@@ -7,6 +7,7 @@ class Images(database):
     __tablename__ = 'images'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False)  # Foreign key to the datasets table
     filename = Column(String, nullable=False)  # Path to the image file
     width = Column(Integer, nullable=False)  # Width of the image in pixels
     height = Column(Integer, nullable=False)  # Height of the image in pixels
