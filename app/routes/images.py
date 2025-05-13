@@ -78,7 +78,8 @@ async def get_image(image_id: int):
 
 
 @router.post("/upload_scan")
-async def upload_scan(files: list[UploadFile] = File(...),
+async def upload_scan(dataset_id: int,
+                      files: list[UploadFile] = File(...),
                       name: str = "Scan",
                       scan_type: str = "CT",
                       description: str = "Scan description",
@@ -90,6 +91,7 @@ async def upload_scan(files: list[UploadFile] = File(...),
     # Then save each image file to disk and the database
     # and associate them with the scan entry
     new_scan = Scans(
+        dataset_id=dataset_id,
         name=name,
         type=scan_type,
         description=description,
@@ -100,7 +102,7 @@ async def upload_scan(files: list[UploadFile] = File(...),
     try:
         image_ids = []
         for i, file in enumerate(files):
-            image_id = await save_image_to_disk_and_db(file, new_scan.id, index_in_scan=i)
+            image_id = await save_image_to_disk_and_db(file, dataset_id, new_scan.id, index_in_scan=i)
             if image_id is None:
                 raise HTTPException(status_code=400, detail="Invalid file or upload failed")
             image_ids.append(image_id)
@@ -118,11 +120,12 @@ async def upload_scan(files: list[UploadFile] = File(...),
 
 @router.post("/upload_scan_with_log_file")
 async def upload_scan_with_log_file(
-    files: list[UploadFile] = File(...),
-    log_file: UploadFile = File(...),
-    type: str = "CT",
-    description: str = "Scan description",
-    db: Session = Depends(get_session)
+        dataset_id: int,
+        files: list[UploadFile] = File(...),
+        log_file: UploadFile = File(...),
+        scan_type: str = "CT",
+        description: str = "Scan description",
+        db: Session = Depends(get_session)
 ):
     """Upload a scan file with logging."""
     # First create a new scan entry in the database
@@ -130,10 +133,11 @@ async def upload_scan_with_log_file(
     # and associate them with the scan entry
     log_data = parse_log_file(log_file.file.read())
     return await upload_scan(
+        dataset_id=dataset_id,
         files=files,
         name=log_data["Filename Prefix"],
-        scan_type=log_data["type"],
-        description=log_data["description"],
+        scan_type=scan_type,
+        description=description,
         number_of_slices=len(files),
         #meta_data=log_data,
         db=db
