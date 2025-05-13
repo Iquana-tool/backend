@@ -21,7 +21,18 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 
 @router.post('/segment_image')
 async def segment_image(request: SegmentationRequest):
-    """Perform segmentation with optional prompts, using data validation."""
+    """Perform segmentation with optional prompts, using data validation.
+    This function handles the segmentation of images based on the provided request.
+    It validates the request, retrieves the appropriate model, and processes the image.
+
+    Args:
+        request (SegmentationRequest): The request object containing image data and parameters. When using cropping,
+        make sure to remap the annotation coordinates to the cropped image.
+
+    Returns:
+        SegmentationResponse: The response object containing the segmentation results. When using cropping,
+        the contours will be remapped to the original image size.
+    """
     # Get the model based on the identifier
     model = get_model_via_identifier(request.model)
     logger.debug(f"Using model: {model.model_name}")
@@ -46,8 +57,9 @@ async def segment_image(request: SegmentationRequest):
                 # We could filter here based on the area or perimeter or other quantifications from the contour
                 continue
             contours_response.append(ContourModel(
-                x=[x_coord / width for x_coord in contour.x_coords],  # Scale x-coordinates to [0, 1]
-                y=[y_coord / height for y_coord in contour.y_coords],  # Scale y-coordinates to [0, 1]
+                # We have to rescale the images to the original size
+                x=[(x_coord + int(request.min_x * width)) / width for x_coord in contour.x_coords],
+                y=[(y_coord + int(request.min_y * height)) / height for y_coord in contour.y_coords],
                 label=request.label,
                 quantifications=QuantificationsModel(
                     area=contour.area,
