@@ -41,6 +41,7 @@ class ImageEmbeddings(database):
 class Scans(database):
     __tablename__ = 'scans'
     id = Column(Integer, primary_key=True, autoincrement=True)
+    dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False)  # Foreign key to the datasets table
     name = Column(String, nullable=False)  # Name of the scan
     type = Column(String)  # Type of scan (e.g., 'CT', 'MRI')
     description = Column(String)  # Description of the scan
