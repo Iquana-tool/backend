@@ -13,10 +13,10 @@ router = APIRouter(prefix="/images", tags=["images"])
 
 
 @router.post("/upload_image")
-async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_session)):
+async def upload_image(dataset_id: int,file: UploadFile = File(...), db: Session = Depends(get_session)):
     """Upload an image file"""
     try:
-        image_id = await save_image_to_disk_and_db(file)
+        image_id = await save_image_to_disk_and_db(file, dataset_id)
         if image_id is None:
             raise HTTPException(status_code=400, detail="Invalid file or upload failed")
 
@@ -41,11 +41,11 @@ async def delete_image(image_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/list_images")
-def list_images(db: Session = Depends(get_session)):
+@router.get("/list_images/{dataset_id}")
+def list_images(dataset_id: int, db: Session = Depends(get_session)):
     """List all uploaded image ids"""
     try:
-        images = db.query(Images).all()
+        images = db.query(Images).filter_by(dataset_id=dataset_id).all()
         return {
             "success": True,
             "images": images
