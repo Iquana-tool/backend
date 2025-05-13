@@ -132,7 +132,7 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
     np.savez_compressed(str(path), **new_dict)
 
 
-async def save_image_to_disk_and_db(image: AnyStr):
+async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int):
     """Save an image to disk and to the database and return the new image ID."""
     image_data = image.file.read()
 
@@ -141,28 +141,35 @@ async def save_image_to_disk_and_db(image: AnyStr):
 
     # Check if image already exists in the database
     with get_context_session() as session:
-        if session.query(Images).filter_by(hash_code=hash_code).first():
-            logging.info("Image already exists in the database.")
-            return session.query(Images).filter_by(hash_code=hash_code).first().id
+        images_with_hash = session.query(Images).filter_by(hash_code=hash_code).all()
+        if images_with_hash and dataset_id in [image.dataset_id for image in images_with_hash]:
+            return session.query(Images).filter_by(dataset_id=dataset_id, hash_code=hash_code).first().id
         else:
             next_id = session.query(Images).count() + 1
-    # Save the new image to disk
-    original_extension = image.filename.split(".")[-1]
-    new_file_name = f"{next_id}.{original_extension}"
-    path = join(config.Paths.images_dir, new_file_name)
-    with open(path, "wb") as file:
-        file.write(image_data)
-    image_array = np.array(Image.open(path))
-    try:
-        # Save the new image to the database
-        with get_context_session() as session:
-            # Image comes in WHC format because of PIL
-            session.add(Images(filename=new_file_name, width=image_array.shape[1], height=image_array.shape[0],
-                               hash_code=hash_code))
-            session.commit()
-    except Exception as e:
-        logger.error(f"Error saving image to database: {str(e)}")
-        logger.error(f"Deleting image '{new_file_name}' from disk to ensure consistency.")
-        os.remove(path)
-    logger.info("New image saved to disk and database.")
-    return session.query(Images).order_by(Images.id.desc()).first().id
+            if images_with_hash:
+                file_name = images_with_hash[0].filename
+            else:
+                # Save the new image to disk
+                original_extension = image.filename.split(".")[-1]
+                file_name = f"{next_id}.{original_extension}"
+                path = join(config.Paths.images_dir, file_name)
+                with open(path, "wb") as file:
+                    file.write(image_data)
+                image_array = np.array(Image.open(path))
+            try:
+                # Save the new image to the database
+                # Image comes in WHC format because of PIL
+                new_entry = Images(filename=file_name,
+                                   dataset_id=dataset_id,
+                                   width=image_array.shape[1],
+                                   height=image_array.shape[0],
+                                   hash_code=hash_code)
+                session.add(new_entry)
+                session.commit()
+                logger.info("New image saved to disk and database.")
+                return new_entry.id
+            except Exception as e:
+                logger.error(f"Error saving image to database: {str(e)}")
+                logger.error(f"Deleting image '{file_name}' from disk to ensure consistency.")
+                os.remove(path)
+                return None
