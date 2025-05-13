@@ -16,6 +16,7 @@ from app.services.segmentation import SegmentationBaseModel
 from app.services.database_access import load_image_as_array_from_disk, save_embedding, get_height_width_of_image
 from config import SAM2Config
 from app.schemas.segmentation_and_masks import SegmentationRequest
+from app.services.cropping import crop_image
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -122,8 +123,11 @@ class SAM2(SegmentationBaseModel):
 
             # Temporary fix for embedding loading
             image = load_image_as_array_from_disk(request.image_id)
+            image = crop_image(request.min_x, request.min_y,
+                               request.max_x, request.max_y,
+                               image)
             self.prompt_predictor.set_image(image)
-            mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(),normalize_coords=False)
+            mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(), normalize_coords=False)
             return mask, scores
             # Fix end
 
