@@ -133,6 +133,7 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
 
 
 async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int):
+async def save_image_to_disk_and_db(image: AnyStr, scan_id=None, index_in_scan=None) -> int:
     """Save an image to disk and to the database and return the new image ID."""
     image_data = image.file.read()
 
@@ -173,3 +174,19 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int):
                 logger.error(f"Deleting image '{file_name}' from disk to ensure consistency.")
                 os.remove(path)
                 return None
+
+
+def parse_log_file(log_file: AnyStr):
+    """Parse the log file and return the log entries."""
+    meta_data = {}
+    with open(log_file, "r") as file:
+        for line in file:
+            line = line.strip()  # Ignore empty lines
+            if not (line.startswith("[") and line.endswith("]")):
+                # Extract the key and value from the line
+                key, value = line[1:-1].split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                # Add the key-value pair to the meta_data dictionary
+                meta_data[key] = value
+    return meta_data
