@@ -11,7 +11,7 @@ from app.database import get_session
 from app.database.mask_generation import Masks, Labels, Contours
 from app.schemas.segmentation_and_masks import ContourModel
 from app.services.encoding import base64_decode_string, base64_encode_image
-from app.services.quantifications import ContourQuantifier, quantify_contour
+from app.services.quantifications import ContourQuantifier
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
