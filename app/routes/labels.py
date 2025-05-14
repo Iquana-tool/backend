@@ -2,7 +2,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from app.database import get_session
-from app.database.mask_generation import Labels
+from app.database.datasets import Labels
 
 
 logger = logging.getLogger(__name__)

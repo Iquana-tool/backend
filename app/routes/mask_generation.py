@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 import config
 from app.database import get_session
-from app.database.mask_generation import Masks, Labels, Contours
+from app.database.mask_generation import Masks, Contours
+from app.database.datasets import Labels
 from app.schemas.segmentation_and_masks import ContourModel
 from app.services.encoding import base64_decode_string, base64_encode_image
 
