@@ -30,6 +30,25 @@ async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Sessio
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/upload_images")
+async def upload_images(dataset_id: int, files: list[UploadFile] = File(...), db: Session = Depends(get_session)):
+    """Upload multiple image files"""
+    try:
+        image_ids = []
+        for file in files:
+            image_id = (await upload_image(dataset_id, file, db))["image_id"]
+            image_ids.append(image_id)
+
+        return {
+            "success": True,
+            "image_ids": image_ids,
+            "message": f"Successfully uploaded {len(files)} images. Assigned ids {image_ids}"
+        }
+    except Exception as e:
+        logger.error(f"Upload error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/delete_image/{image_id}")
 async def delete_image(image_id: int):
     try:
