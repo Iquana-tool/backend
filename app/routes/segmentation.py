@@ -57,9 +57,6 @@ async def segment_image(request: SegmentationRequest):
                 continue
             x_coords = (contour[..., 1].flatten() + int(request.min_x * width)) / width
             y_coords = (contour[..., 0].flatten() + int(request.min_y * height)) / height
-            if contour.area <= 0 or contour.perimeter <= 0:
-                # We could filter here based on the area or perimeter or other quantifications from the contour
-                continue
             contours_response.append(ContourModel(
                 # We have to rescale the images to the original size
                 x=x_coords,
