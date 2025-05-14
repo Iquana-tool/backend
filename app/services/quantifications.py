@@ -6,18 +6,40 @@ from logging import getLogger
 logger = getLogger(__name__)
 
 
-class Contour:
-    area = None
-    perimeter = None
-    circularity = None
+class ContourQuantifier:
+    """ Quantifier to compute area, perimeter, and circularity of a contour. """
+    def __init__(self, scale_x=1.0, scale_y=1.0, unit="px"):
+        """
+        Initialize the quantifier.
 
-    def __init__(self, contour):
-        """ Initialize the quantifier.
+        Args:
+            contour (np.array): The contour of the image.
+            scale_x (float): Scale in x direction (e.g., mm per pixel).
+            scale_y (float): Scale in y direction (e.g., mm per pixel).
+            unit (str): Unit of measurement (e.g., "mm").
+        """
+        self.contour = None
+        self.scale_x = scale_x
+        self.scale_y = scale_y
+        self.unit = unit
 
-            Args:
-                contour (np.array): The contour of the image.
+        self.area = None
+        self.perimeter = None
+        self.circularity = None
+
+    def from_contour(self, contour):
+        """
+        Set the contour and reparse.
         """
         self.contour = contour
+        self.parse_contour()
+
+    def from_coordinates(self, x_coords, y_coords):
+        """
+        Set the coordinates and reparse.
+        """
+        # Bring the coordinates into opencv contour format
+        self.contour = np.expand_dims(np.array(list(zip(x_coords, y_coords)), dtype=np.int32), 1)
         self.parse_contour()
 
     @property
@@ -33,46 +55,56 @@ class Contour:
         return self.contour[..., 0]
 
     def parse_contour(self):
-        """ Parse the contour to get the area, perimeter, circularity and diameters.
         """
-        self.area = cv.contourArea(self.contour)
-        self.perimeter = cv.arcLength(self.contour, True)
+        Parse the contour to get area (in unit²), perimeter (in unit), and circularity.
+        """
+        area_px = cv.contourArea(self.contour)
+        self.area = area_px * self.scale_x * self.scale_y
+
+        perimeter_px = cv.arcLength(self.contour, True)
+        avg_scale = (self.scale_x + self.scale_y) / 2
+        self.perimeter = perimeter_px * avg_scale
+
         if self.area == 0:
             self.circularity = 0
         else:
-            self.circularity = (4 * np.pi * self.area) / (self.perimeter ** 2)
+            self.circularity = (4 * np.pi * area_px) / (perimeter_px ** 2)
 
-    def get_diameters(self, step_size=16):
-        """ Get the diameters of the objects in the mask.
+    def get_diameters(self, step_size=100):
+        """
+        Measure diameters from multiple angles around the centroid and rescale.
+
         Args:
-            step_size (int): The number of times to measure the diameter. This will measure the diameter each
-                180/step_size degrees. E.g. step_size=100 will measure the diameter at 0, 1.8, 3.6, ...,
-                178.2, and 180 degrees.
+            step_size (int): Number of angles to measure between 0 and 180 degrees.
+
         Returns:
-            list: The diameters of the objects in the mask.
+            list: List of diameters in the same unit as the scale (e.g., mm).
         """
         measuring_degrees = np.linspace(0, 180, step_size)
-        contour_mask = np.zeros((np.max(self.contour[..., 1] + 1), np.max(self.contour[..., 0] + 1)), dtype=np.uint8)
-        contour_mask = cv.drawContours(contour_mask, [self.contour], 0, 1, 1)
+        max_y = np.max(self.contour[..., 1]) + 1
+        max_x = np.max(self.contour[..., 0]) + 1
+        contour_mask = np.zeros((max_y, max_x), dtype=np.uint8)
+        cv.drawContours(contour_mask, [self.contour], 0, 1, 1)
+
         Cx, Cy = np.mean(self.contour[..., 0]), np.mean(self.contour[..., 1])
         diameters = []
+
         for degree in measuring_degrees:
-            radian = np.deg2rad(degree)
-            x1 = int(Cx + np.cos(radian) * 1000)
-            y1 = int(Cy + np.sin(radian) * 1000)
-            x2 = int(Cx - np.cos(radian) * 1000)
-            y2 = int(Cy - np.sin(radian) * 1000)
-            # Get the line between the center and the point
-            line = cv.line(np.zeros_like(
-                contour_mask, dtype=np.uint8),
-                (x1, y1), (x2, y2),
-                   color=1, thickness=1
-            )
-            # Get the intersection of the line and the contour
+            rad = np.deg2rad(degree)
+            x1 = int(Cx + np.cos(rad) * 1000)
+            y1 = int(Cy + np.sin(rad) * 1000)
+            x2 = int(Cx - np.cos(rad) * 1000)
+            y2 = int(Cy - np.sin(rad) * 1000)
+
+            line = cv.line(np.zeros_like(contour_mask), (x1, y1), (x2, y2), color=1, thickness=1)
             intersection = cv.bitwise_and(line, contour_mask)
-            if np.count_nonzero(intersection) == 2:
-                # Get the distance between the two intersecting points
-                # It can happen that there are more or less than 2 points, but we should ignore these cases
-                distance = np.linalg.norm(np.argwhere(intersection))
+            points = np.argwhere(intersection)
+
+            if len(points) >= 2:
+                pt1, pt2 = points[0], points[-1]
+                dx = (pt2[1] - pt1[1]) * self.scale_x
+                dy = (pt2[0] - pt1[0]) * self.scale_y
+                distance = np.hypot(dx, dy)
                 diameters.append(distance)
+
         return diameters

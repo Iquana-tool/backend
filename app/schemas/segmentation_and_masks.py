@@ -135,10 +135,10 @@ class QuantificationsModel(BaseModel):
 
 class ContourModel(BaseModel):
     """ Model for the contour. """
-    x: List[float]
-    y: List[float]
-    label: Annotated[int, "Label of the mask."] = 0
-    quantifications: QuantificationsModel
+    x: List[float] = Field(default_factory=list, description="X-coordinates of the contour.")
+    y: List[float] = Field(default_factory=list, description="Y-coordinates of the contour.")
+    label: Annotated[int, "Label of the mask."] = Field(default=0, description="Label of the mask.")
+    # quantifications: QuantificationsModel
 
     @field_validator('x', 'y')
     def validate_coordinates(cls, value):

@@ -16,6 +16,7 @@ from app.services.segmentation import SegmentationBaseModel
 from app.services.database_access import load_image_as_array_from_disk, save_embedding, get_height_width_of_image
 from config import SAM2Config
 from app.schemas.segmentation_and_masks import SegmentationRequest
+from app.services.cropping import crop_image
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -102,19 +103,14 @@ class SAM2(SegmentationBaseModel):
         embedding = self.load_embedding(request.image_id)
         if False and embedding is None or use_crop:
             # If we do not have an embedding or we have a crop, we need to load the image and embed it
-            image = load_image_as_array_from_disk(request.image_id,
-                                                  request.min_x, request.min_y,
-                                                  request.max_x, request.max_y)
+            image = load_image_as_array_from_disk(request.image_id)
+            image = crop_image(request.min_x, request.min_y,
+                               request.max_x, request.max_y,
+                               image)
             embedding = self.embed_image(image)
             if False and not use_crop:
                 # Save the embedding for the full image
                 save_embedding(request, embedding)
-        # Save the original height and width of the image
-        height, width = get_height_width_of_image(request.image_id)
-        if use_crop:
-            # Save the new height and width of the image after cropping
-            width = int((request.max_x - request.min_x) * width)
-            height = int((request.max_y - request.min_y) * height)
         logger.info("Starting segmentation...")
         if request.use_prompts:
             prompts = Prompts()
@@ -122,8 +118,11 @@ class SAM2(SegmentationBaseModel):
 
             # Temporary fix for embedding loading
             image = load_image_as_array_from_disk(request.image_id)
+            image = crop_image(request.min_x, request.min_y,
+                               request.max_x, request.max_y,
+                               image)
             self.prompt_predictor.set_image(image)
-            mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(),normalize_coords=False)
+            mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(), normalize_coords=False)
             return mask, scores
             # Fix end
 
