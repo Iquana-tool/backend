@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Float, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, Float, JSON, Boolean
 
 from . import database
 
@@ -19,6 +19,7 @@ class Contours(database):
                      nullable=False)
     parent_id = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'))
     label = Column(Integer, ForeignKey('labels.id', ondelete='CASCADE'), nullable=False)
+    auto_added = Column(Boolean, default=False, nullable=False)  # True if the contour was added automatically
     area = Column(Float, nullable=False)
     perimeter = Column(Float, nullable=False)
     circularity = Column(Float, nullable=False)
