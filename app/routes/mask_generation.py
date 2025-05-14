@@ -12,7 +12,8 @@ from app.database.mask_generation import Masks, Contours
 from app.database.datasets import Labels
 from app.schemas.segmentation_and_masks import ContourModel
 from app.services.encoding import base64_decode_string, base64_encode_image
-from app.services.quantifications import ContourQuantifier, quantify_contour
+from app.services.quantifications import ContourQuantifier
+from app.services.mask_generation import generate_mask
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
@@ -48,13 +49,12 @@ async def get_mask(mask_id: int, db: Session = Depends(get_session)):
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=404, detail="Mask not found.")
-    mask_path = os.path.join(config.Paths.masks_dir,
-                             str(mask.image_id),
-                             f"{mask.mask_label}_{mask.counter}.png")
-    if not os.path.exists(mask_path):
-        raise HTTPException(status_code=404, detail="Mask file not found.")
-    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-    return base64_encode_image(mask)
+    mask_arr = generate_mask(mask_id).tolist()
+    return {
+        "success": True,
+        "mask_id": mask.id,
+        "image": mask_arr
+    }
 
 
 @router.delete("/delete_mask/{mask_id}")
