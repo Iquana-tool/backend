@@ -56,21 +56,26 @@ async def get_annotation_progress(dataset_id: int, db: Session = Depends(get_ses
         return {"success": False, "message": "Dataset not found."}
     images = db.query(Images).filter_by(dataset_id=dataset_id).all()
     manually_annotated = 0
-    auto_annotated = 0
+    auto_annotated_with_review = 0
+    auto_annotated_without_review = 0
     for image in images:
-        masks = db.query(Masks).filter_by(image_id=image.id).first()
-        result = await get_annotation_progress(mask.id, db)
-        manually_annotated += result["manually_annotated"]
-        auto_annotated += result["auto_annotated"]
+        mask = db.query(Masks).filter_by(image_id=image.id, finished=True).first()
+        if mask:
+            if mask.generated:
+                if mask.reviewed:
+                    auto_annotated_with_review += 1
+                else:
+                    auto_annotated_without_review += 1
+            else:
+                manually_annotated += 1
     n_images = get_number_of_images(dataset_id, db)["number_of_images"]
-    manually_annotated /= n_images
-    auto_annotated /= n_images
 
     return {
         "success": True,
+        "message": "Annotation progress retrieved successfully.",
         "manually_annotated": manually_annotated,
-        "auto_annotated": auto_annotated,
-        "total_masks": len(masks)
+        "auto_annotated_reviewed": auto_annotated_with_review,
+        "auto_annotated_without_review": auto_annotated_without_review,
     }
 
 
