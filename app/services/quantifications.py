@@ -6,8 +6,9 @@ from logging import getLogger
 logger = getLogger(__name__)
 
 
-class Contour:
-    def __init__(self, contour, scale_x=1.0, scale_y=1.0, unit="px"):
+class ContourQuantifier:
+    """ Quantifier to compute area, perimeter, and circularity of a contour. """
+    def __init__(self, scale_x=1.0, scale_y=1.0, unit="px"):
         """
         Initialize the quantifier.
 
@@ -17,7 +18,7 @@ class Contour:
             scale_y (float): Scale in y direction (e.g., mm per pixel).
             unit (str): Unit of measurement (e.g., "mm").
         """
-        self.contour = contour
+        self.contour = None
         self.scale_x = scale_x
         self.scale_y = scale_y
         self.unit = unit
@@ -26,6 +27,19 @@ class Contour:
         self.perimeter = None
         self.circularity = None
 
+    def from_contour(self, contour):
+        """
+        Set the contour and reparse.
+        """
+        self.contour = contour
+        self.parse_contour()
+
+    def from_coordinates(self, x_coords, y_coords):
+        """
+        Set the coordinates and reparse.
+        """
+        # Bring the coordinates into opencv contour format
+        self.contour = np.expand_dims(np.array(list(zip(x_coords, y_coords)), dtype=np.int32), 1)
         self.parse_contour()
 
     @property

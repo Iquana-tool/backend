@@ -8,7 +8,7 @@ from app.schemas.segmentation_and_masks import (
 )
 from app.services.segmentation import get_model_via_identifier
 from app.services.contours import get_contours
-from app.services.quantifications import Contour
+from app.services.quantifications import ContourQuantifier
 from app.services.database_access import get_height_width_of_image
 from app.services.postprocessing import postprocess_binary_mask
 
@@ -55,21 +55,16 @@ async def segment_image(request: SegmentationRequest):
             if len(contour) < 3:
                 # Skip contours with less than 3 points
                 continue
-            contour = Contour(contour)
+            x_coords = (contour[..., 1].flatten() + int(request.min_x * width)) / width
+            y_coords = (contour[..., 0].flatten() + int(request.min_y * height)) / height
             if contour.area <= 0 or contour.perimeter <= 0:
                 # We could filter here based on the area or perimeter or other quantifications from the contour
                 continue
             contours_response.append(ContourModel(
                 # We have to rescale the images to the original size
-                x=[(x_coord + int(request.min_x * width)) / width for x_coord in contour.x_coords],
-                y=[(y_coord + int(request.min_y * height)) / height for y_coord in contour.y_coords],
-                label=request.label,
-                quantifications=QuantificationsModel(
-                    area=contour.area,
-                    perimeter=contour.perimeter,
-                    circularity=contour.circularity,
-                    diameters=contour.get_diameters()
-                )
+                x=x_coords,
+                y=y_coords,
+                label=request.label
             ))
         masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)

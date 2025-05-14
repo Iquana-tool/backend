@@ -11,6 +11,7 @@ from app.database import get_session
 from app.database.mask_generation import Masks, Labels, Contours
 from app.schemas.segmentation_and_masks import ContourModel
 from app.services.encoding import base64_decode_string, base64_encode_image
+from app.services.quantifications import ContourQuantifier, quantify_contour
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
@@ -74,24 +75,26 @@ async def get_masks_for_image(image_id: int, db: Session = Depends(get_session))
 
 
 @router.post("/add_contour")
-async def add_contour(mask_id: int, contour: ContourModel, selected_contour: int = None, db: Session = Depends(get_session)):
+async def add_contour(mask_id: int,
+                      contour_to_add: ContourModel,
+                      parent_contour_id: int = None,
+                      db: Session = Depends(get_session)):
     try:
         # Check if mask exists
         existing_mask = db.query(Masks).filter_by(id=mask_id).first()
         if not existing_mask:
             mask_id = await create_mask(db=db)
 
-        # Create a new contour
-        coords = {"x": contour.x, "y": contour.y}
+        quantifier = ContourQuantifier().from_coordinates(contour_to_add.x, contour_to_add.y)
         new_contour = Contours(
             mask_id=mask_id,
-            parent_id=selected_contour,
-            coords=json.dumps(coords),
-            label=contour.label,
-            area=contour.quantifications.area,
-            perimeter=contour.quantifications.perimeter,
-            circularity=contour.quantifications.circularity,
-            diameters=json.dumps(contour.quantifications.diameters),
+            parent_id=parent_contour_id,
+            coords=json.dumps({"x": contour_to_add.x, "y": contour_to_add.y}),
+            label=contour_to_add.label,
+            area=quantifier.area,
+            perimeter=quantifier.perimeter,
+            circularity=quantifier.circularity,
+            diameters=json.dumps(quantifier.diameters),
         )
         db.add(new_contour)
         db.commit()
