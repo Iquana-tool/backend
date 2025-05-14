@@ -15,11 +15,12 @@ class Images(database):
     scale_y = Column(Float, nullable=True)  # mm per pixel in Y
     unit = Column(String(10), default="mm")  # Default unit: mm
 
+
     def __repr__(self):
         return (f"<Image(id='{self.id}', "
                 f"path='{self.filename}', "
                 f"width='{self.width}',"
-                f"height='{self.height}')>"
+                f"height='{self.height}')>")
                 f"scale_x='{self.scale_x}', "
                 f"scale_y='{self.scale_y}', "
                 f"unit='{self.unit}')>")
