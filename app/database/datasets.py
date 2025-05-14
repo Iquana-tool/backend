@@ -8,6 +8,9 @@ class DataSets(database):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(50), nullable=False)
     description = Column(String(255), nullable=True)
+    n_files = Column(Integer, nullable=False, default=0)
+    annotated = Column(Integer, nullable=False, default=0)
+    ai_annotated = Column(Integer, nullable=False, default=0)
 
 
 class Labels(database):
