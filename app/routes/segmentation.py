@@ -52,6 +52,9 @@ async def segment_image(request: SegmentationRequest):
         contours = get_contours(postprocess_binary_mask(mask) if request.apply_post_processing else mask)
         contours_response = []
         for contour in contours:
+            if len(contour) < 3:
+                # Skip contours with less than 3 points
+                continue
             contour = Contour(contour)
             if contour.area <= 0 or contour.perimeter <= 0:
                 # We could filter here based on the area or perimeter or other quantifications from the contour

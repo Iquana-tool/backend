@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, String, ForeignKey, Float
 
 from . import database
 
@@ -11,12 +11,18 @@ class Images(database):
     width = Column(Integer, nullable=False)  # Width of the image in pixels
     height = Column(Integer, nullable=False)  # Height of the image in pixels
     hash_code = Column(String(64), nullable=False, unique=True)  # Hash of the image file
+    scale_x = Column(Float, nullable=True)  # mm per pixel in X
+    scale_y = Column(Float, nullable=True)  # mm per pixel in Y
+    unit = Column(String(10), default="mm")  # Default unit: mm
 
     def __repr__(self):
         return (f"<Image(id='{self.id}', "
                 f"path='{self.filename}', "
                 f"width='{self.width}',"
-                f"height='{self.height}')>")
+                f"height='{self.height}')>"
+                f"scale_x='{self.scale_x}', "
+                f"scale_y='{self.scale_y}', "
+                f"unit='{self.unit}')>")
 
 
 class ImageEmbeddings(database):
