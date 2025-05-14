@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 import pandas as pd
@@ -6,6 +8,7 @@ from io import StringIO
 from app.database import get_session
 from sqlalchemy.orm import Session
 from app.database.mask_generation import Masks, Contours
+from app.database.datasets import Datasets, Labels
 from app.database.images import Images
 
 router = APIRouter(prefix="/export", tags=["export"])
@@ -24,7 +27,7 @@ def query_to_streaming_response(query, filename: str):
 
 
 @router.post("/download_quantification/{mask_id}")
-def export_quantification(mask_id: int, label_ids: list[int] = None, db: Session = Depends(get_session)):
+def download_quantification(mask_id: int, label_ids: list[int] = None, db: Session = Depends(get_session)):
     """ Export quantification data for the given mask_id and labels. """
     query = db.query(Contours).filter_by(mask_id=mask_id)
     if label_ids:
@@ -32,17 +35,29 @@ def export_quantification(mask_id: int, label_ids: list[int] = None, db: Session
     return query_to_streaming_response(query, f"quantification_{mask_id}.csv")
 
 
-@router.post("/download_multiple_quantifications")
-def export_multiple_quantifications(mask_ids: list[int], label_ids: list[int] = None, db: Session = Depends(get_session)):
-    """ Export quantification data for the given mask_ids and labels. """
-    query = db.query(Contours).filter(Contours.mask_id.in_(mask_ids))
+@router.post("/download_dataset/{dataset_id}")
+def download_dataset(dataset_id: int,
+                     label_ids: list[int] = None,
+                     annotation_level: Literal["manual_only", "manual+reviewed", "all"] = "manual_only",
+                     db: Session = Depends(get_session)):
+    """ Export quantification data for the given dataset_id and labels. """
+    condition = True
+    if annotation_level == "manual_only":
+        query = db.query(Contours).join(Masks).join(Contours).filter(
+            Masks.finished == True and Masks.generated == False)
+    elif annotation_level == "manual+reviewed":
+        query = db.query(Contours).join(Masks).join(Contours).filter(Masks.reviewed == True or Masks.finished == True)
+    else:
+        query = db.query(Contours).join(Masks).join(Contours).filter(Masks.finished == True)
+
     if label_ids:
         query = query.filter(Contours.label.in_(label_ids))
-    return query_to_streaming_response(query, "quantifications.csv")
+
+    dataset_name = db.query(Datasets).filter_by(id=dataset_id).first().name
+    return query_to_streaming_response(query, f"{dataset_name}_quantifications.csv")
 
 
 @router.get("/get_quantification/{mask_id}")
 def get_quantification(mask_id: int, db: Session = Depends(get_session)):
     """ Get quantification data for the given mask_id. """
     return db.query(Contours).filter_by(mask_id=mask_id).all()
-
