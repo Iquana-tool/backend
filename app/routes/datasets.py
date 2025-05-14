@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.database.images import Images
 from app.database.datasets import Datasets, Labels
 from app.database.mask_generation import Masks
+from app.routes.mask_generation import get_annotation_progress
 
 # Create a router for the export functionality
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -36,6 +37,41 @@ def get_dataset(dataset_id: int, db: Session = Depends(get_session)):
     if not dataset:
         return {"success": False, "message": "Dataset not found."}
     return {"success": True, "message": "Dataset found.", "dataset": dataset}
+
+
+@router.get("/get_number_of_images/{dataset_id}")
+def get_number_of_images(dataset_id: int, db: Session = Depends(get_session)):
+    """Get the number of images in a dataset."""
+    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
+    if not dataset:
+        return {"success": False, "message": "Dataset not found."}
+    number_of_images = db.query(Images).filter_by(dataset_id=dataset_id).count()
+    return {"success": True, "number_of_images": number_of_images}
+
+
+@router.get("/get_annotation_progress/{dataset_id}")
+async def get_annotation_progress(dataset_id: int, db: Session = Depends(get_session)):
+    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
+    if not dataset:
+        return {"success": False, "message": "Dataset not found."}
+    images = db.query(Images).filter_by(dataset_id=dataset_id).all()
+    manually_annotated = 0
+    auto_annotated = 0
+    for image in images:
+        masks = db.query(Masks).filter_by(image_id=image.id).first()
+        result = await get_annotation_progress(mask.id, db)
+        manually_annotated += result["manually_annotated"]
+        auto_annotated += result["auto_annotated"]
+    n_images = get_number_of_images(dataset_id, db)["number_of_images"]
+    manually_annotated /= n_images
+    auto_annotated /= n_images
+
+    return {
+        "success": True,
+        "manually_annotated": manually_annotated,
+        "auto_annotated": auto_annotated,
+        "total_masks": len(masks)
+    }
 
 
 @router.get("/get_datasets")
