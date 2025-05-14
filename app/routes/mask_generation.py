@@ -47,30 +47,6 @@ async def get_contours_of_mask(mask_id: int, db: Session = Depends(get_session))
     return contours
 
 
-@router.get("/get_annotation_progress/{mask_id}")
-async def get_annotation_progress(mask_id: int, db: Session = Depends(get_session)):
-    mask = db.query(Masks).filter_by(id=mask_id).join(Images, Masks.image_id == Images.id).first()
-    if not mask:
-        raise HTTPException(status_code=404, detail="Mask not found.")
-
-    contours = db.query(Contours).filter_by(mask_id=mask.id).all()
-    if not contours:
-        return {"success": True, "manually_annotated": 0, "auto_annotated": 0}
-
-    # Calculate the annotation progress
-    manual_annotated_area = sum([contour.area for contour in contours if not contour.auto_annotated])
-    auto_annotated_area = sum([contour.area for contour in contours if contour.auto_annotated])
-    total_area = mask.width * mask.height
-    manual_annotation_progress = manual_annotated_area / total_area
-    auto_annotation_progress = auto_annotated_area / total_area
-
-    return {
-        "success": True,
-        "manually_annotated": manual_annotation_progress,
-        "auto_annotated": auto_annotation_progress
-    }
-
-
 @router.get("/get_mask/{mask_id}")
 async def get_mask(mask_id: int, db: Session = Depends(get_session)):
     mask = db.query(Masks).filter_by(id=mask_id).first()
