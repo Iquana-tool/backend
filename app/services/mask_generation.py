@@ -32,3 +32,28 @@ def generate_mask(mask_id):
             cv_contour = np.expand_dims(np.array(list(zip(x, y)), dtype=np.int8), 1)
             cv.fillPoly(canvas, cv_contour, color=[label_id_to_value[contour.label]])
         return canvas
+
+
+def contour_is_enclosed_by_parent(contour, parent_contour):
+    """ Check if a contour is enclosed by its parent contour. """
+    if parent_contour is None:
+        return True
+    return np.all([cv.pointPolygonTest(parent_contour, (p[0, 1], p[0,0]), False) >= 0 for p in contour])
+
+
+def contour_overlaps_with_existing_on_parent_level(contour, contours_on_same_level):
+    """ Check if a contour overlaps with any existing contours on the same level. """
+    for existing_contour in contours_on_same_level:
+        if cv.contourArea(cv.intersectConvexConvex(contour, existing_contour)) > 0:
+            return True
+    return False
+
+
+def coords_to_cv_contour(x_coords, y_coords):
+    """ Convert coordinates to a cv2 contour. """
+    return np.expand_dims(np.array(list(zip(x_coords, y_coords)), dtype=np.int8), 1)
+
+
+def is_contour_addable(contour, label, mask_id):
+    """ Check if a contour can be added to the mask. This means it does not overlap with any existing contours. and it
+     is enclosed by its parent. """
