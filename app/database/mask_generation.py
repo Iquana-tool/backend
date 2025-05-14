@@ -8,8 +8,6 @@ class Masks(database):
     id = Column(Integer, primary_key=True, autoincrement=True)
     image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'),
                       nullable=False)
-    pixel_coverage = Column(Float, nullable=False)  # Percentage of pixels covered by the mask
-    ai_generated = Column(Integer, nullable=False)  # 0 for manual, 1 for AI-generated aka no human involved
 
 
 class Contours(database):
