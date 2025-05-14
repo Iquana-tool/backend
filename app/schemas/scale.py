@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+
 
 class ScaleInput(BaseModel):
     """
@@ -13,7 +13,7 @@ class ScaleInput(BaseModel):
     x2: float = Field(..., description="X-coordinate of the second point in pixels.")
     y2: float = Field(..., description="Y-coordinate of the second point in pixels.")
     known_distance: float = Field(..., description="The real-world distance between the two points (e.g., in mm).")
-    unit: Optional[str] = Field("mm", description="The unit of measurement (default is millimeters).")
+    unit: str = Field(..., description="The unit of measurement (default is millimeters).")
 
     def validate_points(self) -> None:
         """
