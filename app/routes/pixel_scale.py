@@ -13,6 +13,24 @@ logger = getLogger(__name__)
 router = APIRouter()
 
 
+@router.get('/get_pixel_scale/{image_id}')
+async def get_pixel_scale(image_id: int, db: Session = Depends(get_session)):
+    """
+    Get the pixel scale for a given image.
+    """
+    # Fetch the image from the database
+    image = db.query(Images).filter_by(id=image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Return the pixel scale information
+    return {
+        "scale_x": image.scale_x,
+        "scale_y": image.scale_y,
+        "unit": image.unit
+    }
+
+
 @router.post('/set_pixel_scale')
 async def set_pixel_scale(scale_x: float, scale_y: float, unit: str, image_id: int, db: Session = Depends(get_session)):
     """
@@ -43,6 +61,7 @@ async def set_pixel_scale(scale_x: float, scale_y: float, unit: str, image_id: i
         "scale_y": scale_y,
         "unit": unit
     }
+
 
 @router.post('/set_pixel_scale_via_drawn_line')
 def set_pixel_scale_via_drawn_line(scale_input: ScaleInput, db: Session = Depends(get_session)):
