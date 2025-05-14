@@ -3,7 +3,7 @@ from sqlalchemy import Column, Integer, String, ForeignKey
 from . import database
 
 
-class DataSets(database):
+class Datasets(database):
     __tablename__ = 'datasets'
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(50), nullable=False)
