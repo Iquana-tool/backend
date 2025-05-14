@@ -137,7 +137,11 @@ async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
         existing_contour = db.query(Contours).filter_by(id=contour_id).first()
         if not existing_contour:
             raise HTTPException(status_code=404, detail="Contour not found.")
-
+        # Check if the contour has child contours
+        child_contours = db.query(Contours).filter_by(parent_id=contour_id).all()
+        for child_contour in child_contours:
+            # Recursively delete child contours
+            await delete_contour(child_contour.id, db)
         # Delete the contour
         db.delete(existing_contour)
         db.commit()
