@@ -90,23 +90,31 @@ async def add_contour(mask_id: int,
             mask_id = await create_mask(db=db)
 
         contour = coords_to_cv_contour(contour_to_add.x, contour_to_add.y)
-        if not contour_is_enclosed_by_parent(contour, parent_contour_id):
-            return {
-                "success": False,
-                "message": "Contour can not be added, because it is not enclosed by its parent contour. "
-                           "Child contours must be completely inside their parent contours!",
-                "contour_id": None
-            }
+
+        # Check if contour is enclosed by its parent contour
+        parent_contour = db.query(Contours).filter_by(id=parent_contour_id).first() if parent_contour_id else None
+        if parent_contour:
+            if not contour_is_enclosed_by_parent(contour, coords_to_cv_contour(parent_contour.coords["x"],
+                                                                               parent_contour.coords["y"])):
+                return {
+                    "success": False,
+                    "message": "Contour can not be added, because it is not enclosed by its parent contour. "
+                               "Child contours must be completely inside their parent contours!",
+                    "contour_id": None
+                }
+
         # Check if contour overlaps with existing contours on the same level
         contours_on_same_level = db.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_contour_id).all()
-        contours_on_same_level = [coords_to_cv_contour(c.coords["x"], c.coords["y"]) for c in contours_on_same_level]
-        if contour_overlaps_with_existing_on_parent_level(contour, contours_on_same_level):
-            return {
-                "success": False,
-                "message": "Contour overlaps with existing contours on the same level.",
-                "contour_id": None
-            }
+        if contours_on_same_level:
+            contours_on_same_level = [coords_to_cv_contour(c.coords["x"], c.coords["y"]) for c in contours_on_same_level]
+            if contour_overlaps_with_existing_on_parent_level(contour, contours_on_same_level):
+                return {
+                    "success": False,
+                    "message": "Contour overlaps with existing contours on the same level.",
+                    "contour_id": None
+                }
 
+        # Quantify contour
         quantifier = ContourQuantifier().from_coordinates(contour_to_add.x, contour_to_add.y)
         new_contour = Contours(
             mask_id=mask_id,
@@ -118,8 +126,11 @@ async def add_contour(mask_id: int,
             circularity=quantifier.circularity,
             diameters=json.dumps(quantifier.diameters),
         )
+
+        # Add contour to the database
         db.add(new_contour)
         db.commit()
+
         return {
             "success": True,
             "message": "Contour added successfully.",
