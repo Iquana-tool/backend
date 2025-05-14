@@ -1,5 +1,6 @@
 import logging
 from fastapi import APIRouter, HTTPException, Depends
+from pydantic import Field
 from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.datasets import Labels
@@ -18,7 +19,11 @@ def get_labels(dataset_id: int, db: Session = Depends(get_session)):
 
 
 @router.post("/create_label")
-async def create_label(label_name: str, dataset_id: int, parent_label_id: int, db: Session = Depends(get_session)):
+async def create_label(label_name: str,
+                       dataset_id: int,
+                       parent_label_id: int,
+                       label_value: int = None,
+                       db: Session = Depends(get_session)):
     try:
         # Check if class already exists
         existing_class = db.query(Labels).filter_by(dataset_id=dataset_id, name=label_name).first()
@@ -29,8 +34,13 @@ async def create_label(label_name: str, dataset_id: int, parent_label_id: int, d
             parent_label = db.query(Labels).filter_by(id=parent_label_id).first()
             if not parent_label:
                 raise HTTPException(status_code=404, detail="Parent label not found.")
+        if not label_value:
+            label_value = db.query(Labels).filter_by(dataset_id=dataset_id).count() + 1  # Default value
         # Create a new class
-        new_label = Labels(dataset_id=dataset_id, name=label_name, parent_id=parent_label_id)
+        new_label = Labels(dataset_id=dataset_id,
+                           name=label_name,
+                           parent_id=parent_label_id,
+                           value=label_value)
         db.add(new_label)
         db.commit()
         return {
