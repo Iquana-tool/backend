@@ -15,7 +15,8 @@ from app.database.datasets import Labels
 from app.schemas.segmentation_and_masks import ContourModel
 from app.services.encoding import base64_decode_string, base64_encode_image
 from app.services.quantifications import ContourQuantifier
-from app.services.mask_generation import generate_mask
+from app.services.mask_generation import (generate_mask, contour_is_enclosed_by_parent,
+                                          contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
@@ -111,6 +112,24 @@ async def add_contour(mask_id: int,
         existing_mask = db.query(Masks).filter_by(id=mask_id).first()
         if not existing_mask:
             mask_id = await create_mask(db=db)
+
+        contour = coords_to_cv_contour(contour_to_add.x, contour_to_add.y)
+        if not contour_is_enclosed_by_parent(contour, parent_contour_id):
+            return {
+                "success": False,
+                "message": "Contour can not be added, because it is not enclosed by its parent contour. "
+                           "Child contours must be completely inside their parent contours!",
+                "contour_id": None
+            }
+        # Check if contour overlaps with existing contours on the same level
+        contours_on_same_level = db.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_contour_id).all()
+        contours_on_same_level = [coords_to_cv_contour(c.coords["x"], c.coords["y"]) for c in contours_on_same_level]
+        if contour_overlaps_with_existing_on_parent_level(contour, contours_on_same_level):
+            return {
+                "success": False,
+                "message": "Contour overlaps with existing contours on the same level.",
+                "contour_id": None
+            }
 
         quantifier = ContourQuantifier().from_coordinates(contour_to_add.x, contour_to_add.y)
         new_contour = Contours(
