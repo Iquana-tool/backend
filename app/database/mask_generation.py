@@ -22,6 +22,7 @@ class Contours(database):
     id = Column(Integer, primary_key=True, autoincrement=True)
     mask_id = Column(Integer, ForeignKey('masks.id', ondelete='CASCADE'),
                      nullable=False)
+    parent_id = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'))
     label = Column(Integer, ForeignKey('labels.id', ondelete='CASCADE'), nullable=False)
     area = Column(Float, nullable=False)
     perimeter = Column(Float, nullable=False)

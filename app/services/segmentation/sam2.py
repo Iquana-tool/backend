@@ -8,10 +8,15 @@ import torch
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2 as build
 from sam2.sam2_image_predictor import SAM2ImagePredictor
-
+from app.database import get_context_session
+from app.database.images import ImageEmbeddings
 import config
 from app.services.prompts import Prompts
+from app.services.segmentation import SegmentationBaseModel
+from app.services.database_access import load_image_as_array_from_disk, save_embedding, get_height_width_of_image
 from config import SAM2Config
+from app.schemas.segmentation_and_masks import SegmentationRequest
+from app.services.cropping import crop_image
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -67,8 +72,14 @@ def download_checkpoint(ckpt_path: str) -> int:
         raise
 
 
-class SAM2:
+class SAM2(SegmentationBaseModel):
     def __init__(self, model_config: SAM2Config, device='auto'):
+        """ Initialize the SAM2 model.
+            Args:
+                model_config (SAM2Config): The configuration for the SAM2 model.
+                device (str): The device to run the model on. Can be 'cpu', 'cuda', or 'auto'.
+        """
+        super().__init__()
         self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
         download_checkpoint(ckpt_path=model_config.weights)
         self.model = build(ckpt_path=model_config.weights,
@@ -77,6 +88,81 @@ class SAM2:
         self.model_name = model_config.__name__
         self.prompt_predictor = SAM2ImagePredictor(self.model)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model)
+
+    def process_request(self, request: SegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
+        """ Process the segmentation request.
+            Args:
+                request (SegmentationRequest): The segmentation request containing the image and prompts.
+
+            Returns:
+                tuple: A tuple containing an array of masks and an array of predicted iou scores.
+        """
+        # Check if cropping is needed
+        use_crop = request.min_x > 0 or request.min_y > 0 or request.max_x < 1 or request.max_y < 1
+        # If we do not have a crop, we can load the embedding directly
+        embedding = self.load_embedding(request.image_id)
+        if False and embedding is None or use_crop:
+            # If we do not have an embedding or we have a crop, we need to load the image and embed it
+            image = load_image_as_array_from_disk(request.image_id)
+            image = crop_image(request.min_x, request.min_y,
+                               request.max_x, request.max_y,
+                               image)
+            embedding = self.embed_image(image)
+            if False and not use_crop:
+                # Save the embedding for the full image
+                save_embedding(request, embedding)
+        logger.info("Starting segmentation...")
+        if request.use_prompts:
+            prompts = Prompts()
+            prompts.from_segmentation_request(request)
+
+            # Temporary fix for embedding loading
+            image = load_image_as_array_from_disk(request.image_id)
+            image = crop_image(request.min_x, request.min_y,
+                               request.max_x, request.max_y,
+                               image)
+            self.prompt_predictor.set_image(image)
+            mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(), normalize_coords=False)
+            return mask, scores
+            # Fix end
+
+            # return self.segment_with_prompts(embedding, (width, height), prompts)
+        else:
+            image = load_image_as_array_from_disk(request.image_id)
+            return self.segment_without_prompts(image)
+
+    def load_embedding(self, image_id: int):
+        """Load an image embedding from the database by its embedding ID."""
+        with get_context_session() as session:
+            embedding = session.query(ImageEmbeddings).filter_by(image_id=image_id, model=self.model_name).first()
+        if embedding:
+            try:
+                loaded_data = np.load(os.path.join(config.Paths.embedding_dir,
+                                                   str(embedding.image_id),
+                                                   self.model_name + ".npz"))
+                files = set(loaded_data.files)
+                new_dict = {"image_embed": loaded_data["image_embed"]}
+                files.remove("image_embed")
+                new_dict["high_res_feats"] = [loaded_data[high_res_feat] for high_res_feat in files]
+                logger.info(f"Loaded embedding for image ID {image_id} for model {self.model_name}.")
+                return new_dict
+            except FileNotFoundError:
+                logger.warning(f"File not found for embedding ID {embedding.id}. "
+                               f"Path: {os.path.join(config.Paths.embedding_dir, str(embedding.image_id), self.model_name + '.npz')}")
+                return None
+        else:
+            logger.info(f"No embedding found for image ID {image_id} for model {self.model_name}.")
+            return None
+
+    def prepare_input(self, **kwargs):
+        """ Prepare the input for the model.
+            Args:
+                kwargs: The keyword arguments containing the image to segment.
+
+            Returns:
+                dict: A dictionary containing the image to segment.
+        """
+        pass
 
     def embed_image(self, image: np.ndarray) -> dict[str, Union[np.ndarray, list[np.ndarray]]]:
         """ Compute embeddings for image.
@@ -107,54 +193,30 @@ class SAM2:
                 A tuple containing a CxHxW array, where C is the number of masks, and an array of length C,
                  where each entry is the quality of the corresponding mask.
         """
+        # Load the embeddings onto the device
+        embedding["image_embed"] = torch.from_numpy(embedding["image_embed"]).to(self.device)
+        embedding["high_res_feats"] = [torch.from_numpy(feat).to(self.device) for feat in
+                                       embedding["high_res_feats"]]
+
+        # Set up the predictor with the embeddings
+        # Hacky solution here. There is some mismatch between the height and the width and im not entirely sure, how
+        # to resolve it.
         try:
-            # Load the embeddings onto the device
-            embedding["image_embed"] = torch.from_numpy(embedding["image_embed"]).to(self.device)
-            embedding["high_res_feats"] = [torch.from_numpy(feat).to(self.device) for feat in embedding["high_res_feats"]]
-            
-            # Set up the predictor with the embeddings
             with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
                 self.prompt_predictor._features = embedding  # Sets the embedding
                 self.prompt_predictor._is_image_set = True
                 self.prompt_predictor._orig_hw = [original_height_width]
-                masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(), normalize_coords=False)
-            
-            return masks, quality
-        except RuntimeError as e:
-            # Handle tensor dimension mismatch
-            if "must match the size of tensor" in str(e):
-                logger.warning(f"Tensor dimension mismatch: {e}. Falling back to direct image segmentation.")
-                # Fall back to direct image segmentation without using stored embeddings
-                image = self._load_image_for_fallback()
-                if image is not None:
-                    with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
-                        self.prompt_predictor.set_image(image)
-                        masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(), normalize_coords=False)
-                    return masks, quality
-                else:
-                    # If we can't load the image, raise the original error
-                    raise
-            else:
-                # For other types of errors, re-raise
-                raise
-    
-    def _load_image_for_fallback(self):
-        """
-        Attempt to load the original image for fallback processing using the global image_id.
-        """
-        from app.services.database_access import load_image_as_array_from_disk
-        try:
-            global _current_image_id
-            if _current_image_id is None:
-                logger.error("No current image_id is set for fallback.")
-                return None
-                
-            logger.info(f"Loading image {_current_image_id} for fallback processing.")
-            image = load_image_as_array_from_disk(_current_image_id)
-            return image
-        except Exception as e:
-            logger.error(f"Failed to load image for fallback: {e}")
-            return None
+                masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(),
+                                                                  normalize_coords=False)
+        except RuntimeError:
+            logger.warning("RuntimeError: Mismatch between height and width. Trying to fix it.")
+            with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
+                self.prompt_predictor._features = embedding  # Sets the embedding
+                self.prompt_predictor._is_image_set = True
+                self.prompt_predictor._orig_hw = [original_height_width[::-1]]
+                masks, quality, _ = self.prompt_predictor.predict(**input_prompts.to_SAM2_input(),
+                                                                  normalize_coords=False)
+        return masks, quality
 
     def segment_without_prompts(self, image: np.ndarray):
         """ Segment an image without prompts.

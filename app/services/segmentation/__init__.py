@@ -1,80 +1,31 @@
-from typing import Union
-
-import numpy as np
-from PIL import Image
-
 import config
-from app.services.prompts import Prompts
+from logging import getLogger
+from app.services.segmentation.base_model import SegmentationBaseModel
+from app.services.segmentation.mockup import MockupSegmentationModel
 from app.services.segmentation.sam2 import SAM2
 
-_model = SAM2(config.SAM2Tiny())  # Initialize the model on import.
+logger = getLogger(__name__)
 
 
-def embed_image(image: Union[np.ndarray, Image.Image]) -> dict[str, Union[np.ndarray, list[np.ndarray]]]:
-    """ Embed an image using the SAM2 model.
-        Args:
-            image (Union[np.ndarray, Image.Image]): The image to embed.
-
-        Returns:
-            dict[str, torch.Tensor]: A dictionary containing the embeddings. The dict has two entries: 'image_embed'
-             and 'high_res_feats'.
+def get_model_via_identifier(identifier: str) -> SegmentationBaseModel:
     """
-    return _model.embed_image(image)
-
-
-def segment_with_prompts(
-        embedding: dict[str, np.ndarray],
-        original_height_width: tuple[int, int],
-        input_prompts: Prompts
-) -> tuple[np.ndarray, np.ndarray]:
-    """ Segment an image using prompts.
-        Args:
-            embedding (dict[str, np.ndarray]): The embedding of the image to segment.
-            original_height_width (tuple[int, int]): The original height and width of the image.
-            input_prompts (Prompts): The prompts to use for segmentation.
-
-        Returns:
-            A tuple containing a CxHxW array, where C is the number of masks, and an array of length C,
-             where each entry is the quality of the corresponding mask.
+    Returns the model class based on the identifier.
     """
-    return _model.segment_with_prompts(embedding, original_height_width, input_prompts)
-
-
-def segment_without_prompts(image: Union[np.ndarray, Image.Image]) -> tuple[np.ndarray, np.ndarray]:
-    """ Segment an image without prompts.
-        Args:
-            image (Union[np.ndarray, Image.Image]): The image to segment.
-
-        Returns:
-            A tuple containing a CxHxW array, where C is the number of masks, and an array of length C,
-             where each entry is the quality of the corresponding mask.
-    """
-    return _model.segment_without_prompts(image)
-
-
-def segment_stack_with_prompts(
-        embedding: dict[str, np.ndarray],
-        input_prompts: Prompts
-) -> tuple[np.ndarray, np.ndarray]:
-    """ Segment a stack of images using prompts.
-        Args:
-            embedding (dict[str, np.ndarray]): The embedding of the image to segment.
-            input_prompts (Prompts): The prompts to use for segmentation.
-
-        Returns:
-            A tuple containing a CxHxW array, where C is the number of masks, and an array of length C,
-             where each entry is the quality of the corresponding mask.
-    """
-    raise NotImplementedError("Stack segmentation with prompts is not implemented yet.")
-
-
-def segment_stack_without_prompts(image: Union[np.ndarray, Image.Image]) -> tuple[np.ndarray, np.ndarray]:
-    """ Segment a stack of images without prompts.
-        Args:
-            image (Union[np.ndarray, Image.Image]): The image to segment.
-
-        Returns:
-            A tuple containing a CxHxW array, where C is the number of masks, and an array of length C,
-             where each entry is the quality of the corresponding mask.
-    """
-    raise NotImplementedError("Stack segmentation without prompts is not implemented yet.")
+    if identifier == "Mockup":
+        logger.debug("Using Mockup segmentation model.")
+        return MockupSegmentationModel()
+    elif identifier == "SAM2Tiny":
+        logger.debug("Using SAM2Tiny segmentation model.")
+        return SAM2(config.ModelConfig.available_models["SAM2Tiny"]())
+    elif identifier == "SAM2Small":
+        logger.debug("Using SAM2Small segmentation model.")
+        return SAM2(config.ModelConfig.available_models["SAM2Small"]())
+    elif identifier == "SAM2Large":
+        logger.debug("Using SAM2Large segmentation model.")
+        return SAM2(config.ModelConfig.available_models["SAM2Large"]())
+    elif identifier == "SAM2BasePlus":
+        logger.debug("Using SAM2BasePlus segmentation model.")
+        return SAM2(config.ModelConfig.available_models["SAM2BasePlus"]())
+    else:
+        logger.error(f"Unknown model identifier: {identifier}")
+        raise ValueError(f"Unknown model identifier: {identifier}")

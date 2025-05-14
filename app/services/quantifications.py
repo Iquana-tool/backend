@@ -5,6 +5,7 @@ from logging import getLogger
 # Set up logging
 logger = getLogger(__name__)
 
+
 class Contour:
     def __init__(self, contour, scale_x=1.0, scale_y=1.0, unit="px"):
         """
@@ -26,6 +27,18 @@ class Contour:
         self.circularity = None
 
         self.parse_contour()
+
+    @property
+    def x_coords(self):
+        """ Get the x-coordinates of the contour.
+        """
+        return self.contour[..., 1]
+
+    @property
+    def y_coords(self):
+        """ Get the y-coordinates of the contour.
+        """
+        return self.contour[..., 0]
 
     def parse_contour(self):
         """
@@ -81,8 +94,3 @@ class Contour:
                 diameters.append(distance)
 
         return diameters
-
-    def __repr__(self):
-        return (f"<Contour(area={self.area:.2f} {self.unit}², "
-                f"perimeter={self.perimeter:.2f} {self.unit}, "
-                f"circularity={self.circularity:.3f})>")

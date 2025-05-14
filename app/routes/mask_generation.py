@@ -74,7 +74,7 @@ async def get_masks_for_image(image_id: int, db: Session = Depends(get_session))
 
 
 @router.post("/add_contour")
-async def add_contour(mask_id: int, contour: ContourModel, db: Session = Depends(get_session)):
+async def add_contour(mask_id: int, contour: ContourModel, selected_contour: int = None, db: Session = Depends(get_session)):
     try:
         # Check if mask exists
         existing_mask = db.query(Masks).filter_by(id=mask_id).first()
@@ -85,12 +85,13 @@ async def add_contour(mask_id: int, contour: ContourModel, db: Session = Depends
         coords = {"x": contour.x, "y": contour.y}
         new_contour = Contours(
             mask_id=mask_id,
+            parent_id=selected_contour,
             coords=json.dumps(coords),
             label=contour.label,
-            area=contour.area,
-            perimeter=contour.perimeter,
-            circularity=contour.circularity,
-            diameters=json.dumps(contour.diameters),
+            area=contour.quantifications.area,
+            perimeter=contour.quantifications.perimeter,
+            circularity=contour.quantifications.circularity,
+            diameters=json.dumps(contour.quantifications.diameters),
         )
         db.add(new_contour)
         db.commit()
