@@ -7,10 +7,8 @@ from logging import getLogger
 from os import remove
 from os.path import join, exists
 from typing import Union, AnyStr
-from sqlalchemy.orm import Session
 
 import numpy as np
-from PIL import Image
 from fastapi import UploadFile
 
 import config
@@ -148,7 +146,7 @@ async def save_image_to_disk_and_db(image: AnyStr):
     path = join(config.Paths.images_dir, new_file_name)
     with open(path, "wb") as file:
         file.write(image_data)
-    image_array = np.array(Image.open(path))
+    image_array = np.array(cv.imread(path))
     try:
         # Save the new image to the database
         with get_context_session() as session:
