@@ -94,7 +94,7 @@ async def add_contour(mask_id: int,
             area=quantifier.area,
             perimeter=quantifier.perimeter,
             circularity=quantifier.circularity,
-            diameters=json.dumps(quantifier.diameters),
+            diameters=json.dumps(quantifier.get_diameters()),
         )
         db.add(new_contour)
         db.commit()
