@@ -12,6 +12,7 @@ from app.database.mask_generation import Masks, Labels, Contours
 from app.schemas.segmentation_and_masks import ContourModel
 from app.services.encoding import base64_decode_string, base64_encode_image
 from app.services.quantifications import ContourQuantifier
+from app.services.database_access import get_height_width_of_image
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
@@ -84,8 +85,10 @@ async def add_contour(mask_id: int,
         existing_mask = db.query(Masks).filter_by(id=mask_id).first()
         if not existing_mask:
             mask_id = await create_mask(db=db)
-
-        quantifier = ContourQuantifier().from_coordinates(contour_to_add.x, contour_to_add.y)
+        height, width = get_height_width_of_image(existing_mask.image_id)
+        rescaled_x = [int(x * width) for x in contour_to_add.x]
+        rescaled_y = [int(y * height) for y in contour_to_add.y]
+        quantifier = ContourQuantifier().from_coordinates(rescaled_x, rescaled_y)
         new_contour = Contours(
             mask_id=mask_id,
             parent_id=parent_contour_id,
