@@ -16,7 +16,7 @@ from app.services.prompts import Prompts
 from app.services.segmentation.base_model import ScanSegmentationBaseModel, SegmentationBaseModel
 from app.services.database_access import load_image_as_array_from_disk, save_embedding, get_height_width_of_image
 from config import SAM2Config
-from app.schemas.segmentation_and_masks import PromptedSegmentationRequest
+from app.schemas.segmentation_and_masks import PromptedSegmentationRequest, AutomaticSegmentationRequest
 from app.services.cropping import crop_image
 
 logger = logging.getLogger(__name__)
@@ -119,13 +119,11 @@ class SAM2(ScanSegmentationBaseModel):
                                                         multimask_output=False,
                                                         normalize_coords=False)
         return mask, scores
-            # Fix end
 
-            # return self.segment_with_prompts(embedding, (width, height), prompts)
-        else:
-
-    def process_semantic_request(self, request: PromptedSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
+    def process_automatic_request(self, request: AutomaticSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
         image = load_image_as_array_from_disk(request.image_id)
+        # Check if cropping is needed
+        use_crop = request.min_x > 0 or request.min_y > 0 or request.max_x < 1 or request.max_y < 1
         if use_crop or (request.image_id != self.set_image_id):
             # If cropping is needed or the image_id has changed, we need to set the image
             image = crop_image(request.min_x, request.min_y,
@@ -135,7 +133,6 @@ class SAM2(ScanSegmentationBaseModel):
         masks = np.array([mask['segmentation'] for mask in result])
         scores = np.array([mask['stability_score'] for mask in result])
         return masks, scores
-
 
     def propagate_mask(self, **kwargs) -> tuple[list, list]:
         """ Propagate the mask across the scan.
