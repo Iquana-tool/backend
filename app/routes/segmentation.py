@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.schemas.segmentation_and_masks import (
     PromptedSegmentationRequest, SegmentationResponse, ContourModel,
-    SegmentationMaskModel, QuantificationsModel
+    SegmentationMaskModel, QuantificationsModel, AutomaticSegmentationRequest
 )
 from app.services.segmentation import get_model_via_identifier
 from app.services.contours import get_contours
@@ -68,5 +68,6 @@ async def segment_image(request: PromptedSegmentationRequest):
 
 
 @router.post('/generate_mask')
-async def generate_mask(request: PromptedSegmentationRequest):
-    pass
+async def generate_mask(request: AutomaticSegmentationRequest):
+    """ Generate segmentation masks for an image using automatic semantic segmentation. """
+
