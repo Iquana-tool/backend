@@ -1,4 +1,4 @@
-from app.schemas.segmentation_and_masks import SegmentationRequest
+from app.schemas.segmentation_and_masks import PromptedSegmentationRequest
 
 
 class SegmentationBaseModel:
@@ -8,7 +8,7 @@ class SegmentationBaseModel:
         self.model = None
         self.model_name = None
 
-    def process_request(self, request: SegmentationRequest) -> tuple[list, list]:
+    def process_prompted_request(self, request: PromptedSegmentationRequest) -> tuple[list, list]:
         """Process the segmentation request. This function calls the prepare_input and segment methods sequentially.
         This allows for individual preparation methods for each model. Additionally, the segment method can be
         overridden in subclasses to provide model-specific segmentation logic like prompted or unprompted segmentation.

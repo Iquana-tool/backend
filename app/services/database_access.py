@@ -14,7 +14,7 @@ from fastapi import UploadFile
 import config
 from app.database import get_context_session
 from app.database.images import Images, ImageEmbeddings
-from app.schemas.segmentation_and_masks import SegmentationRequest
+from app.schemas.segmentation_and_masks import PromptedSegmentationRequest
 
 logger = getLogger(__name__)
 
@@ -97,7 +97,7 @@ def get_height_width_of_image(image_id: int) -> tuple[int, int]:
         raise ValueError(f"Image with ID {image_id} not found in database.")
 
 
-def save_embedding(request: SegmentationRequest, embedding: dict[str, Union[np.ndarray, list[np.ndarray]]]):
+def save_embedding(request: PromptedSegmentationRequest, embedding: dict[str, Union[np.ndarray, list[np.ndarray]]]):
     with get_context_session() as db:
         new_embedding = ImageEmbeddings(
             image_id=request.image_id,

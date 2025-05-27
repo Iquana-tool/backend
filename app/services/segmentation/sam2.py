@@ -16,7 +16,7 @@ from app.services.prompts import Prompts
 from app.services.segmentation.base_model import ScanSegmentationBaseModel, SegmentationBaseModel
 from app.services.database_access import load_image_as_array_from_disk, save_embedding, get_height_width_of_image
 from config import SAM2Config
-from app.schemas.segmentation_and_masks import SegmentationRequest
+from app.schemas.segmentation_and_masks import PromptedSegmentationRequest
 from app.services.cropping import crop_image
 
 logger = logging.getLogger(__name__)
@@ -92,10 +92,10 @@ class SAM2(ScanSegmentationBaseModel):
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model, multimask_output=False)
         self.set_image_id = None
 
-    def process_request(self, request: SegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
+    def process_prompted_request(self, request: PromptedSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
         """ Process the segmentation request.
             Args:
-                request (SegmentationRequest): The segmentation request containing the image and prompts.
+                request (PromptedSegmentationRequest): The segmentation request containing the image and prompts.
 
             Returns:
                 tuple: A tuple containing an array of masks and an array of predicted iou scores.
@@ -104,36 +104,37 @@ class SAM2(ScanSegmentationBaseModel):
         use_crop = request.min_x > 0 or request.min_y > 0 or request.max_x < 1 or request.max_y < 1
         # If we do not have a crop, we can load the embedding directly
         logger.info("Starting segmentation...")
-        if request.use_prompts:
-            prompts = Prompts()
-            prompts.from_segmentation_request(request)
-            if use_crop or (request.image_id != self.set_image_id):
-                # If cropping is needed or the image_id has changed, we need to set the image
-                # Temporary fix for embedding loading
-                image = load_image_as_array_from_disk(request.image_id)
-                image = crop_image(request.min_x, request.min_y,
-                                   request.max_x, request.max_y,
-                                   image)
-                self.prompt_predictor.set_image(image)
-                self.set_image_id = request.image_id
-            mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(),
-                                                            multimask_output=False,
-                                                            normalize_coords=False)
-            return mask, scores
+        prompts = Prompts()
+        prompts.from_segmentation_request(request)
+        if use_crop or (request.image_id != self.set_image_id):
+            # If cropping is needed or the image_id has changed, we need to set the image
+            # Temporary fix for embedding loading
+            image = load_image_as_array_from_disk(request.image_id)
+            image = crop_image(request.min_x, request.min_y,
+                               request.max_x, request.max_y,
+                               image)
+            self.prompt_predictor.set_image(image)
+            self.set_image_id = request.image_id
+        mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(),
+                                                        multimask_output=False,
+                                                        normalize_coords=False)
+        return mask, scores
             # Fix end
 
             # return self.segment_with_prompts(embedding, (width, height), prompts)
         else:
-            image = load_image_as_array_from_disk(request.image_id)
-            if use_crop or (request.image_id != self.set_image_id):
-                # If cropping is needed or the image_id has changed, we need to set the image
-                image = crop_image(request.min_x, request.min_y,
-                                   request.max_x, request.max_y,
-                                   image)
-            result = self.mask_generator.generate(image)
-            masks = np.array([mask['segmentation'] for mask in result])
-            scores = np.array([mask['stability_score'] for mask in result])
-            return masks, scores
+
+    def process_semantic_request(self, request: PromptedSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
+        image = load_image_as_array_from_disk(request.image_id)
+        if use_crop or (request.image_id != self.set_image_id):
+            # If cropping is needed or the image_id has changed, we need to set the image
+            image = crop_image(request.min_x, request.min_y,
+                               request.max_x, request.max_y,
+                               image)
+        result = self.mask_generator.generate(image)
+        masks = np.array([mask['segmentation'] for mask in result])
+        scores = np.array([mask['stability_score'] for mask in result])
+        return masks, scores
 
 
     def propagate_mask(self, **kwargs) -> tuple[list, list]:

@@ -74,8 +74,24 @@ class SAM2BasePlus(SAM2Config):
     config = os.path.join('configs', 'sam2.1', 'sam2.1_hiera_b+.yaml')
 
 
-class ModelConfig:
+class PromptedSegmentationModelsConfig:
     """ This class contains the configuration options for the model. """
+    selected_model = 'SAM2Tiny'
+    available_models = {
+        'Mockup': None,
+        'SAM2Tiny': SAM2Tiny,
+        'SAM2Small': SAM2Small,
+        'SAM2Large': SAM2Large,
+        'SAM2BasePlus': SAM2BasePlus
+    }
+
+    @classmethod
+    def get_active_model_config(cls):
+        return cls.available_models[cls.selected_model]
+
+
+class SemanticSegmentationModelsConfig:
+    """ This class contains the configuration options for the semantic segmentation model. """
     selected_model = 'SAM2Tiny'
     available_models = {
         'Mockup': None,

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.database import get_session
 from app.schemas.segmentation_and_masks import (
-    SegmentationRequest, SegmentationResponse, ContourModel, 
+    PromptedSegmentationRequest, SegmentationResponse, ContourModel,
     SegmentationMaskModel, QuantificationsModel
 )
 from app.services.segmentation import get_model_via_identifier
@@ -20,13 +20,13 @@ router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 
 
 @router.post('/segment_image')
-async def segment_image(request: SegmentationRequest):
+async def segment_image(request: PromptedSegmentationRequest):
     """Perform segmentation with optional prompts, using data validation.
     This function handles the segmentation of images based on the provided request.
     It validates the request, retrieves the appropriate model, and processes the image.
 
     Args:
-        request (SegmentationRequest): The request object containing image data and parameters. When using cropping,
+        request (PromptedSegmentationRequest): The request object containing image data and parameters. When using cropping,
         make sure to remap the annotation coordinates to the cropped image.
 
     Returns:
@@ -40,7 +40,7 @@ async def segment_image(request: SegmentationRequest):
     # Process the request with the model
     # This method should handle the image preprocessing and segmentation
     # All model specific logic should be encapsulated in the model class
-    masks, quality = model.process_request(request)
+    masks, quality = model.process_prompted_request(request)
     logger.debug(f"Segmentation completed for image_id: {request.image_id} with {len(masks)} masks.")
 
     # Postprocess the masks and get contours
@@ -65,3 +65,8 @@ async def segment_image(request: SegmentationRequest):
             ))
         masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
+
+
+@router.post('/generate_mask')
+async def generate_mask(request: PromptedSegmentationRequest):
+    pass

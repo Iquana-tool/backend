@@ -1,7 +1,7 @@
 # This file contains classes for prompts
 import cv2
 import numpy as np
-from app.schemas.segmentation_and_masks import SegmentationRequest
+from app.schemas.segmentation_and_masks import PromptedSegmentationRequest
 
 
 class Prompts:
@@ -15,7 +15,7 @@ class Prompts:
         self.point_labels = []
         self.box_prompts = []
 
-    def from_segmentation_request(self, seg_req: SegmentationRequest):
+    def from_segmentation_request(self, seg_req: PromptedSegmentationRequest):
         for point in seg_req.point_prompts:
             self.add_point_annotation(point.x, point.y, point.label)
         for box in seg_req.box_prompts:
