@@ -25,3 +25,21 @@ class SegmentationBaseModel:
         """Segment the given input.
         """
         raise NotImplementedError("Subclasses should implement this method.")
+
+
+class ScanSegmentationBaseModel(SegmentationBaseModel):
+    """Base class for segmentation models that handle scans.
+    This class is intended for models that work with scans, such as SAM2.
+    It provides a common interface for preparing input and segmenting scans.
+    """
+    def segment_scan(self, **kwargs) -> tuple[list, list]:
+        """Segment the given scan input.
+        This method should be overridden by subclasses to provide model-specific segmentation logic.
+        """
+        raise NotImplementedError("Subclasses should implement this method.")
+
+    def propagate_mask(self, **kwargs) -> tuple[list, list]:
+        """Propagate the mask across the scan.
+        This method should be overridden by subclasses to provide model-specific mask propagation logic.
+        """
+        raise NotImplementedError("Subclasses should implement this method.")
