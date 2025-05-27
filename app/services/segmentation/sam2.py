@@ -125,7 +125,16 @@ class SAM2(ScanSegmentationBaseModel):
             # return self.segment_with_prompts(embedding, (width, height), prompts)
         else:
             image = load_image_as_array_from_disk(request.image_id)
-            return self.mask_generator.generate(image)
+            if use_crop or (request.image_id != self.set_image_id):
+                # If cropping is needed or the image_id has changed, we need to set the image
+                image = crop_image(request.min_x, request.min_y,
+                                   request.max_x, request.max_y,
+                                   image)
+            result = self.mask_generator.generate(image)
+            masks = np.array([mask['segmentation'] for mask in result])
+            scores = np.array([mask['stability_score'] for mask in result])
+            return masks, scores
+
 
     def propagate_mask(self, **kwargs) -> tuple[list, list]:
         """ Propagate the mask across the scan.
