@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, Float, JSON
 from . import database
 
 
@@ -12,12 +12,18 @@ class Images(database):
     hash_code = Column(String(64), nullable=False, unique=True)  # Hash of the image file
     scan_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'))  # Scan id for CT or MRI or OCT, etc.
     index_in_scan = Column(Integer)  # Index of the image in the scan
+    scale_x = Column(Float, nullable=True)  # mm per pixel in X
+    scale_y = Column(Float, nullable=True)  # mm per pixel in Y
+    unit = Column(String(10), default="mm")  # Default unit: mm
 
     def __repr__(self):
         return (f"<Image(id='{self.id}', "
                 f"path='{self.filename}', "
                 f"width='{self.width}',"
-                f"height='{self.height}')>")
+                f"height='{self.height}')>"
+                f"scale_x='{self.scale_x}', "
+                f"scale_y='{self.scale_y}', "
+                f"unit='{self.unit}')>")
 
 
 class ImageEmbeddings(database):

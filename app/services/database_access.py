@@ -7,10 +7,8 @@ from logging import getLogger
 from os import remove
 from os.path import join, exists
 from typing import Union, AnyStr
-from sqlalchemy.orm import Session
 
 import numpy as np
-from PIL import Image
 from fastapi import UploadFile
 
 import config
@@ -72,7 +70,7 @@ def load_image_as_base64_from_disk(image_id):
         raise ValueError(f"Image with ID {image_id} not found in database.")
 
 
-def load_image_as_array_from_disk(image_id, min_x=0, min_y=0, max_x=1, max_y=1):
+def load_image_as_array_from_disk(image_id):
     """Load an image from the database by its ID."""
     with get_context_session() as session:
         image_query_result = session.query(Images).filter_by(id=image_id).first()
@@ -84,10 +82,6 @@ def load_image_as_array_from_disk(image_id, min_x=0, min_y=0, max_x=1, max_y=1):
         if image.shape[-1] != 3:
             logger.warning("Converting RGBA image to RGB.")
             image = cv.cvtColor(image, cv.COLOR_RGBA2RGB)
-        if min_x > 0 or min_y > 0 or max_x < 1 or max_y < 1:
-            # Crop the image to the specified range
-            image = image[int(min_y * image.shape[0]):int(max_y * image.shape[0]),
-                          int(min_x * image.shape[1]):int(max_x * image.shape[1])]
         return np.array(image)
     else:
         return None
@@ -142,7 +136,7 @@ async def save_image_to_disk_and_db(image: AnyStr, scan_id=None, index_in_scan=N
     # Check if image already exists in the database
     with get_context_session() as session:
         if session.query(Images).filter_by(hash_code=hash_code).first():
-            logging.warning("Image already exists in the database.")
+            logging.info("Image already exists in the database.")
             return session.query(Images).filter_by(hash_code=hash_code).first().id
         else:
             next_id = session.query(Images).count() + 1
@@ -152,7 +146,7 @@ async def save_image_to_disk_and_db(image: AnyStr, scan_id=None, index_in_scan=N
     path = join(config.Paths.images_dir, new_file_name)
     with open(path, "wb") as file:
         file.write(image_data)
-    image_array = np.array(Image.open(path))
+    image_array = np.array(cv.imread(path))
     try:
         # Save the new image to the database
         with get_context_session() as session:
