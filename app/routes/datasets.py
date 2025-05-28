@@ -26,8 +26,8 @@ async def create_dataset(name: str,
     try:
         dataset_path = os.path.join(config.Paths.datasets_dir, name)
         os.makedirs(dataset_path)
-        new_dataset = Datasets(name=name,
-                               description=description,
+        new_dataset = Datasets(name=name.strip(),
+                               description=description.strip(),
                                folder_path=dataset_path,
                                dataset_type=dataset_type)
         db.add(new_dataset)

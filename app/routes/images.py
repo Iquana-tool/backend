@@ -4,7 +4,7 @@ import shutil
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
-
+from typing import Literal
 from app.database import get_session
 from app.database.images import Images, Scans
 from app.database.datasets import Datasets
@@ -32,6 +32,7 @@ async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Sessio
         }
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
+        raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -105,7 +106,7 @@ async def get_image(image_id: int):
 async def upload_scan(dataset_id: int,
                       files: list[UploadFile] = File(...),
                       name: str = "Scan",
-                      scan_type: str = "CT",
+                      scan_type: Literal["CT"] = "CT",
                       description: str = "Scan description",
                       #meta_data: dict = None,
                       db: Session = Depends(get_session)):
@@ -130,9 +131,9 @@ async def upload_scan(dataset_id: int,
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     new_scan = Scans(
         dataset_id=dataset_id,
-        name=name,
-        type=scan_type,
-        description=description,
+        name=name.strip(),
+        type=scan_type.strip(),
+        description=description.strip(),
         folder_path=os.path.join(dataset.folder_path, name),
         number_of_slices=len(files),
         #meta_data=meta_data
