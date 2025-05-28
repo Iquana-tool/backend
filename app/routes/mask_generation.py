@@ -3,15 +3,20 @@ import logging
 import os.path
 
 import cv2
+import numpy as np
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 
 import config
 from app.database import get_session
-from app.database.mask_generation import Masks, Labels, Contours
+from app.database.mask_generation import Masks, Contours
+from app.database.images import Images
+from app.database.datasets import Labels
 from app.schemas.segmentation_and_masks import ContourModel
 from app.services.encoding import base64_decode_string, base64_encode_image
 from app.services.quantifications import ContourQuantifier
+from app.services.mask_generation import (generate_mask, contour_is_enclosed_by_parent,
+                                          contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour)
 from app.services.database_access import get_height_width_of_image
 
 logger = logging.getLogger(__name__)
@@ -48,13 +53,12 @@ async def get_mask(mask_id: int, db: Session = Depends(get_session)):
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=404, detail="Mask not found.")
-    mask_path = os.path.join(config.Paths.masks_dir,
-                             str(mask.image_id),
-                             f"{mask.mask_label}_{mask.counter}.png")
-    if not os.path.exists(mask_path):
-        raise HTTPException(status_code=404, detail="Mask file not found.")
-    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-    return base64_encode_image(mask)
+    mask_arr = generate_mask(mask_id).tolist()
+    return {
+        "success": True,
+        "mask_id": mask.id,
+        "image": mask_arr
+    }
 
 
 @router.delete("/delete_mask/{mask_id}")
@@ -85,6 +89,34 @@ async def add_contour(mask_id: int,
         existing_mask = db.query(Masks).filter_by(id=mask_id).first()
         if not existing_mask:
             mask_id = await create_mask(db=db)
+
+        contour = coords_to_cv_contour(contour_to_add.x, contour_to_add.y)
+
+        # Check if contour is enclosed by its parent contour
+        parent_contour = db.query(Contours).filter_by(id=parent_contour_id).first() if parent_contour_id else None
+        if parent_contour:
+            if not contour_is_enclosed_by_parent(contour, coords_to_cv_contour(parent_contour.coords["x"],
+                                                                               parent_contour.coords["y"])):
+                return {
+                    "success": False,
+                    "message": "Contour can not be added, because it is not enclosed by its parent contour. "
+                               "Child contours must be completely inside their parent contours!",
+                    "contour_id": None
+                }
+
+        # Check if contour overlaps with existing contours on the same level
+        contours_on_same_level = db.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_contour_id).all()
+        if contours_on_same_level:
+            contours_on_same_level = [coords_to_cv_contour(c.coords["x"], c.coords["y"]) for c in contours_on_same_level]
+            if contour_overlaps_with_existing_on_parent_level(contour, contours_on_same_level):
+                return {
+                    "success": False,
+                    "message": "Contour overlaps with existing contours on the same level.",
+                    "contour_id": None
+                }
+
+        # Quantify contour
+        quantifier = ContourQuantifier().from_coordinates(contour_to_add.x, contour_to_add.y)
         height, width = get_height_width_of_image(existing_mask.image_id)
         rescaled_x = [int(x * width) for x in contour_to_add.x]
         rescaled_y = [int(y * height) for y in contour_to_add.y]
@@ -99,8 +131,11 @@ async def add_contour(mask_id: int,
             circularity=quantifier.circularity,
             diameters=json.dumps(quantifier.get_diameters()),
         )
+
+        # Add contour to the database
         db.add(new_contour)
         db.commit()
+
         return {
             "success": True,
             "message": "Contour added successfully.",
@@ -118,7 +153,11 @@ async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
         existing_contour = db.query(Contours).filter_by(id=contour_id).first()
         if not existing_contour:
             raise HTTPException(status_code=404, detail="Contour not found.")
-
+        # Check if the contour has child contours
+        child_contours = db.query(Contours).filter_by(parent_id=contour_id).all()
+        for child_contour in child_contours:
+            # Recursively delete child contours
+            await delete_contour(child_contour.id, db)
         # Delete the contour
         db.delete(existing_contour)
         db.commit()
