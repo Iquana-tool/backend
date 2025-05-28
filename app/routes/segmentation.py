@@ -55,8 +55,8 @@ async def segment_image(request: SegmentationRequest):
             if len(contour) < 3:
                 # Skip contours with less than 3 points
                 continue
-            x_coords = (contour[..., 1].flatten() + int(request.min_x * width)) / width
-            y_coords = (contour[..., 0].flatten() + int(request.min_y * height)) / height
+            x_coords = (contour[..., 0].flatten() + int(request.min_x * width)) / width
+            y_coords = (contour[..., 1].flatten() + int(request.min_y * height)) / height
             contours_response.append(ContourModel(
                 # We have to rescale the images to the original size
                 x=x_coords,

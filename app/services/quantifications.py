@@ -33,6 +33,7 @@ class ContourQuantifier:
         """
         self.contour = contour
         self.parse_contour()
+        return self
 
     def from_coordinates(self, x_coords, y_coords):
         """
@@ -41,6 +42,7 @@ class ContourQuantifier:
         # Bring the coordinates into opencv contour format
         self.contour = np.expand_dims(np.array(list(zip(x_coords, y_coords)), dtype=np.int32), 1)
         self.parse_contour()
+        return self
 
     @property
     def x_coords(self):

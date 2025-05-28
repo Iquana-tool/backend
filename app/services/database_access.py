@@ -7,10 +7,8 @@ from logging import getLogger
 from os import remove
 from os.path import join, exists
 from typing import Union, AnyStr
-from sqlalchemy.orm import Session
 
 import numpy as np
-from PIL import Image
 from fastapi import UploadFile
 
 import config
