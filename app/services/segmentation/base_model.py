@@ -14,17 +14,15 @@ class SegmentationBaseModel:
         overridden in subclasses to provide model-specific segmentation logic like prompted or unprompted segmentation.
         Each model can also override this method to allow for even more flexibility.
         """
-        return self.segment(**self.prepare_input(**request.dict()))
+        raise NotImplementedError("Subclasses should implement this method to process the segmentation request.")
 
-    def prepare_input(self, **kwargs):
-        """Prepare the image for the model.
+    def process_automatic_request(self, **kwargs) -> tuple[list, list]:
+        """Process the automatic segmentation request.
+        This function calls the prepare_input and segment methods sequentially.
+        It allows for individual preparation methods for each model.
+        Each model can override this method to provide model-specific segmentation logic.
         """
-        raise NotImplementedError("Subclasses should implement this method.")
-
-    def segment(self, **kwargs) -> tuple[list, list]:
-        """Segment the given input.
-        """
-        raise NotImplementedError("Subclasses should implement this method.")
+        raise NotImplementedError("Subclasses should implement this method to process the automatic segmentation request.")
 
 
 class ScanSegmentationBaseModel(SegmentationBaseModel):
