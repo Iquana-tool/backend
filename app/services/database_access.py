@@ -128,10 +128,15 @@ def get_save_folder_path(dataset_id: int, scan_id: int = None) -> str:
         dataset = session.query(Datasets).filter_by(id=dataset_id).first()
         if not dataset:
             raise ValueError(f"Dataset with ID {dataset_id} not found.")
-        if dataset.dataset_type == "scan" and scan_id is not None:
+        if dataset.dataset_type == "scan":
+            if scan_id is None:
+                raise ValueError("Scan ID must be provided for scan datasets.")
             scan = session.query(Scans).filter_by(id=scan_id).first()
-            return join(config.Paths.datasets_dir, dataset.name, scan.name, "images")
-        return join(config.Paths.datasets_dir, dataset.name, "images")
+            path = join(config.Paths.datasets_dir, dataset.name, scan.name, "slices")
+        else:
+            path = join(config.Paths.datasets_dir, dataset.name, "images")
+        os.makedirs(path, exist_ok=True)
+    return path
 
 
 async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None, index_in_scan=None) -> int:
