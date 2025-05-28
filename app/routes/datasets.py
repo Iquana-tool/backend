@@ -24,11 +24,12 @@ async def create_dataset(name: str,
                          db: Session = Depends(get_session)):
     """Create a new dataset."""
     try:
-        new_dataset = Datasets(name=name,
-                               description=description,
-                               dataset_type=dataset_type)
         dataset_path = os.path.join(config.Paths.datasets_dir, name)
         os.makedirs(dataset_path)
+        new_dataset = Datasets(name=name,
+                               description=description,
+                               folder_path=dataset_path,
+                               dataset_type=dataset_type)
         db.add(new_dataset)
         db.commit()
         return {"success": True,
@@ -104,11 +105,9 @@ async def delete_dataset(dataset_id: int, db: Session = Depends(get_session)):
         if not dataset:
             return {"success": False, "message": "Dataset not found."}
         # Delete disk directory
-        dataset_dir = os.path.join(config.Paths.datasets_dir, dataset.name)
-        shutil.rmtree(dataset_dir, ignore_errors=True)
+        shutil.rmtree(dataset.folder_path, ignore_errors=True)
         # Delete associated labels
         db.query(Labels).filter_by(dataset_id=dataset_id).delete()
-
         # Delete the dataset
         db.delete(dataset)
         db.commit()
