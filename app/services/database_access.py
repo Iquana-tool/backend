@@ -38,19 +38,7 @@ def delete_image_from_disk_and_db(image_id: int):
     """Deletes the image files and the embeddings"""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
-        cutouts_to_delete = session.query(Images).filter_by(parent_image_id=image_id).all()
-        for cutout in cutouts_to_delete:
-            cutout_path = join(config.Paths.images_dir, cutout.filename)
-            if exists(cutout_path):
-                remove(cutout_path)
-            session.delete(cutout)
-        embeddings = session.query(ImageEmbeddings).filter_by(id=image_id).all()
-        for embedding in embeddings:
-            embedding_path = join(config.Paths.images_dir, embedding.filename)
-            if exists(embedding_path):
-                remove(embedding_path)
-            session.delete(embedding)
-        image_path = join(config.Paths.images_dir, image.filename)
+        image_path = join(image.filepath, image.filename)
         if exists(image_path):
             remove(image_path)
         session.delete(image)
@@ -112,18 +100,8 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
     np.savez_compressed(str(path), **new_dict)
 
 
-def save_image_to_disk(image: UploadFile, file_path: str):
+def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None) -> str:
     """Save an image file to disk."""
-    if not exists(file_path):
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "wb") as file:
-        file.write(image.file.read())
-    logger.info(f"Image saved to disk at {file_path}")
-    return file_path
-
-
-def get_save_folder_path(dataset_id: int, scan_id: int = None) -> str:
-    """Given a dataset ID and optionally a scan ID, return the path where images and masks folders can be found."""
     with get_context_session() as session:
         dataset = session.query(Datasets).filter_by(id=dataset_id).first()
         if not dataset:
@@ -136,7 +114,11 @@ def get_save_folder_path(dataset_id: int, scan_id: int = None) -> str:
         else:
             path = join(config.Paths.datasets_dir, dataset.name, "images")
         os.makedirs(path, exist_ok=True)
-    return path
+    file_path = join(path, image.filename)
+    with open(file_path, "wb") as file:
+        file.write(image.file.read())
+    logger.info(f"Image saved to disk at {file_path}")
+    return str(file_path)
 
 
 async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None, index_in_scan=None) -> int:
@@ -152,14 +134,13 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
         if images_with_hash:
             return session.query(Images).filter_by(dataset_id=dataset_id, hash_code=hash_code).first().id
         else:
-            path = get_save_folder_path(dataset_id, scan_id)
-            save_image_to_disk(image, join(path, image.filename))
-            image_array = np.array(cv.imread(join(path, image.filename)))
+            file_path = save_image_to_disk(image, dataset_id, scan_id)
+            image_array = np.array(cv.imread(file_path))
             try:
                 # Save the new image to the database
                 # Image comes in HWC format
                 new_entry = Images(filename=image.filename,
-                                   filepath=path,
+                                   filepath=file_path,
                                    dataset_id=dataset_id,
                                    width=image_array.shape[1],
                                    height=image_array.shape[0],
@@ -173,7 +154,7 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
             except Exception as e:
                 logger.error(f"Error saving image to database: {str(e)}")
                 logger.error(f"Deleting image '{image.file_name}' from disk to ensure consistency.")
-                os.remove(join(path, image.filename))
+                os.remove(file_path)
                 return None
 
 
