@@ -61,7 +61,7 @@ def load_image_as_array_from_disk(image_id):
     with get_context_session() as session:
         image_query_result = session.query(Images).filter_by(id=image_id).first()
     if image_query_result:
-        image = np.array(cv.imread(join(image_query_result.file_path, image_query_result.filename), cv.IMREAD_COLOR_RGB))
+        image = np.array(cv.imread(image_query_result.filepath, cv.IMREAD_COLOR_RGB))
         if image.shape[0] == image_query_result.width and image.shape[1] == image_query_result.height:
             logger.warning(f"Image {image_id} has different dimensions than expected.")
             image = np.moveaxis(image, 1, 0)
