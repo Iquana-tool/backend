@@ -1,26 +1,52 @@
 import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-
-import config
-from app.database import get_session
 from app.schemas.segmentation_and_masks import (
     PromptedSegmentationRequest, SegmentationResponse, ContourModel,
     SegmentationMaskModel, QuantificationsModel, AutomaticSegmentationRequest
 )
 from app.services.segmentation import ModelCache
 from app.services.contours import get_contours
-from app.services.quantifications import ContourQuantifier
 from app.services.database_access import get_height_width_of_image
 from app.services.postprocessing import postprocess_binary_mask
+from app.services.segmentation import MockupSegmentationModel
+from app.services.segmentation.sam2 import SAM2Tiny, SAM2Small, SAM2Large, SAM2BasePlus
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 # Create router
 router = APIRouter(prefix="/segmentation", tags=["segmentation"])
-prompted_model_cache = ModelCache(config.PromptedSegmentationModelsConfig.available_models)
-automatic_model_cache = ModelCache(config.AutomaticSegmentationModelsConfig.available_models)
+
+
+class PromptedSegmentationModelsConfig:
+    """ This class contains the configuration options for the model. """
+    selected_model = 'SAM2Tiny'
+    available_models = {
+        'Mockup': MockupSegmentationModel,
+        'SAM2Tiny': SAM2Tiny,
+        'SAM2Small': SAM2Small,
+        'SAM2Large': SAM2Large,
+        'SAM2BasePlus': SAM2BasePlus
+    }
+
+
+prompted_model_cache = ModelCache(PromptedSegmentationModelsConfig.available_models)
+
+
+class AutomaticSegmentationModelsConfig:
+    """ This class contains the configuration options for the semantic segmentation model. """
+    selected_model = 'SAM2Tiny'
+    available_models = {
+        'Mockup': MockupSegmentationModel,
+        'SAM2Tiny': SAM2Tiny,
+        'SAM2Small': SAM2Small,
+        'SAM2Large': SAM2Large,
+        'SAM2BasePlus': SAM2BasePlus
+    }
+
+
+automatic_model_cache = ModelCache(AutomaticSegmentationModelsConfig.available_models)
 
 
 @router.post('/segment_image')

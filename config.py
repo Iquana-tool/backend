@@ -1,8 +1,5 @@
 import os
 
-from services.segmentation.sam2 import SAM2Tiny, SAM2Small, SAM2Large, SAM2BasePlus
-from services.segmentation import MockupSegmentationModel
-
 
 class Paths:
     """ This class contains the paths to the project directories. It can be used to access the paths from
@@ -42,25 +39,36 @@ class Paths:
     SAM2p1_BASE_URL = "https://dl.fbaipublicfiles.com/segment_anything_2/092824"
 
 
-class PromptedSegmentationModelsConfig:
-    """ This class contains the configuration options for the model. """
-    selected_model = 'SAM2Tiny'
-    available_models = {
-        'Mockup': MockupSegmentationModel,
-        'SAM2Tiny': SAM2Tiny,
-        'SAM2Small': SAM2Small,
-        'SAM2Large': SAM2Large,
-        'SAM2BasePlus': SAM2BasePlus
-    }
+class SAM2Config:
+    """ Base class for SAM2 model configurations. """
+    __name__ = 'BaseSAM2 class. Do not use this class directly.'
+    weights = None
+    config = None
 
 
-class AutomaticSegmentationModelsConfig:
-    """ This class contains the configuration options for the semantic segmentation model. """
-    selected_model = 'SAM2Tiny'
-    available_models = {
-        'Mockup': MockupSegmentationModel,
-        'SAM2Tiny': SAM2Tiny,
-        'SAM2Small': SAM2Small,
-        'SAM2Large': SAM2Large,
-        'SAM2BasePlus': SAM2BasePlus
-    }
+class SAM2TinyConfig(SAM2Config):
+    """ This class contains the configuration options for the tiny SAM2 model. """
+    __name__ = 'SAM2Tiny'
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.pt')
+    config = os.path.join('configs', 'sam2.1', 'sam2.1_hiera_t.yaml')
+
+
+class SAM2SmallConfig(SAM2Config):
+    """ This class contains the configuration options for the small SAM2 model. """
+    __name__ = 'SAM2Small'
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_small.pt')
+    config = os.path.join('configs', 'sam2.1', 'sam2.1_hiera_s.yaml')
+
+
+class SAM2LargeConfig(SAM2Config):
+    """ This class contains the configuration options for the large SAM2 model. """
+    __name__ = 'SAM2Large'
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.pt')
+    config = os.path.join('configs', 'sam2.1', 'sam2.1_hiera_l.yaml')
+
+
+class SAM2BasePlusConfig(SAM2Config):
+    """ This class contains the configuration options for the base plus SAM2 model. """
+    __name__ = 'SAM2BasePlus'
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_base_plus.pt')
+    config = os.path.join('configs', 'sam2.1', 'sam2.1_hiera_b+.yaml')
