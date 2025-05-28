@@ -37,8 +37,8 @@ def delete_image_from_disk_and_db(image_id: int):
     """Deletes the image files and the embeddings"""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
-        if exists(image.filepath):
-            remove(image.filepath)
+        if exists(image.file_path):
+            remove(image.file_path)
         session.delete(image)
         session.commit()
 
@@ -48,7 +48,7 @@ def load_image_as_base64_from_disk(image_id):
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
     if image:
-        with open(image.filepath, "rb") as image_file:
+        with open(image.file_path, "rb") as image_file:
             image = image_file.read()
         # Encode the image to base64
         return base64.b64encode(image)
@@ -61,7 +61,7 @@ def load_image_as_array_from_disk(image_id):
     with get_context_session() as session:
         image_query_result = session.query(Images).filter_by(id=image_id).first()
     if image_query_result:
-        image = np.array(cv.imread(image_query_result.filepath, cv.IMREAD_COLOR_RGB))
+        image = np.array(cv.imread(image_query_result.file_path, cv.IMREAD_COLOR_RGB))
         if image.shape[0] == image_query_result.width and image.shape[1] == image_query_result.height:
             logger.warning(f"Image {image_id} has different dimensions than expected.")
             image = np.moveaxis(image, 1, 0)
@@ -107,9 +107,9 @@ def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None) 
             if scan_id is None:
                 raise ValueError("Scan ID must be provided for scan datasets.")
             scan = session.query(Scans).filter_by(id=scan_id).first()
-            path = join(config.Paths.datasets_dir, dataset.name, scan.name, "slices")
+            path = join(scan.folder_path, "slices")
         else:
-            path = join(config.Paths.datasets_dir, dataset.name, "images")
+            path = join(dataset.folder_path, "images")
         os.makedirs(path, exist_ok=True)
     file_path = join(path, image.filename)
     with open(file_path, "wb") as file:
@@ -136,8 +136,8 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
             try:
                 # Save the new image to the database
                 # Image comes in HWC format
-                new_entry = Images(filename=image.filename,
-                                   filepath=file_path,
+                new_entry = Images(file_name=image.filename,
+                                   file_path=file_path,
                                    dataset_id=dataset_id,
                                    width=image_array.shape[1],
                                    height=image_array.shape[0],
