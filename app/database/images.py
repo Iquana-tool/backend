@@ -6,15 +6,16 @@ class Images(database):
     __tablename__ = 'images'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False)  # Foreign key to the datasets table
     filename = Column(String, nullable=False)  # Path to the image file
     width = Column(Integer, nullable=False)  # Width of the image in pixels
     height = Column(Integer, nullable=False)  # Height of the image in pixels
     hash_code = Column(String(64), nullable=False, unique=True)  # Hash of the image file
-    scan_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'))  # Scan id for CT or MRI or OCT, etc.
-    index_in_scan = Column(Integer)  # Index of the image in the scan
     scale_x = Column(Float, nullable=True)  # mm per pixel in X
     scale_y = Column(Float, nullable=True)  # mm per pixel in Y
     unit = Column(String(10), default="mm")  # Default unit: mm
+    scan_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'))  # Scan id for CT or MRI or OCT, etc.
+    index_in_scan = Column(Integer)  # Index of the image in the scan
 
     def __repr__(self):
         return (f"<Image(id='{self.id}', "
@@ -45,6 +46,7 @@ class ImageEmbeddings(database):
 class Scans(database):
     __tablename__ = 'scans'
     id = Column(Integer, primary_key=True, autoincrement=True)
+    dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False)  # Foreign key to the datasets table
     name = Column(String, nullable=False)  # Name of the scan
     type = Column(String)  # Type of scan (e.g., 'CT', 'MRI')
     description = Column(String)  # Description of the scan

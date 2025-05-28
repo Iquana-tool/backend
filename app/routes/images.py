@@ -13,10 +13,10 @@ router = APIRouter(prefix="/images", tags=["images"])
 
 
 @router.post("/upload_image")
-async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_session)):
+async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Session = Depends(get_session)):
     """Upload an image file"""
     try:
-        image_id = await save_image_to_disk_and_db(file)
+        image_id = await save_image_to_disk_and_db(file, dataset_id)
         if image_id is None:
             raise HTTPException(status_code=400, detail="Invalid file or upload failed")
 
@@ -24,6 +24,25 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_s
             "success": True,
             "image_id": image_id,
             "message": f"Successfully uploaded image. Assigned id {image_id}"
+        }
+    except Exception as e:
+        logger.error(f"Upload error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload_images")
+async def upload_images(dataset_id: int, files: list[UploadFile] = File(...), db: Session = Depends(get_session)):
+    """Upload multiple image files"""
+    try:
+        image_ids = []
+        for file in files:
+            image_id = (await upload_image(dataset_id, file, db))["image_id"]
+            image_ids.append(image_id)
+
+        return {
+            "success": True,
+            "image_ids": image_ids,
+            "message": f"Successfully uploaded {len(files)} images. Assigned ids {image_ids}"
         }
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
@@ -41,11 +60,11 @@ async def delete_image(image_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/list_images")
-def list_images(db: Session = Depends(get_session)):
+@router.get("/list_images/{dataset_id}")
+def list_images(dataset_id: int, db: Session = Depends(get_session)):
     """List all uploaded image ids"""
     try:
-        images = db.query(Images).all()
+        images = db.query(Images).filter_by(dataset_id=dataset_id).all()
         return {
             "success": True,
             "images": images
@@ -78,7 +97,8 @@ async def get_image(image_id: int):
 
 
 @router.post("/upload_scan")
-async def upload_scan(files: list[UploadFile] = File(...),
+async def upload_scan(dataset_id: int,
+                      files: list[UploadFile] = File(...),
                       name: str = "Scan",
                       scan_type: str = "CT",
                       description: str = "Scan description",
@@ -90,6 +110,7 @@ async def upload_scan(files: list[UploadFile] = File(...),
     # Then save each image file to disk and the database
     # and associate them with the scan entry
     new_scan = Scans(
+        dataset_id=dataset_id,
         name=name,
         type=scan_type,
         description=description,
@@ -100,7 +121,7 @@ async def upload_scan(files: list[UploadFile] = File(...),
     try:
         image_ids = []
         for i, file in enumerate(files):
-            image_id = await save_image_to_disk_and_db(file, new_scan.id, index_in_scan=i)
+            image_id = await save_image_to_disk_and_db(file, dataset_id, new_scan.id, index_in_scan=i)
             if image_id is None:
                 raise HTTPException(status_code=400, detail="Invalid file or upload failed")
             image_ids.append(image_id)
@@ -118,11 +139,12 @@ async def upload_scan(files: list[UploadFile] = File(...),
 
 @router.post("/upload_scan_with_log_file")
 async def upload_scan_with_log_file(
-    files: list[UploadFile] = File(...),
-    log_file: UploadFile = File(...),
-    type: str = "CT",
-    description: str = "Scan description",
-    db: Session = Depends(get_session)
+        dataset_id: int,
+        files: list[UploadFile] = File(...),
+        log_file: UploadFile = File(...),
+        scan_type: str = "CT",
+        description: str = "Scan description",
+        db: Session = Depends(get_session)
 ):
     """Upload a scan file with logging."""
     # First create a new scan entry in the database
@@ -130,10 +152,11 @@ async def upload_scan_with_log_file(
     # and associate them with the scan entry
     log_data = parse_log_file(log_file.file.read())
     return await upload_scan(
+        dataset_id=dataset_id,
         files=files,
         name=log_data["Filename Prefix"],
-        scan_type=log_data["type"],
-        description=log_data["description"],
+        scan_type=scan_type,
+        description=description,
         number_of_slices=len(files),
         #meta_data=log_data,
         db=db

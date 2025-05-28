@@ -1,27 +1,32 @@
 import logging
 from fastapi import APIRouter, HTTPException, Depends
+from pydantic import Field
 from sqlalchemy.orm import Session
 from app.database import get_session
-from app.database.mask_generation import Labels
+from app.database.datasets import Labels
 
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/labels", tags=["labels"])
 
 
-@router.get("/get_labels")
-def get_labels(db: Session = Depends(get_session)):
-    classes = db.query(Labels).all()
+@router.get("/get_labels/{dataset_id}")
+def get_labels(dataset_id: int, db: Session = Depends(get_session)):
+    classes = db.query(Labels).filter_by(dataset_id=dataset_id).all()
     if not classes:
         raise HTTPException(status_code=404, detail="No classes found.")
     return classes
 
 
 @router.post("/create_label")
-async def create_label(label_name: str, parent_label_id: int, db: Session = Depends(get_session)):
+async def create_label(label_name: str,
+                       dataset_id: int,
+                       parent_label_id: int,
+                       label_value: int = None,
+                       db: Session = Depends(get_session)):
     try:
         # Check if class already exists
-        existing_class = db.query(Labels).filter_by(name=label_name).first()
+        existing_class = db.query(Labels).filter_by(dataset_id=dataset_id, name=label_name).first()
         if existing_class:
             raise HTTPException(status_code=400, detail="Label already exists.")
         if parent_label_id:
@@ -29,8 +34,13 @@ async def create_label(label_name: str, parent_label_id: int, db: Session = Depe
             parent_label = db.query(Labels).filter_by(id=parent_label_id).first()
             if not parent_label:
                 raise HTTPException(status_code=404, detail="Parent label not found.")
+        if not label_value:
+            label_value = db.query(Labels).filter_by(dataset_id=dataset_id).count() + 1  # Default value
         # Create a new class
-        new_label = Labels(name=label_name, parent_id=parent_label_id)
+        new_label = Labels(dataset_id=dataset_id,
+                           name=label_name,
+                           parent_id=parent_label_id,
+                           value=label_value)
         db.add(new_label)
         db.commit()
         return {
@@ -43,7 +53,7 @@ async def create_label(label_name: str, parent_label_id: int, db: Session = Depe
         raise HTTPException(status_code=500, detail="Error creating class.")
 
 
-@router.delete("/delete_label/{label_id}")
+@router.delete("/delete_label/label={label_id}")
 async def delete_label(label_id: int, db: Session = Depends(get_session)):
     try:
         # Check if class exists
