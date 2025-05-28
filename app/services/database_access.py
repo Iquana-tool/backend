@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import logging
 import os
 import cv2 as cv
 from logging import getLogger
@@ -38,9 +37,8 @@ def delete_image_from_disk_and_db(image_id: int):
     """Deletes the image files and the embeddings"""
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
-        image_path = join(image.filepath, image.filename)
-        if exists(image_path):
-            remove(image_path)
+        if exists(image.filepath):
+            remove(image.filepath)
         session.delete(image)
         session.commit()
 
@@ -50,8 +48,7 @@ def load_image_as_base64_from_disk(image_id):
     with get_context_session() as session:
         image = session.query(Images).filter_by(id=image_id).first()
     if image:
-        path = join(config.Paths.images_dir, image.filename)
-        with open(path, "rb") as image_file:
+        with open(image.filepath, "rb") as image_file:
             image = image_file.read()
         # Encode the image to base64
         return base64.b64encode(image)
