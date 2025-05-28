@@ -7,6 +7,7 @@ import torch
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2 as build, build_sam2_video_predictor
 from sam2.sam2_image_predictor import SAM2ImagePredictor
+from sam2.sam2_video_predictor import SAM2VideoPredictor
 import config
 from app.services.prompts import Prompts
 from app.services.segmentation.base_model import ScanSegmentationBaseModel
@@ -77,6 +78,7 @@ class SAM2(ScanSegmentationBaseModel):
         self.model_name = model_config.__name__
         self.prompt_predictor = SAM2ImagePredictor(self.model)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model, multimask_output=False)
+        self.stack_predictor: SAM2 = build_sam2_video_predictor(self.config.config, self.config.weights, self.device)
         self.set_image_id = None
 
     def process_prompted_request(self, request: PromptedSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
@@ -93,7 +95,8 @@ class SAM2(ScanSegmentationBaseModel):
         logger.info("Starting segmentation...")
         prompts = Prompts()
         prompts.from_segmentation_request(request)
-        if use_crop or (request.image_id != self.set_image_id):
+        request_unique_id = f"{request.image_id}_{request.min_x}_{request.min_y}_{request.max_x}_{request.max_y}"
+        if use_crop or (request_unique_id != self.set_image_id):
             # If cropping is needed or the image_id has changed, we need to set the image
             # Temporary fix for embedding loading
             image = load_image_as_array_from_disk(request.image_id)
@@ -101,7 +104,7 @@ class SAM2(ScanSegmentationBaseModel):
                                request.max_x, request.max_y,
                                image)
             self.prompt_predictor.set_image(image)
-            self.set_image_id = request.image_id
+            self.set_image_id = request_unique_id
         mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(),
                                                         multimask_output=False,
                                                         normalize_coords=False)
@@ -125,7 +128,7 @@ class SAM2(ScanSegmentationBaseModel):
         """ Propagate the mask across the scan.
             This method should be overridden by subclasses to provide model-specific mask propagation logic.
         """
-        predictor = build_sam2_video_predictor(self.config.config, self.config.weights, self.device)
+        self.stack_predictor.reset_state()
 
 
 class SAM2Tiny(SAM2):
