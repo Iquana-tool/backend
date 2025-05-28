@@ -8,6 +8,7 @@ class Images(database):
     id = Column(Integer, primary_key=True, autoincrement=True)
     dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False)  # Foreign key to the datasets table
     filename = Column(String, nullable=False)  # Path to the image file
+    filepath = Column(String, nullable=False)  # Full path to the image file on disk
     width = Column(Integer, nullable=False)  # Width of the image in pixels
     height = Column(Integer, nullable=False)  # Height of the image in pixels
     hash_code = Column(String(64), nullable=False, unique=True)  # Hash of the image file
