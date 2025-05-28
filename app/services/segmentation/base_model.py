@@ -1,4 +1,4 @@
-from app.schemas.segmentation_and_masks import PromptedSegmentationRequest
+from app.schemas.segmentation_and_masks import PromptedSegmentationRequest, AutomaticSegmentationRequest
 
 
 class SegmentationBaseModel:
@@ -16,7 +16,7 @@ class SegmentationBaseModel:
         """
         raise NotImplementedError("Subclasses should implement this method to process the segmentation request.")
 
-    def process_automatic_request(self, **kwargs) -> tuple[list, list]:
+    def process_automatic_request(self, request: AutomaticSegmentationRequest) -> tuple[list, list]:
         """Process the automatic segmentation request.
         This function calls the prepare_input and segment methods sequentially.
         It allows for individual preparation methods for each model.
