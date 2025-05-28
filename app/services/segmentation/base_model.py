@@ -9,18 +9,22 @@ class SegmentationBaseModel:
         self.model_name = None
 
     def process_prompted_request(self, request: PromptedSegmentationRequest) -> tuple[list, list]:
-        """Process the segmentation request. This function calls the prepare_input and segment methods sequentially.
-        This allows for individual preparation methods for each model. Additionally, the segment method can be
-        overridden in subclasses to provide model-specific segmentation logic like prompted or unprompted segmentation.
-        Each model can also override this method to allow for even more flexibility.
+        """Process the segmentation request. Each prompted segmentation model should implement this method.
+        Args:
+            request (PromptedSegmentationRequest): The segmentation request containing the image and prompts.
+        Returns:
+            tuple: A tuple containing an array of masks and an array of predicted iou scores. Each mask is a binary mask
+            in HW format.
         """
         raise NotImplementedError("Subclasses should implement this method to process the segmentation request.")
 
     def process_automatic_request(self, request: AutomaticSegmentationRequest) -> tuple[list, list]:
-        """Process the automatic segmentation request.
-        This function calls the prepare_input and segment methods sequentially.
-        It allows for individual preparation methods for each model.
-        Each model can override this method to provide model-specific segmentation logic.
+        """Process the automatic segmentation request. Each automatic segmentation model should implement this method.
+        Args:
+            request (AutomaticSegmentationRequest): The segmentation request containing the image and parameters.
+        Returns:
+            tuple: A tuple containing an array of masks and an array of predicted iou scores. Each mask is a mask in HW
+            format, where each pixel contains its label.
         """
         raise NotImplementedError("Subclasses should implement this method to process the automatic segmentation request.")
 
