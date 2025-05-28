@@ -1,12 +1,14 @@
 import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+
+import config
 from app.database import get_session
 from app.schemas.segmentation_and_masks import (
     PromptedSegmentationRequest, SegmentationResponse, ContourModel,
     SegmentationMaskModel, QuantificationsModel, AutomaticSegmentationRequest
 )
-from app.services.segmentation import get_model_via_identifier
+from app.services.segmentation import ModelCache
 from app.services.contours import get_contours
 from app.services.quantifications import ContourQuantifier
 from app.services.database_access import get_height_width_of_image
@@ -17,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 # Create router
 router = APIRouter(prefix="/segmentation", tags=["segmentation"])
+prompted_model_cache = ModelCache(config.PromptedSegmentationModelsConfig.available_models)
+automatic_model_cache = ModelCache(config.AutomaticSegmentationModelsConfig.available_models)
 
 
 @router.post('/segment_image')
@@ -34,7 +38,7 @@ async def segment_image(request: PromptedSegmentationRequest):
         the contours will be remapped to the original image size.
     """
     # Get the model based on the identifier
-    model = get_model_via_identifier(request.model)
+    model = prompted_model_cache.set_and_get_model(request.model)
     logger.debug(f"Using model: {model.model_name}")
 
     # Process the request with the model

@@ -5,31 +5,19 @@ from typing import Union
 
 import numpy as np
 import torch
-from pywin.tools.TraceCollector import outputWindow
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2 as build, build_sam2_video_predictor
 from sam2.sam2_image_predictor import SAM2ImagePredictor
-from app.database import get_context_session
-from app.database.images import ImageEmbeddings
 import config
 from app.services.prompts import Prompts
 from app.services.segmentation.base_model import ScanSegmentationBaseModel, SegmentationBaseModel
 from app.services.database_access import load_image_as_array_from_disk, save_embedding, get_height_width_of_image
-from config import SAM2Config
 from app.schemas.segmentation_and_masks import PromptedSegmentationRequest, AutomaticSegmentationRequest
 from app.services.cropping import crop_image
+from config import Paths
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
-# Global variable to store the current image_id being processed
-_current_image_id = None
-
-
-def set_current_image_id(image_id):
-    """Set the current image_id being processed"""
-    global _current_image_id
-    _current_image_id = image_id
 
 
 def download_checkpoint(ckpt_path: str) -> int:
@@ -140,3 +128,64 @@ class SAM2(ScanSegmentationBaseModel):
         """
         predictor = build_sam2_video_predictor(self.config.config, self.config.weights, self.device)
 
+
+class SAM2Tiny(SAM2):
+    def __init__(self):
+        """ Initialize the SAM2 Tiny model. """
+        super().__init__(model_config=SAM2Config.SAM2Tiny(), device='auto')
+        self.model_name = 'SAM2Tiny'
+
+class SAM2Small(SAM2):
+    def __init__(self):
+        """ Initialize the SAM2 Small model. """
+        super().__init__(model_config=SAM2Config.SAM2Small(), device='auto')
+        self.model_name = 'SAM2Small'
+
+
+class SAM2Large(SAM2):
+    def __init__(self):
+        """ Initialize the SAM2 Large model. """
+        super().__init__(model_config=SAM2Config.SAM2Large(), device='auto')
+        self.model_name = 'SAM2Large'
+
+
+class SAM2BasePlus(SAM2):
+    def __init__(self):
+        """ Initialize the SAM2 Base Plus model. """
+        super().__init__(model_config=SAM2Config.SAM2BasePlus(), device='auto')
+        self.model_name = 'SAM2BasePlus'
+
+
+class SAM2Config:
+    """ Base class for SAM2 model configurations. """
+    __name__ = 'BaseSAM2 class. Do not use this class directly.'
+    weights = None
+    config = None
+
+
+class SAM2TinyConfig(SAM2Config):
+    """ This class contains the configuration options for the tiny SAM2 model. """
+    __name__ = 'SAM2Tiny'
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_tiny.pt')
+    config = os.path.join('configs', 'sam2.1', 'sam2.1_hiera_t.yaml')
+
+
+class SAM2SmallConfig(SAM2Config):
+    """ This class contains the configuration options for the small SAM2 model. """
+    __name__ = 'SAM2Small'
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_small.pt')
+    config = os.path.join('configs', 'sam2.1', 'sam2.1_hiera_s.yaml')
+
+
+class SAM2LargeConfig(SAM2Config):
+    """ This class contains the configuration options for the large SAM2 model. """
+    __name__ = 'SAM2Large'
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_large.pt')
+    config = os.path.join('configs', 'sam2.1', 'sam2.1_hiera_l.yaml')
+
+
+class SAM2BasePlusConfig(SAM2Config):
+    """ This class contains the configuration options for the base plus SAM2 model. """
+    __name__ = 'SAM2BasePlus'
+    weights = os.path.join(Paths.weights_dir, 'sam2.1_hiera_base_plus.pt')
+    config = os.path.join('configs', 'sam2.1', 'sam2.1_hiera_b+.yaml')
