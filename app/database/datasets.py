@@ -9,6 +9,7 @@ class Datasets(database):
     name = Column(String(50), nullable=False)
     description = Column(String(255), nullable=True)
     dataset_type = Column(String(20), nullable=False)  # Type of dataset, e.g., "image", "scan", "DICOM"
+    folder_path = Column(String(255), nullable=False)  # Path to the dataset folder on disk
 
 
 class Labels(database):
