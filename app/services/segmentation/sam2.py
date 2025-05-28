@@ -78,7 +78,7 @@ class SAM2(ScanSegmentationBaseModel):
         self.model_name = model_config.__name__
         self.prompt_predictor = SAM2ImagePredictor(self.model)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model, multimask_output=False)
-        self.stack_predictor: SAM2 = build_sam2_video_predictor(self.config.config, self.config.weights, self.device)
+        self.stack_predictor: SAM2VideoPredictor = build_sam2_video_predictor(self.config.config, self.config.weights, self.device)
         self.set_image_id = None
 
     def process_prompted_request(self, request: PromptedSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:

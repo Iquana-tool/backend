@@ -137,6 +137,31 @@ class AutomaticSegmentationRequest(BaseModel):
         return value
 
 
+class MaskPropagationRequest(BaseModel):
+    """ Model for validating the mask propagation request. """
+    image_id: Annotated[int, "ID of the image to propagate the mask."] = 1
+    model: Annotated[str, "Model to use for mask propagation."] = "SAM2Tiny"
+
+    @field_validator('image_id')
+    def validate_image_id(cls, value):
+        with get_context_session() as session:
+            if value <= 0:
+                raise ValueError("image_id must be a positive integer.")
+            elif session.query(Images).filter_by(id=value).first() is None:
+                raise ValueError("image_id does not exist in the database.")
+            return value
+
+    @field_validator("model")
+    def validate_model(cls, value):
+        return value
+
+    @field_validator('min_x', 'min_y', 'max_x', 'max_y')
+    def validate_coordinates(cls, value):
+        if not (0 <= value <= 1):
+            raise ValueError("Coordinates must be between 0 and 1.")
+        return value
+
+
 class QuantificationsModel(BaseModel):
     """ Model for the quantifications. """
     area: float
