@@ -110,7 +110,7 @@ def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None) 
             path = join(scan.folder_path, "slices")
         else:
             path = join(dataset.folder_path, "images")
-        os.makedirs(path, exist_ok=True)
+    os.makedirs(path, exist_ok=True)
     file_path = join(path, image.filename)
     with open(file_path, "wb") as file:
         file.write(image.file.read())
@@ -120,8 +120,6 @@ def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None) 
 
 async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None, index_in_scan=None) -> int:
     """Save an image to disk and to the database and return the new image ID."""
-    image_data = image.file.read()
-
     # Generate hash for the image
     hash_code = generate_hash_for_image(image)
 
