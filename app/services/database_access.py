@@ -13,7 +13,8 @@ from fastapi import UploadFile
 
 import config
 from app.database import get_context_session
-from app.database.images import Images, ImageEmbeddings
+from app.database.datasets import Datasets
+from app.database.images import Images, Scans
 from app.schemas.segmentation_and_masks import PromptedSegmentationRequest
 
 logger = getLogger(__name__)
@@ -75,13 +76,10 @@ def load_image_as_array_from_disk(image_id):
     with get_context_session() as session:
         image_query_result = session.query(Images).filter_by(id=image_id).first()
     if image_query_result:
-        image = np.array(cv.imread(join(config.Paths.images_dir, image_query_result.filename)))
+        image = np.array(cv.imread(join(image_query_result.file_path, image_query_result.filename), cv.IMREAD_COLOR_RGB))
         if image.shape[0] == image_query_result.width and image.shape[1] == image_query_result.height:
             logger.warning(f"Image {image_id} has different dimensions than expected.")
             image = np.moveaxis(image, 1, 0)
-        if image.shape[-1] != 3:
-            logger.warning("Converting RGBA image to RGB.")
-            image = cv.cvtColor(image, cv.COLOR_RGBA2RGB)
         return np.array(image)
     else:
         return None
@@ -95,18 +93,6 @@ def get_height_width_of_image(image_id: int) -> tuple[int, int]:
         return image.height, image.width
     else:
         raise ValueError(f"Image with ID {image_id} not found in database.")
-
-
-def save_embedding(request: PromptedSegmentationRequest, embedding: dict[str, Union[np.ndarray, list[np.ndarray]]]):
-    with get_context_session() as db:
-        new_embedding = ImageEmbeddings(
-            image_id=request.image_id,
-            model=request.model,
-            embed_dimensions=str(embedding["image_embed"].shape),
-        )
-        db.add(new_embedding)
-        db.commit()
-        save_embeddings_to_disk(embedding, new_embedding.image_id, new_embedding.model)
 
 
 def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], image_id: int,
@@ -126,6 +112,28 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
     np.savez_compressed(str(path), **new_dict)
 
 
+def save_image_to_disk(image: UploadFile, file_path: str):
+    """Save an image file to disk."""
+    if not exists(file_path):
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "wb") as file:
+        file.write(image.file.read())
+    logger.info(f"Image saved to disk at {file_path}")
+    return file_path
+
+
+def get_save_folder_path(dataset_id: int, scan_id: int = None) -> str:
+    """Given a dataset ID and optionally a scan ID, return the path where images and masks folders can be found."""
+    with get_context_session() as session:
+        dataset = session.query(Datasets).filter_by(id=dataset_id).first()
+        if not dataset:
+            raise ValueError(f"Dataset with ID {dataset_id} not found.")
+        if dataset.dataset_type == "scan" and scan_id is not None:
+            scan = session.query(Scans).filter_by(id=scan_id).first()
+            return join(config.Paths.datasets_dir, dataset.name, scan.name, "images")
+        return join(config.Paths.datasets_dir, dataset.name, "images")
+
+
 async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None, index_in_scan=None) -> int:
     """Save an image to disk and to the database and return the new image ID."""
     image_data = image.file.read()
@@ -135,25 +143,18 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
 
     # Check if image already exists in the database
     with get_context_session() as session:
-        images_with_hash = session.query(Images).filter_by(hash_code=hash_code).all()
-        if images_with_hash and dataset_id in [image.dataset_id for image in images_with_hash]:
+        images_with_hash = session.query(Images).filter_by(hash_code=hash_code, dataset_id=dataset_id).all()
+        if images_with_hash:
             return session.query(Images).filter_by(dataset_id=dataset_id, hash_code=hash_code).first().id
         else:
-            next_id = session.query(Images).count() + 1
-            if images_with_hash:
-                file_name = images_with_hash[0].filename
-            else:
-                # Save the new image to disk
-                original_extension = image.filename.split(".")[-1]
-                file_name = f"{next_id}.{original_extension}"
-                path = join(config.Paths.images_dir, file_name)
-                with open(path, "wb") as file:
-                    file.write(image_data)
-                image_array = np.array(Image.open(path))
+            path = get_save_folder_path(dataset_id, scan_id)
+            save_image_to_disk(image, join(path, image.filename))
+            image_array = np.array(cv.imread(join(path, image.filename)))
             try:
                 # Save the new image to the database
-                # Image comes in WHC format because of PIL
-                new_entry = Images(filename=file_name,
+                # Image comes in HWC format
+                new_entry = Images(filename=image.filename,
+                                   filepath=path,
                                    dataset_id=dataset_id,
                                    width=image_array.shape[1],
                                    height=image_array.shape[0],
@@ -166,8 +167,8 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
                 return new_entry.id
             except Exception as e:
                 logger.error(f"Error saving image to database: {str(e)}")
-                logger.error(f"Deleting image '{file_name}' from disk to ensure consistency.")
-                os.remove(path)
+                logger.error(f"Deleting image '{image.file_name}' from disk to ensure consistency.")
+                os.remove(join(path, image.filename))
                 return None
 
 
