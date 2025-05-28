@@ -128,6 +128,8 @@ async def upload_scan(dataset_id: int,
     # Then save each image file to disk and the database
     # and associate them with the scan entry
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
+    if not dataset or dataset.dataset_type != "scan":
+        raise HTTPException(status_code=404, detail="Dataset not found or is not a scan dataset")
     new_scan = Scans(
         dataset_id=dataset_id,
         name=name.strip(),
