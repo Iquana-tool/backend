@@ -1,7 +1,7 @@
 # This file contains classes for prompts
 import cv2
 import numpy as np
-from app.schemas.segmentation_and_masks import PromptedSegmentationRequest
+from app.schemas.segmentation.segmentations import PromptedSegmentationRequest
 
 
 class Prompts:

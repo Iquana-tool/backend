@@ -3,8 +3,9 @@ import logging
 import numpy as np
 from fastapi import APIRouter
 
-from app.schemas.segmentation_and_masks import PromptedSegmentationRequest, SegmentationMaskModel, SegmentationResponse, \
-    AutomaticSegmentationRequest, ContourModel
+from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationMaskModel, SegmentationResponse, \
+    AutomaticSegmentationRequest
+from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.services.contours import get_contours
 from app.services.database_access import get_height_width_of_image
 from app.services.postprocessing import postprocess_binary_mask

@@ -14,7 +14,6 @@ import config
 from app.database import get_context_session
 from app.database.datasets import Datasets
 from app.database.images import Images, Scans
-from app.schemas.segmentation_and_masks import PromptedSegmentationRequest
 
 logger = getLogger(__name__)
 

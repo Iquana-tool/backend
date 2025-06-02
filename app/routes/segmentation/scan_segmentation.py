@@ -1,13 +1,6 @@
 import logging
 
-import numpy as np
 from fastapi import APIRouter
-
-from app.schemas.segmentation_and_masks import PromptedSegmentationRequest, SegmentationMaskModel, SegmentationResponse, \
-    AutomaticSegmentationRequest, ContourModel
-from app.services.contours import get_contours
-from app.services.database_access import get_height_width_of_image
-from app.services.postprocessing import postprocess_binary_mask
 
 from app.services.segmentation import MockupSegmentationModel, ModelCache
 from app.services.segmentation.sam2 import SAM2Tiny, SAM2Small, SAM2Large, SAM2BasePlus

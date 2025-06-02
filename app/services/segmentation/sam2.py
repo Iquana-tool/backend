@@ -12,7 +12,7 @@ import config
 from app.services.prompts import Prompts
 from app.services.segmentation.base_model import ScanSegmentationBaseModel
 from app.services.database_access import load_image_as_array_from_disk
-from app.schemas.segmentation_and_masks import PromptedSegmentationRequest, AutomaticSegmentationRequest
+from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, AutomaticSegmentationRequest
 from app.services.cropping import crop_image
 from config import SAM2Config
 

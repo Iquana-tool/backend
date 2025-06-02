@@ -1,4 +1,4 @@
-from app.schemas.segmentation_and_masks import PromptedSegmentationRequest, AutomaticSegmentationRequest
+from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, AutomaticSegmentationRequest
 
 
 class SegmentationBaseModel:

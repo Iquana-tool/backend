@@ -1,19 +1,12 @@
 import json
 import logging
-import os.path
 
-import cv2
-import numpy as np
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 
-import config
 from app.database import get_session
 from app.database.mask_generation import Masks, Contours
-from app.database.images import Images
-from app.database.datasets import Labels
-from app.schemas.segmentation_and_masks import ContourModel
-from app.services.encoding import base64_decode_string, base64_encode_image
+from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.services.quantifications import ContourQuantifier
 from app.services.mask_generation import (generate_mask, contour_is_enclosed_by_parent,
                                           contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour)
