@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from app.database.images import Images
 from app.database.datasets import Datasets, Labels
 from app.database.mask_generation import Masks
-from app.routes.mask_generation import get_annotation_progress
 
 # Create a router for the export functionality
 router = APIRouter(prefix="/datasets", tags=["datasets"])
