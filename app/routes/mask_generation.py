@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
+from typing import List
 
 import config
 from app.database import get_session
@@ -168,3 +169,188 @@ async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
     except Exception as e:
         logger.error(f"Error deleting contour: {e}")
         raise HTTPException(status_code=500, detail="Error deleting contour.")
+
+
+@router.get("/get_final_mask/{image_id}")
+async def get_final_mask(image_id: int, db: Session = Depends(get_session)):
+    """Get the final mask for an image. Returns the first mask found for the image."""
+    try:
+        # Find the first mask for this image (assuming it's the final mask)
+        mask = db.query(Masks).filter_by(image_id=image_id).first()
+        if not mask:
+            raise HTTPException(status_code=404, detail="No final mask found for this image.")
+        
+        # Get all contours for this mask
+        contours = db.query(Contours).filter_by(mask_id=mask.id).all()
+        
+        # Format contours for frontend
+        formatted_contours = []
+        for contour in contours:
+            coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
+            formatted_contours.append({
+                "id": contour.id,
+                "x": coords["x"],
+                "y": coords["y"],
+                "label": contour.label,
+                "area": contour.area,
+                "perimeter": contour.perimeter,
+                "circularity": contour.circularity
+            })
+        
+        return {
+            "success": True,
+            "mask_id": mask.id,
+            "image_id": image_id,
+            "contours": formatted_contours
+        }
+    except Exception as e:
+        logger.error(f"Error getting final mask: {e}")
+        raise HTTPException(status_code=500, detail="Error getting final mask.")
+
+
+@router.post("/create_final_mask/{image_id}")
+async def create_final_mask(image_id: int, db: Session = Depends(get_session)):
+    """Create a final mask for an image."""
+    try:
+        # Check if image exists
+        image = db.query(Images).filter_by(id=image_id).first()
+        if not image:
+            raise HTTPException(status_code=404, detail="Image not found.")
+        
+        # Check if a mask already exists for this image
+        existing_mask = db.query(Masks).filter_by(image_id=image_id).first()
+        if existing_mask:
+            return {
+                "success": True,
+                "message": "Final mask already exists.",
+                "mask_id": existing_mask.id
+            }
+        
+        # Create a new mask
+        new_mask = Masks(image_id=image_id)
+        db.add(new_mask)
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": "Final mask created successfully.",
+            "mask_id": new_mask.id
+        }
+    except Exception as e:
+        logger.error(f"Error creating final mask: {e}")
+        raise HTTPException(status_code=500, detail="Error creating final mask.")
+
+
+@router.post("/add_contour_to_final_mask/{image_id}")
+async def add_contour_to_final_mask(image_id: int, contour_to_add: ContourModel, db: Session = Depends(get_session)):
+    """Add a single contour to the final mask for an image."""
+    try:
+        # Get or create the final mask for this image
+        mask = db.query(Masks).filter_by(image_id=image_id).first()
+        if not mask:
+            # Create a new mask if none exists
+            mask = Masks(image_id=image_id)
+            db.add(mask)
+            db.commit()
+        
+        # Add the contour using the existing add_contour logic
+        contour = coords_to_cv_contour(contour_to_add.x, contour_to_add.y)
+        
+        # Quantify contour
+        height, width = get_height_width_of_image(image_id)
+        rescaled_x = [int(x * width) for x in contour_to_add.x]
+        rescaled_y = [int(y * height) for y in contour_to_add.y]
+        quantifier = ContourQuantifier().from_coordinates(rescaled_x, rescaled_y)
+        
+        new_contour = Contours(
+            mask_id=mask.id,
+            parent_id=None,  # Final mask contours don't have parents
+            coords=json.dumps({"x": contour_to_add.x, "y": contour_to_add.y}),
+            label=contour_to_add.label,
+            area=quantifier.area,
+            perimeter=quantifier.perimeter,
+            circularity=quantifier.circularity,
+            diameters=json.dumps(quantifier.get_diameters()),
+        )
+        
+        db.add(new_contour)
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": "Contour added to final mask successfully.",
+            "mask_id": mask.id,
+            "contour_id": new_contour.id
+        }
+    except Exception as e:
+        logger.error(f"Error adding contour to final mask: {e}")
+        raise HTTPException(status_code=500, detail="Error adding contour to final mask.")
+
+
+@router.post("/add_contours_to_final_mask/{image_id}")
+async def add_contours_to_final_mask(image_id: int, request_data: dict, db: Session = Depends(get_session)):
+    """Add multiple contours to the final mask for an image."""
+    try:
+        # Extract contours from request data
+        contours_data = request_data.get("contours", [])
+        if not contours_data:
+            raise HTTPException(status_code=400, detail="No contours provided.")
+        
+        # Get or create the final mask for this image
+        mask = db.query(Masks).filter_by(image_id=image_id).first()
+        if not mask:
+            # Create a new mask if none exists
+            mask = Masks(image_id=image_id)
+            db.add(mask)
+            db.commit()
+        
+        added_contour_ids = []
+        height, width = get_height_width_of_image(image_id)
+        
+        for contour_data in contours_data:
+            try:
+                # Validate contour data
+                if not all(key in contour_data for key in ["x", "y", "label"]):
+                    logger.warning(f"Skipping invalid contour data: {contour_data}")
+                    continue
+                
+                # Create ContourModel from data
+                contour_model = ContourModel(
+                    x=contour_data["x"],
+                    y=contour_data["y"],
+                    label=contour_data["label"]
+                )
+                
+                # Quantify contour
+                rescaled_x = [int(x * width) for x in contour_model.x]
+                rescaled_y = [int(y * height) for y in contour_model.y]
+                quantifier = ContourQuantifier().from_coordinates(rescaled_x, rescaled_y)
+                
+                new_contour = Contours(
+                    mask_id=mask.id,
+                    parent_id=None,  # Final mask contours don't have parents
+                    coords=json.dumps({"x": contour_model.x, "y": contour_model.y}),
+                    label=contour_model.label,
+                    area=quantifier.area,
+                    perimeter=quantifier.perimeter,
+                    circularity=quantifier.circularity,
+                    diameters=json.dumps(quantifier.get_diameters()),
+                )
+                
+                db.add(new_contour)
+                db.commit()
+                added_contour_ids.append(new_contour.id)
+                
+            except Exception as contour_error:
+                logger.error(f"Error adding individual contour: {contour_error}")
+                continue
+        
+        return {
+            "success": True,
+            "message": f"Successfully added {len(added_contour_ids)} contours to final mask.",
+            "mask_id": mask.id,
+            "contour_ids": added_contour_ids
+        }
+    except Exception as e:
+        logger.error(f"Error adding contours to final mask: {e}")
+        raise HTTPException(status_code=500, detail="Error adding contours to final mask.")

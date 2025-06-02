@@ -10,6 +10,7 @@ from typing import Union, AnyStr
 
 import numpy as np
 from fastapi import UploadFile
+from PIL import Image
 
 import config
 from app.database import get_context_session

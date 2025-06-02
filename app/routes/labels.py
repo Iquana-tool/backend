@@ -13,9 +13,7 @@ router = APIRouter(prefix="/labels", tags=["labels"])
 @router.get("/get_labels/{dataset_id}")
 def get_labels(dataset_id: int, db: Session = Depends(get_session)):
     classes = db.query(Labels).filter_by(dataset_id=dataset_id).all()
-    if not classes:
-        raise HTTPException(status_code=404, detail="No classes found.")
-    return classes
+    return classes  # Return empty list if no classes found, and don't raise 404 
 
 
 @router.post("/create_label")
