@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import app.routes.segmentation.image_segmentation
 from app.database import get_context_session
-from app.database.images import Images
+from app.database.images import Images, Scans
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.schemas.segmentation.prompts import PointPrompt, BoxPrompt, PolygonPrompt, CirclePrompt
 
@@ -79,28 +79,44 @@ class AutomaticSegmentationRequest(BaseModel):
         return value
 
 
-class MaskPropagationRequest(BaseModel):
+class ScanAutomaticSegmentationRequest(BaseModel):
     """ Model for validating the mask propagation request. """
-    image_id: Annotated[int, "ID of the image to propagate the mask."] = 1
-    model: Annotated[str, "Model to use for mask propagation."] = "SAM2Tiny"
+    scan_id: int = 1
+    model: str = "SAM2Tiny"
 
-    @field_validator('image_id')
-    def validate_image_id(cls, value):
+    @field_validator('scan_id')
+    def validate_scan_id(cls, value):
         with get_context_session() as session:
             if value <= 0:
-                raise ValueError("image_id must be a positive integer.")
-            elif session.query(Images).filter_by(id=value).first() is None:
-                raise ValueError("image_id does not exist in the database.")
+                raise ValueError("scan_id must be a positive integer.")
+            elif session.query(Scans).filter_by(id=value).first() is None:
+                raise ValueError("scan_id does not exist in the database.")
             return value
 
     @field_validator("model")
     def validate_model(cls, value):
         return value
 
-    @field_validator('min_x', 'min_y', 'max_x', 'max_y')
-    def validate_coordinates(cls, value):
-        if not (0 <= value <= 1):
-            raise ValueError("Coordinates must be between 0 and 1.")
+
+class ScanPromptedSegmentationRequest(BaseModel):
+    """ Model for validating the mask propagation request. """
+    scan_id: int = 1
+    prompted_requests: List[PromptedSegmentationRequest] = Field(default_factory=list,
+                                                                    description="List of prompted segmentation requests "
+                                                                                "for the scan.")
+    model: str = "SAM2Tiny"
+
+    @field_validator('scan_id')
+    def validate_scan_id(cls, value):
+        with get_context_session() as session:
+            if value <= 0:
+                raise ValueError("scan_id must be a positive integer.")
+            elif session.query(Scans).filter_by(id=value).first() is None:
+                raise ValueError("scan_id does not exist in the database.")
+            return value
+
+    @field_validator("model")
+    def validate_model(cls, value):
         return value
 
 
