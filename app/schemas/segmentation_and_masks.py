@@ -1,5 +1,7 @@
 from typing import List, Annotated
 from pydantic import BaseModel, Field, field_validator
+
+import app.routes.segmentation.image_segmentation
 from app.database import get_context_session
 from app.database.images import Images
 
@@ -125,9 +127,9 @@ class AutomaticSegmentationRequest(BaseModel):
 
     @field_validator("model")
     def validate_model(cls, value):
-        if not value in routes.segmentation.PromptedSegmentationModelsConfig.available_models.keys():
+        if not value in app.routes.segmentation.image_segmentation.PromptedSegmentationModelsConfig.available_models.keys():
             raise ValueError("Model must be one of {}.".format(
-                routes.segmentation.PromptedSegmentationModelsConfig.available_models.keys()))
+                app.routes.segmentation.image_segmentation.PromptedSegmentationModelsConfig.available_models.keys()))
         return value
 
     @field_validator('min_x', 'min_y', 'max_x', 'max_y')

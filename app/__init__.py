@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 import config
-from app.routes.segmentation import router as segmentation_router
+from app.routes.segmentation.image_segmentation import router as segmentation_router
 from app.routes.images import router as image_router
 from app.routes.mask_generation import router as mask_router
 from app.routes.labels import router as label_router

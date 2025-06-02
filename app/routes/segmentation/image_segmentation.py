@@ -1,23 +1,18 @@
 import logging
 
 import numpy as np
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from app.schemas.segmentation_and_masks import (
-    PromptedSegmentationRequest, SegmentationResponse, ContourModel,
-    SegmentationMaskModel, QuantificationsModel, AutomaticSegmentationRequest
-)
-from app.services.segmentation import ModelCache
+from fastapi import APIRouter
+
+from app.schemas.segmentation_and_masks import PromptedSegmentationRequest, SegmentationMaskModel, SegmentationResponse, \
+    AutomaticSegmentationRequest, ContourModel
 from app.services.contours import get_contours
 from app.services.database_access import get_height_width_of_image
 from app.services.postprocessing import postprocess_binary_mask
-from app.services.segmentation import MockupSegmentationModel
+
+from app.services.segmentation import MockupSegmentationModel, ModelCache
 from app.services.segmentation.sam2 import SAM2Tiny, SAM2Small, SAM2Large, SAM2BasePlus
 
-# Set up logging
 logger = logging.getLogger(__name__)
-
-# Create router
 router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 
 
