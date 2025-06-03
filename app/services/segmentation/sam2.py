@@ -64,6 +64,7 @@ def download_checkpoint(ckpt_path: str) -> int:
 class SAM2Base(SegmentationBaseModel):
     """ Base class for SAM2 models. This class should not be instantiated directly. """
     def __init__(self, model_config, device='auto'):
+        super().__init__()
         self.model = None
         self.model_name = model_config.__name__
         self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
