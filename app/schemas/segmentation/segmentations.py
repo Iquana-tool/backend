@@ -1,5 +1,5 @@
 from typing import List, Annotated
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, Extra, ConfigDict
 
 import app.routes.segmentation.image_segmentation
 from app.database import get_context_session
