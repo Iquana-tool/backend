@@ -10,8 +10,8 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.sam2_video_predictor import SAM2VideoPredictor
 import config
 from app.services.prompts import Prompts
-from app.services.segmentation.base_model import ScanSegmentationBaseModel
-from app.services.database_access import load_image_as_array_from_disk
+from app.services.segmentation.base_model import *
+from app.services.database_access import load_image_as_array_from_disk, get_scan_image_folder_path, get_image_query
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, AutomaticSegmentationRequest
 from app.services.cropping import crop_image
 from config import SAM2Config
@@ -61,25 +61,29 @@ def download_checkpoint(ckpt_path: str) -> int:
         raise
 
 
-class SAM2(ScanSegmentationBaseModel):
+class SAM2Base(SegmentationBaseModel):
+    """ Base class for SAM2 models. This class should not be instantiated directly. """
+    def __init__(self, model_config, device='auto'):
+        self.model = None
+        self.model_name = model_config.__name__
+        self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.config = model_config
+        download_checkpoint(ckpt_path=model_config.weights)
+        self.set_image_id = None  # To track the current image being processed
+
+
+class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
     def __init__(self, model_config: SAM2Config, device='auto'):
-        """ Initialize the SAM2 model.
+        """ Initialize the prompted SAM2 model.
             Args:
                 model_config (config.SAM2Config): The configuration for the SAM2 model.
                 device (str): The device to run the model on. Can be 'cpu', 'cuda', or 'auto'.
         """
-        super().__init__()
-        self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
-        download_checkpoint(ckpt_path=model_config.weights)
-        self.config = model_config
+        super().__init__(model_config, device)
         self.model = build(ckpt_path=model_config.weights,
                            config_file=model_config.config,
                            device=self.device)
-        self.model_name = model_config.__name__
         self.prompt_predictor = SAM2ImagePredictor(self.model)
-        self.mask_generator = SAM2AutomaticMaskGenerator(self.model, multimask_output=False)
-        self.stack_predictor: SAM2VideoPredictor = build_sam2_video_predictor(self.config.config, self.config.weights, self.device)
-        self.set_image_id = None
 
     def process_prompted_request(self, request: PromptedSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
         """ Process the segmentation request.
@@ -110,6 +114,20 @@ class SAM2(ScanSegmentationBaseModel):
                                                         normalize_coords=False)
         return mask, scores
 
+
+class SAM2Automatic(SAM2Base, AutomaticSegmentationBaseModel):
+    def __init__(self, model_config: SAM2Config, device='auto'):
+        """ Initialize the automatic SAM2 model.
+            Args:
+                model_config (config.SAM2Config): The configuration for the SAM2 model.
+                device (str): The device to run the model on. Can be 'cpu', 'cuda', or 'auto'.
+        """
+        super().__init__(model_config, device)
+        self.model = build(ckpt_path=model_config.weights,
+                           config_file=model_config.config,
+                           device=self.device)
+        self.mask_generator = SAM2AutomaticMaskGenerator(self.model, multimask_output=False)
+
     def process_automatic_request(self, request: AutomaticSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
         image = load_image_as_array_from_disk(request.image_id)
         # Check if cropping is needed
@@ -124,35 +142,73 @@ class SAM2(ScanSegmentationBaseModel):
         scores = np.array([mask['stability_score'] for mask in result])
         return masks, scores
 
-    def propagate_mask(self, **kwargs) -> tuple[list, list]:
-        """ Propagate the mask across the scan.
-            This method should be overridden by subclasses to provide model-specific mask propagation logic.
+
+class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
+    def __init__(self, model_config: SAM2Config, device='auto'):
+        """ Initialize the SAM2 model.
+            Args:
+                model_config (config.SAM2Config): The configuration for the SAM2 model.
+                device (str): The device to run the model on. Can be 'cpu', 'cuda', or 'auto'.
         """
-        self.stack_predictor.reset_state()
+        super().__init__(model_config, device)
+        self.stack_predictor: SAM2VideoPredictor = build_sam2_video_predictor(self.config.config,
+                                                                              self.config.weights,
+                                                                              self.device)
+        self.init_state = None
 
+    def set_scan(self, scan_id: int):
+        """ Set the scan for the model.
+            Args:
+                scan_id (int): The ID of the scan to set.
+        """
+        if not (scan_id == self.set_image_id or self.set_image_id is None):
+            # If the scan_id has changed, we need to reset the state
+            self.stack_predictor.init_state()
+            self.set_image_id = scan_id
+            self.init_state = self.stack_predictor.init_state(get_scan_image_folder_path(scan_id))
+        else:
+            # If the scan_id has not changed, we can reuse the state
+            self.stack_predictor.reset_state(self.init_state)
 
-class SAM2Tiny(SAM2):
-    def __init__(self):
-        """ Initialize the SAM2 Tiny model. """
-        super().__init__(model_config=SAM2Config.SAM2Tiny(), device='auto')
-        self.model_name = 'SAM2Tiny'
+    def add_slice_prompt(self, request: PromptedSegmentationRequest):
+        """ Add a slice prompt to the stack predictor.
+            Args:
+                request (PromptedSegmentationRequest): The segmentation request containing the image and prompts.
+        """
+        prompts = Prompts()
+        prompts.from_segmentation_request(request)
+        image = get_image_query(request.image_id)
+        if image is None:
+            raise ValueError(f"Image with ID {request.image_id} not found in database.")
+        if image.scan_id !=  self.set_image_id:
+            raise ValueError(f"Image with ID {request.image_id} does not belong "
+                             f"to the current scan {self.set_image_id}.")
+        prompts.to_SAM2_input()
+        _, out_obj_ids, out_mask_logits = self.stack_predictor.add_new_points_or_box(
+            inference_state=self.init_state,
+            frame_idx=image.index_in_scan,
+            obj_id=1,  # FIXME: here we could track different objects.
+            points=prompts.point_prompts,
+            labels=[int(label) for label in prompts.point_labels],
+            box=prompts.box_prompts,
+        )
 
-class SAM2Small(SAM2):
-    def __init__(self):
-        """ Initialize the SAM2 Small model. """
-        super().__init__(model_config=SAM2Config.SAM2Small(), device='auto')
-        self.model_name = 'SAM2Small'
+    def process_prompted_segmentation_3D_request(self, request: ScanPromptedSegmentationRequest) -> dict:
+        """ Propagate the mask across the scan.
+            Args:
+                request (ScanPromptedSegmentationRequest): The segmentation request containing the scan and prompts.
 
-
-class SAM2Large(SAM2):
-    def __init__(self):
-        """ Initialize the SAM2 Large model. """
-        super().__init__(model_config=SAM2Config.SAM2Large(), device='auto')
-        self.model_name = 'SAM2Large'
-
-
-class SAM2BasePlus(SAM2):
-    def __init__(self):
-        """ Initialize the SAM2 Base Plus model. """
-        super().__init__(model_config=SAM2Config.SAM2BasePlus(), device='auto')
-        self.model_name = 'SAM2BasePlus'
+            Returns:
+                tuple: A tuple containing an array of masks and an array of predicted iou scores.
+        """
+        # FIXME: This method is not correctly implemented. It only tracks one object.
+        self.set_scan(request.scan_id)
+        for prompt_request in request.prompted_requests:
+            self.add_slice_prompt(prompt_request)
+        video_segments = {}
+        for idx, obj_ids, mask_logits in self.stack_predictor.propagate_in_video(self.init_state):
+            video_segments[idx] = {
+                out_obj_id: (mask_logits[i] > 0.0).cpu().numpy()
+                for i, out_obj_id in enumerate(obj_ids)
+            }
+        return video_segments
