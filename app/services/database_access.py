@@ -141,8 +141,12 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
             return session.query(Images).filter_by(dataset_id=dataset_id, hash_code=hash_code).first().id
         else:
             next_id = session.query(Images).count() + 1
+            
             if images_with_hash:
+                # Image with same hash exists but in different dataset, reuse the file
                 file_name = images_with_hash[0].filename
+                path = join(config.Paths.images_dir, file_name)
+                image_array = np.array(Image.open(path))
             else:
                 # Save the new image to disk
                 original_extension = image.filename.split(".")[-1]
@@ -151,6 +155,7 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
                 with open(path, "wb") as file:
                     file.write(image_data)
                 image_array = np.array(Image.open(path))
+                
             try:
                 # Save the new image to the database
                 # Image comes in WHC format because of PIL
@@ -168,7 +173,9 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
             except Exception as e:
                 logger.error(f"Error saving image to database: {str(e)}")
                 logger.error(f"Deleting image '{file_name}' from disk to ensure consistency.")
-                os.remove(path)
+                # Only delete the file if we just created it (not if we're reusing an existing file)
+                if not images_with_hash and os.path.exists(path):
+                    os.remove(path)
                 return None
 
 
