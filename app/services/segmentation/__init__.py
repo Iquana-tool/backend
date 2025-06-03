@@ -2,7 +2,6 @@ import config
 from logging import getLogger
 from app.services.segmentation.base_model import SegmentationBaseModel
 from app.services.segmentation.mockup import MockupSegmentationModel
-from app.services.segmentation.sam2 import SAM2
 
 logger = getLogger(__name__)
 
