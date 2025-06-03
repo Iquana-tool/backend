@@ -152,6 +152,24 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
                 return None
 
 
+def get_scan_image_folder_path(scan_id: int) -> str:
+    """Get the folder path where the scan images are stored."""
+    with get_context_session() as session:
+        scan = session.query(Scans).filter_by(id=scan_id).first()
+        if not scan:
+            raise ValueError(f"Scan with ID {scan_id} not found.")
+        return scan.folder_path + "/images"
+
+
+def get_image_query(image_id: int):
+    """Get the image query from the database by its ID."""
+    with get_context_session() as session:
+        image = session.query(Images).filter_by(id=image_id).first()
+        if not image:
+            raise ValueError(f"Image with ID {image_id} not found.")
+        return image
+
+
 def parse_log_file(log_file: AnyStr):
     """Parse the log file and return the log entries."""
     meta_data = {}
