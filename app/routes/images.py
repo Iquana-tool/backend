@@ -35,14 +35,43 @@ async def upload_images(dataset_id: int, files: list[UploadFile] = File(...), db
     """Upload multiple image files"""
     try:
         image_ids = []
+        uploaded_count = 0
+        existing_count = 0
+        failed_files = []
+        
         for file in files:
-            image_id = (await upload_image(dataset_id, file, db))["image_id"]
-            image_ids.append(image_id)
+            try:
+                image_id = await save_image_to_disk_and_db(file, dataset_id)
+                if image_id is None:
+                    failed_files.append(file.filename)
+                    continue
+                    
+                # Check if this is a new upload or existing image
+                # We can determine this by checking if the image_id was just created
+                # For now, we'll count all successful returns as uploads
+                image_ids.append(image_id)
+                uploaded_count += 1
+                
+            except Exception as e:
+                logger.error(f"Failed to upload file {file.filename}: {str(e)}")
+                failed_files.append(file.filename)
+
+        # Prepare response message
+        if failed_files:
+            if uploaded_count > 0:
+                message = f"Successfully processed {uploaded_count} files. Failed to upload {len(failed_files)} files: {', '.join(failed_files)}"
+            else:
+                message = f"Failed to upload all {len(failed_files)} files: {', '.join(failed_files)}"
+        else:
+            message = f"Successfully processed {uploaded_count} images. Assigned ids {image_ids}"
 
         return {
             "success": True,
             "image_ids": image_ids,
-            "message": f"Successfully uploaded {len(files)} images. Assigned ids {image_ids}"
+            "uploaded_count": uploaded_count,
+            "failed_count": len(failed_files),
+            "failed_files": failed_files,
+            "message": message
         }
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")

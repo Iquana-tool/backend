@@ -137,46 +137,52 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
     # Check if image already exists in the database
     with get_context_session() as session:
         images_with_hash = session.query(Images).filter_by(hash_code=hash_code).all()
-        if images_with_hash and dataset_id in [image.dataset_id for image in images_with_hash]:
-            return session.query(Images).filter_by(dataset_id=dataset_id, hash_code=hash_code).first().id
+        
+        # Check if this exact image already exists in the same dataset
+        existing_in_same_dataset = [img for img in images_with_hash if img.dataset_id == dataset_id]
+        if existing_in_same_dataset:
+            logger.info(f"Image with hash {hash_code} already exists in dataset {dataset_id}, returning existing ID {existing_in_same_dataset[0].id}")
+            return existing_in_same_dataset[0].id
+        
+        # If image exists in other datasets but not this one, create new entry with same file
+        if images_with_hash:
+            logger.info(f"Image with hash {hash_code} exists in other datasets, creating new entry for dataset {dataset_id}")
+            # Image with same hash exists but in different dataset, reuse the file
+            file_name = images_with_hash[0].filename
+            path = join(config.Paths.images_dir, file_name)
+            image_array = np.array(Image.open(path))
         else:
+            # Save the new image to disk
+            logger.info(f"New image with hash {hash_code}, saving to disk and database for dataset {dataset_id}")
             next_id = session.query(Images).count() + 1
+            original_extension = image.filename.split(".")[-1]
+            file_name = f"{next_id}.{original_extension}"
+            path = join(config.Paths.images_dir, file_name)
+            with open(path, "wb") as file:
+                file.write(image_data)
+            image_array = np.array(Image.open(path))
             
-            if images_with_hash:
-                # Image with same hash exists but in different dataset, reuse the file
-                file_name = images_with_hash[0].filename
-                path = join(config.Paths.images_dir, file_name)
-                image_array = np.array(Image.open(path))
-            else:
-                # Save the new image to disk
-                original_extension = image.filename.split(".")[-1]
-                file_name = f"{next_id}.{original_extension}"
-                path = join(config.Paths.images_dir, file_name)
-                with open(path, "wb") as file:
-                    file.write(image_data)
-                image_array = np.array(Image.open(path))
-                
-            try:
-                # Save the new image to the database
-                # Image comes in WHC format because of PIL
-                new_entry = Images(filename=file_name,
-                                   dataset_id=dataset_id,
-                                   width=image_array.shape[1],
-                                   height=image_array.shape[0],
-                                   scan_id=scan_id,
-                                   index_in_scan=index_in_scan,
-                                   hash_code=hash_code)
-                session.add(new_entry)
-                session.commit()
-                logger.info("New image saved to disk and database.")
-                return new_entry.id
-            except Exception as e:
-                logger.error(f"Error saving image to database: {str(e)}")
-                logger.error(f"Deleting image '{file_name}' from disk to ensure consistency.")
-                # Only delete the file if we just created it (not if we're reusing an existing file)
-                if not images_with_hash and os.path.exists(path):
-                    os.remove(path)
-                return None
+        try:
+            # Save the new image to the database
+            # Image comes in WHC format because of PIL
+            new_entry = Images(filename=file_name,
+                               dataset_id=dataset_id,
+                               width=image_array.shape[1],
+                               height=image_array.shape[0],
+                               scan_id=scan_id,
+                               index_in_scan=index_in_scan,
+                               hash_code=hash_code)
+            session.add(new_entry)
+            session.commit()
+            logger.info(f"New image entry saved to database with ID {new_entry.id}")
+            return new_entry.id
+        except Exception as e:
+            logger.error(f"Error saving image to database: {str(e)}")
+            logger.error(f"Deleting image '{file_name}' from disk to ensure consistency.")
+            # Only delete the file if we just created it (not if we're reusing an existing file)
+            if not images_with_hash and os.path.exists(path):
+                os.remove(path)
+            return None
 
 
 def parse_log_file(log_file: AnyStr):

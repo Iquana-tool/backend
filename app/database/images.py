@@ -11,7 +11,7 @@ class Images(database):
     filename = Column(String, nullable=False)  # Path to the image file
     width = Column(Integer, nullable=False)  # Width of the image in pixels
     height = Column(Integer, nullable=False)  # Height of the image in pixels
-    hash_code = Column(String(64), nullable=False, unique=True)  # Hash of the image file
+    hash_code = Column(String(64), nullable=False)  # Hash of the image file
     scale_x = Column(Float, nullable=True)  # mm per pixel in X
     scale_y = Column(Float, nullable=True)  # mm per pixel in Y
     unit = Column(String(10), default="mm")  # Default unit: mm
