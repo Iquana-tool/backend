@@ -79,6 +79,7 @@ class Prompts:
             Every point enclosed by the polygon will be treated as a positive annotation.
         """
         positive_annotations = self.convert_polygon_vertices_to_point_annotations(vertices)
+        positive_annotations += np.mean(np.array(positive_annotations), axis=0).tolist()  # Add the center point
         for x, y in positive_annotations:
             self.add_point_annotation(x, y, 1)
 
