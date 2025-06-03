@@ -1,8 +1,19 @@
-from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, AutomaticSegmentationRequest
+from app.schemas.segmentation.segmentations import (PromptedSegmentationRequest, AutomaticSegmentationRequest,
+                                                    ScanPromptedSegmentationRequest, ScanAutomaticSegmentationRequest)
 
 
 class SegmentationBaseModel:
     """Base class for segmentation models.
+    """
+    def __init__(self):
+        self.model = None
+        self.model_name = None
+
+
+class PromptedSegmentationBaseModel(SegmentationBaseModel):
+    """Base class for prompted segmentation models.
+    This class is intended for models that require user prompts to perform segmentation.
+    It provides a common interface for processing prompted segmentation requests.
     """
     def __init__(self):
         self.model = None
@@ -18,6 +29,12 @@ class SegmentationBaseModel:
         """
         raise NotImplementedError("Subclasses should implement this method to process the segmentation request.")
 
+
+class AutomaticSegmentationBaseModel(SegmentationBaseModel):
+    """Base class for automatic segmentation models.
+    This class is intended for models that perform automatic segmentation without user prompts.
+    It provides a common interface for processing automatic segmentation requests.
+    """
     def process_automatic_request(self, request: AutomaticSegmentationRequest) -> tuple[list, list]:
         """Process the automatic segmentation request. Each automatic segmentation model should implement this method.
         Args:
@@ -29,18 +46,24 @@ class SegmentationBaseModel:
         raise NotImplementedError("Subclasses should implement this method to process the automatic segmentation request.")
 
 
-class ScanSegmentationBaseModel(SegmentationBaseModel):
+class PromptedSegmentation3DBaseModel(SegmentationBaseModel):
     """Base class for segmentation models that handle scans.
     This class is intended for models that work with scans, such as SAM2.
     It provides a common interface for preparing input and segmenting scans.
     """
-    def segment_scan(self, **kwargs) -> tuple[list, list]:
-        """Segment the given scan input.
-        This method should be overridden by subclasses to provide model-specific segmentation logic.
+    def process_prompted_segmentation_3D_request(self, request: ScanPromptedSegmentationRequest):
+        """Propagate the mask across the scan.
+        This method should be overridden by subclasses to provide model-specific mask propagation logic.
         """
         raise NotImplementedError("Subclasses should implement this method.")
 
-    def propagate_mask(self, **kwargs) -> tuple[list, list]:
+
+class AutomaticSegmentation3DBaseModel(SegmentationBaseModel):
+    """Base class for automatic segmentation models that handle scans.
+    This class is intended for models that work with scans, such as SAM2.
+    It provides a common interface for preparing input and segmenting scans.
+    """
+    def process_automatic_segmentation_3D_request(self, request: ScanAutomaticSegmentationRequest) -> tuple[list, list]:
         """Propagate the mask across the scan.
         This method should be overridden by subclasses to provide model-specific mask propagation logic.
         """
