@@ -11,7 +11,9 @@ from app.services.database_access import get_height_width_of_image
 from app.services.postprocessing import postprocess_binary_mask
 
 from app.services.segmentation import MockupSegmentationModel, ModelCache
-from app.services.segmentation.sam2 import SAM2Tiny, SAM2Small, SAM2Large, SAM2BasePlus
+from app.services.segmentation.sam2 import SAM2Prompted, SAM2Automatic
+
+from config import SAM2TinyConfig, SAM2SmallConfig, SAM2LargeConfig, SAM2BasePlusConfig
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/segmentation", tags=["segmentation"])
@@ -22,10 +24,10 @@ class PromptedSegmentationModelsConfig:
     selected_model = 'SAM2Tiny'
     available_models = {
         'Mockup': MockupSegmentationModel,
-        'SAM2Tiny': SAM2Tiny,
-        'SAM2Small': SAM2Small,
-        'SAM2Large': SAM2Large,
-        'SAM2BasePlus': SAM2BasePlus
+        'SAM2Tiny': SAM2Prompted.set_model_config(SAM2TinyConfig),
+        'SAM2Small': SAM2Prompted.set_model_config(SAM2SmallConfig),
+        'SAM2Large': SAM2Prompted.set_model_config(SAM2LargeConfig),
+        'SAM2BasePlus': SAM2Prompted.set_model_config(SAM2BasePlusConfig)
     }
 
 
@@ -37,10 +39,10 @@ class AutomaticSegmentationModelsConfig:
     selected_model = 'SAM2Tiny'
     available_models = {
         'Mockup': MockupSegmentationModel,
-        'SAM2Tiny': SAM2Tiny,
-        'SAM2Small': SAM2Small,
-        'SAM2Large': SAM2Large,
-        'SAM2BasePlus': SAM2BasePlus
+        'SAM2Tiny': SAM2Prompted.set_model_config(SAM2TinyConfig),
+        'SAM2Small': SAM2Prompted.set_model_config(SAM2SmallConfig),
+        'SAM2Large': SAM2Prompted.set_model_config(SAM2LargeConfig),
+        'SAM2BasePlus': SAM2Prompted.set_model_config(SAM2BasePlusConfig)
     }
 
 

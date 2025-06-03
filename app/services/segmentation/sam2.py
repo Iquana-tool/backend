@@ -63,14 +63,25 @@ def download_checkpoint(ckpt_path: str) -> int:
 
 class SAM2Base(SegmentationBaseModel):
     """ Base class for SAM2 models. This class should not be instantiated directly. """
-    def __init__(self, model_config, device='auto'):
+    def __init__(self, model_config=None, device='auto'):
         super().__init__()
         self.model = None
+        if model_config is None:
+            model_config = self.__class__.config
         self.model_name = model_config.__name__
         self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
         self.config = model_config
         download_checkpoint(ckpt_path=model_config.weights)
         self.set_image_id = None  # To track the current image being processed
+
+    @classmethod
+    def set_model_config(cls, model_config):
+        """ Set the model configuration for the SAM2 model.
+            Args:
+                model_config (config.SAM2Config): The configuration for the SAM2 model.
+        """
+        cls.config = model_config
+        logger.info(f"Model configuration set to {model_config.__name__}.")
 
 
 class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
