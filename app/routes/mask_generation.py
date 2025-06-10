@@ -191,12 +191,29 @@ async def get_final_mask(image_id: int, db: Session = Depends(get_session)):
         # Get all labels for this dataset to map label IDs to names
         labels = db.query(Labels).filter_by(dataset_id=image.dataset_id).all()
         label_id_to_name = {label.id: label.name for label in labels}
+        label_id_to_parent = {label.id: label.parent_id for label in labels}
+        
+        # Helper function to get full hierarchy name
+        def get_hierarchical_label_name(label_id):
+            if label_id not in label_id_to_name:
+                return f"Unknown Label ({label_id})"
+            
+            label_name = label_id_to_name[label_id]
+            parent_id = label_id_to_parent.get(label_id)
+            
+            # If this label has a parent, prepend parent name
+            if parent_id and parent_id in label_id_to_name:
+                parent_name = label_id_to_name[parent_id]
+                return f"{parent_name} › {label_name}"
+            
+            return label_name
         
         # Format contours for frontend
         formatted_contours = []
         for contour in contours:
             coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
-            label_name = label_id_to_name.get(contour.label, f"Unknown Label ({contour.label})")
+            diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
+            label_name = get_hierarchical_label_name(contour.label)
             formatted_contours.append({
                 "id": contour.id,
                 "x": coords["x"],
@@ -205,7 +222,8 @@ async def get_final_mask(image_id: int, db: Session = Depends(get_session)):
                 "label_name": label_name,
                 "area": contour.area,
                 "perimeter": contour.perimeter,
-                "circularity": contour.circularity
+                "circularity": contour.circularity,
+                "diameters": diameters
             })
         
         return {
