@@ -180,18 +180,29 @@ async def get_final_mask(image_id: int, db: Session = Depends(get_session)):
         if not mask:
             raise HTTPException(status_code=404, detail="No final mask found for this image.")
         
+        # Get the image to find its dataset_id for label lookup
+        image = db.query(Images).filter_by(id=image_id).first()
+        if not image:
+            raise HTTPException(status_code=404, detail="Image not found.")
+        
         # Get all contours for this mask
         contours = db.query(Contours).filter_by(mask_id=mask.id).all()
+        
+        # Get all labels for this dataset to map label IDs to names
+        labels = db.query(Labels).filter_by(dataset_id=image.dataset_id).all()
+        label_id_to_name = {label.id: label.name for label in labels}
         
         # Format contours for frontend
         formatted_contours = []
         for contour in contours:
             coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
+            label_name = label_id_to_name.get(contour.label, f"Unknown Label ({contour.label})")
             formatted_contours.append({
                 "id": contour.id,
                 "x": coords["x"],
                 "y": coords["y"],
                 "label": contour.label,
+                "label_name": label_name,
                 "area": contour.area,
                 "perimeter": contour.perimeter,
                 "circularity": contour.circularity

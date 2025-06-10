@@ -27,11 +27,14 @@ async def create_label(label_name: str,
         existing_class = db.query(Labels).filter_by(dataset_id=dataset_id, name=label_name).first()
         if existing_class:
             raise HTTPException(status_code=400, detail="Label already exists.")
-        if parent_label_id:
+        if parent_label_id > 0:
             # Check if parent class exists
             parent_label = db.query(Labels).filter_by(id=parent_label_id).first()
             if not parent_label:
                 raise HTTPException(status_code=404, detail="Parent label not found.")
+        elif parent_label_id == 0:
+            # 0 means this is a top-level label (no parent)
+            parent_label_id = None
         if not label_value:
             label_value = db.query(Labels).filter_by(dataset_id=dataset_id).count() + 1  # Default value
         # Create a new class
