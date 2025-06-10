@@ -6,14 +6,12 @@ from fastapi import APIRouter
 
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationMaskModel, SegmentationResponse, \
     AutomaticSegmentationRequest
-from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.services.contours import get_contours
-from app.services.database_access import get_height_width_of_image
 from app.services.postprocessing import postprocess_binary_mask
 
 from app.services.segmentation import MockupSegmentationModel, ModelCache
 from app.services.segmentation.sam2 import SAM2Prompted, SAM2Automatic
-
+from app.routes.segmentation.util import get_masks_responses
 from config import SAM2TinyConfig, SAM2SmallConfig, SAM2LargeConfig, SAM2BasePlusConfig
 
 logger = getLogger(__name__)
@@ -73,13 +71,7 @@ async def segment_image(request: PromptedSegmentationRequest):
     masks, quality = model.process_prompted_request(request)
 
     # Postprocess the masks and get contours
-    masks_response = []
-    for mask, quality in zip(masks, quality):
-        # Get contours of the postprocessed mask if postprocessing is enabled
-        # Postprocessing might improve performance by removing noise
-        contours = get_contours(postprocess_binary_mask(mask) if request.apply_post_processing else mask)
-        contours_response = get_contour_models(contours, request.label, mask.shape[0], mask.shape[1])
-        masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
+    masks_response = get_masks_responses(masks, quality)
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
 
 
@@ -90,38 +82,8 @@ async def generate_mask(request: AutomaticSegmentationRequest):
     model = automatic_model_cache.set_and_get_model(request.model)
     logger.debug(f"Using model: {model.model_name}")
     # Process the request with the model
-    masks, quality = model.process_automatic_request(request)
-    masks_response = []
-    for mask, quality in zip(masks, quality):
-        # Get contours of the postprocessed mask if postprocessing is enabled
-        # Postprocessing might improve performance by removing noise
-        contours_response = []
-        unique_labels = np.unique(mask)
-        for label in unique_labels:
-            if label == 0:
-                continue
-            # Extract the mask for the current label
-            mask_label = (mask == label).astype(np.uint8)
-            contours = get_contours(mask_label)
-            contours_response += get_contour_models(contours, label, mask_label.shape[0], mask_label.shape[1])
-        masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
+    masks, qualities = model.process_automatic_request(request)
+    masks_response = get_masks_responses(masks, qualities)
     return SegmentationResponse(
         masks=masks_response, image_id=request.image_id, model=request.model
     )
-
-
-def get_contour_models(contours, label, height, width):
-    """ Convert contours to ContourModel objects. """
-    contour_models = []
-    for contour in contours:
-        if len(contour) < 3:
-            # Skip contours with less than 3 points
-            continue
-        x_coords = contour[..., 0].flatten() / width  # Normalize x-coordinates
-        y_coords = contour[..., 1].flatten() / height  # Normalize y-coordinates
-        contour_models.append(ContourModel(
-            x=x_coords.tolist(),
-            y=y_coords.tolist(),
-            label=label
-        ))
-    return contour_models
