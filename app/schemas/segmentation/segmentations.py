@@ -23,7 +23,8 @@ class PromptedSegmentationRequest(BaseModel):
                                          description="List of box prompts supplied by the user.")
     polygon_prompts: List[PolygonPrompt] = Field(default_factory=list,
                                                  description="List of polygon prompts supplied by the user.")
-    circle_prompts: List[CirclePrompt] = Field(description="List of circle prompts supplied by the user.")
+    circle_prompts: List[CirclePrompt] = Field(default_factory=list,
+                                               description="List of circle prompts supplied by the user.")
     label: Annotated[int, "Label of the mask."] = 0
 
     @field_validator('image_id')
