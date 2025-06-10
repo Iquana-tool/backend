@@ -1,4 +1,5 @@
-import logging
+from logging import getLogger
+from app.services.logging import log_execution_time
 import os
 import urllib
 
@@ -16,8 +17,7 @@ from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, 
 from app.services.cropping import crop_image
 from config import SAM2Config
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger = getLogger(__name__)
 
 
 def download_checkpoint(ckpt_path: str) -> int:
@@ -74,18 +74,9 @@ class SAM2Base(SegmentationBaseModel):
         download_checkpoint(ckpt_path=model_config.weights)
         self.set_image_id = None  # To track the current image being processed
 
-    @classmethod
-    def set_model_config(cls, model_config):
-        """ Set the model configuration for the SAM2 model.
-            Args:
-                model_config (config.SAM2Config): The configuration for the SAM2 model.
-        """
-        cls.config = model_config
-        logger.info(f"Model configuration set to {model_config.__name__}.")
-
 
 class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
-    def __init__(self, model_config: SAM2Config, device='auto'):
+    def __init__(self, model_config: SAM2Config = None, device='auto'):
         """ Initialize the prompted SAM2 model.
             Args:
                 model_config (config.SAM2Config): The configuration for the SAM2 model.
@@ -97,6 +88,7 @@ class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
                            device=self.device)
         self.prompt_predictor = SAM2ImagePredictor(self.model)
 
+    @log_execution_time
     def process_prompted_request(self, request: PromptedSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
         """ Process the segmentation request.
             Args:
@@ -108,7 +100,6 @@ class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
         # Check if cropping is needed
         use_crop = request.min_x > 0 or request.min_y > 0 or request.max_x < 1 or request.max_y < 1
         # If we do not have a crop, we can load the embedding directly
-        logger.info("Starting segmentation...")
         prompts = Prompts()
         prompts.from_segmentation_request(request)
         request_unique_id = f"{request.image_id}_{request.min_x}_{request.min_y}_{request.max_x}_{request.max_y}"

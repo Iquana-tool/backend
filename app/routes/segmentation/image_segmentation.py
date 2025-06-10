@@ -1,4 +1,5 @@
-import logging
+from logging import getLogger
+from app.services.logging import log_execution_time
 
 import numpy as np
 from fastapi import APIRouter
@@ -15,7 +16,7 @@ from app.services.segmentation.sam2 import SAM2Prompted, SAM2Automatic
 
 from config import SAM2TinyConfig, SAM2SmallConfig, SAM2LargeConfig, SAM2BasePlusConfig
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 
 
@@ -23,30 +24,30 @@ class PromptedSegmentationModelsConfig:
     """ This class contains the configuration options for the model. """
     selected_model = 'SAM2Tiny'
     available_models = {
-        'Mockup': MockupSegmentationModel,
-        'SAM2Tiny': SAM2Prompted.set_model_config(SAM2TinyConfig),
-        'SAM2Small': SAM2Prompted.set_model_config(SAM2SmallConfig),
-        'SAM2Large': SAM2Prompted.set_model_config(SAM2LargeConfig),
-        'SAM2BasePlus': SAM2Prompted.set_model_config(SAM2BasePlusConfig)
+        'Mockup': (MockupSegmentationModel, None),
+        'SAM2Tiny': (SAM2Prompted, SAM2TinyConfig),
+        'SAM2Small': (SAM2Prompted, SAM2SmallConfig),
+        'SAM2Large': (SAM2Prompted, SAM2LargeConfig),
+        'SAM2BasePlus': (SAM2Prompted, SAM2BasePlusConfig)
     }
 
 
-prompted_model_cache = ModelCache(PromptedSegmentationModelsConfig.available_models)
+prompted_model_cache = ModelCache(PromptedSegmentationModelsConfig().available_models)
 
 
 class AutomaticSegmentationModelsConfig:
     """ This class contains the configuration options for the semantic segmentation model. """
     selected_model = 'SAM2Tiny'
     available_models = {
-        'Mockup': MockupSegmentationModel,
-        'SAM2Tiny': SAM2Prompted.set_model_config(SAM2TinyConfig),
-        'SAM2Small': SAM2Prompted.set_model_config(SAM2SmallConfig),
-        'SAM2Large': SAM2Prompted.set_model_config(SAM2LargeConfig),
-        'SAM2BasePlus': SAM2Prompted.set_model_config(SAM2BasePlusConfig)
+        'Mockup': (MockupSegmentationModel, None),
+        'SAM2Tiny': (SAM2Automatic, SAM2TinyConfig),
+        'SAM2Small': (SAM2Automatic, SAM2SmallConfig),
+        'SAM2Large': (SAM2Automatic, SAM2LargeConfig),
+        'SAM2BasePlus': (SAM2Automatic, SAM2BasePlusConfig)
     }
 
 
-automatic_model_cache = ModelCache(AutomaticSegmentationModelsConfig.available_models)
+automatic_model_cache = ModelCache(AutomaticSegmentationModelsConfig().available_models)
 
 
 @router.post('/segment_image')
@@ -65,13 +66,11 @@ async def segment_image(request: PromptedSegmentationRequest):
     """
     # Get the model based on the identifier
     model = prompted_model_cache.set_and_get_model(request.model)
-    logger.debug(f"Using model: {model.model_name}")
 
     # Process the request with the model
     # This method should handle the image preprocessing and segmentation
     # All model specific logic should be encapsulated in the model class
     masks, quality = model.process_prompted_request(request)
-    logger.debug(f"Segmentation completed for image_id: {request.image_id} with {len(masks)} masks.")
 
     # Postprocess the masks and get contours
     height, width = get_height_width_of_image(request.image_id)

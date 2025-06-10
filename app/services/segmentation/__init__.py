@@ -1,13 +1,13 @@
-import config
 from logging import getLogger
 from app.services.segmentation.base_model import SegmentationBaseModel
 from app.services.segmentation.mockup import MockupSegmentationModel
+from app.services.logging import log_execution_time
 
 logger = getLogger(__name__)
 
 
 class ModelCache:
-    def __init__(self, identifier_to_model_func: dict[str, callable]):
+    def __init__(self, identifier_to_model_func: dict[str, tuple[callable, any]]):
         """
         Initializes the ModelCache service which manages segmentation models.
         """
@@ -29,7 +29,7 @@ class ModelCache:
         if self.set_model_identifier is None or self.set_model_identifier != identifier:
             logger.debug(f"Model identifier changed from {self.set_model_identifier} to {identifier}.")
             self.set_model_identifier = identifier
-            self.model = self.identifier_to_model_func[identifier]()
+            self.model = self.identifier_to_model_func[identifier][0](self.identifier_to_model_func[identifier][1])
         else:
             logger.debug(f"Model identifier remains unchanged: {self.set_model_identifier}.")
 
@@ -48,6 +48,7 @@ class ModelCache:
             raise ValueError("No model has been set.")
         return self.model
 
+    @log_execution_time
     def set_and_get_model(self, identifier: str) -> SegmentationBaseModel:
         """
         Sets the segmentation model based on the identifier and returns it.
@@ -61,5 +62,5 @@ class ModelCache:
         Raises:
             ValueError: If the identifier does not match any known model.
         """
-        self.set_model_identifier(identifier)
+        self.set_model(identifier)
         return self.get_model()

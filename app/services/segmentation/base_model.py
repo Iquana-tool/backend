@@ -15,10 +15,6 @@ class PromptedSegmentationBaseModel(SegmentationBaseModel):
     This class is intended for models that require user prompts to perform segmentation.
     It provides a common interface for processing prompted segmentation requests.
     """
-    def __init__(self):
-        self.model = None
-        self.model_name = None
-
     def process_prompted_request(self, request: PromptedSegmentationRequest) -> tuple[list, list]:
         """Process the segmentation request. Each prompted segmentation model should implement this method.
         Args:
