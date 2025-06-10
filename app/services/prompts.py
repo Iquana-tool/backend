@@ -64,7 +64,7 @@ class Prompts:
         """
         if min_x < 0 or min_y < 0 or max_x > 1 or max_y > 1:
             raise ValueError("min_x, min_y, max_x, max_y must be between 0 and 1.")
-        self.box_prompts.append([min_x, min_y, max_x, max_y])
+        self.box_prompts.append(np.array([min_x, min_y, max_x, max_y]))
 
     def remove_box_annotation(self, index: int):
         """ Remove a box annotation from the list of prompts by index. The index corresponds to the order in which the
