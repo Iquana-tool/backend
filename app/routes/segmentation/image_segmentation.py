@@ -73,13 +73,12 @@ async def segment_image(request: PromptedSegmentationRequest):
     masks, quality = model.process_prompted_request(request)
 
     # Postprocess the masks and get contours
-    height, width = get_height_width_of_image(request.image_id)
     masks_response = []
     for mask, quality in zip(masks, quality):
         # Get contours of the postprocessed mask if postprocessing is enabled
         # Postprocessing might improve performance by removing noise
         contours = get_contours(postprocess_binary_mask(mask) if request.apply_post_processing else mask)
-        contours_response = get_contour_models(contours, request.label)
+        contours_response = get_contour_models(contours, request.label, mask.shape[0], mask.shape[1])
         masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
 
@@ -92,7 +91,6 @@ async def generate_mask(request: AutomaticSegmentationRequest):
     logger.debug(f"Using model: {model.model_name}")
     # Process the request with the model
     masks, quality = model.process_automatic_request(request)
-    height, width = get_height_width_of_image(request.image_id)
     masks_response = []
     for mask, quality in zip(masks, quality):
         # Get contours of the postprocessed mask if postprocessing is enabled
@@ -104,23 +102,23 @@ async def generate_mask(request: AutomaticSegmentationRequest):
                 continue
             # Extract the mask for the current label
             mask_label = (mask == label).astype(np.uint8)
-            contours = get_contours(postprocess_binary_mask(mask) if request.apply_post_processing else mask)
-            contours_response += get_contour_models(contours, label)
+            contours = get_contours(mask_label)
+            contours_response += get_contour_models(contours, label, mask_label.shape[0], mask_label.shape[1])
         masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
     return SegmentationResponse(
         masks=masks_response, image_id=request.image_id, model=request.model
     )
 
 
-def get_contour_models(contours, label):
+def get_contour_models(contours, label, height, width):
     """ Convert contours to ContourModel objects. """
     contour_models = []
     for contour in contours:
         if len(contour) < 3:
             # Skip contours with less than 3 points
             continue
-        x_coords = contour[..., 0].flatten()
-        y_coords = contour[..., 1].flatten()
+        x_coords = contour[..., 0].flatten() / width  # Normalize x-coordinates
+        y_coords = contour[..., 1].flatten() / height  # Normalize y-coordinates
         contour_models.append(ContourModel(
             x=x_coords.tolist(),
             y=y_coords.tolist(),
