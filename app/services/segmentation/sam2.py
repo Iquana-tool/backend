@@ -131,6 +131,7 @@ class SAM2Automatic(SAM2Base, AutomaticSegmentationBaseModel):
                            device=self.device)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model, multimask_output=False)
 
+    @log_execution_time
     def process_automatic_request(self, request: AutomaticSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
         image = load_image_as_array_from_disk(request.image_id)
         # Check if cropping is needed
@@ -159,6 +160,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
                                                                               self.device)
         self.init_state = None
 
+    @log_execution_time
     def set_scan(self, scan_id: int):
         """ Set the scan for the model.
             Args:
@@ -173,6 +175,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             # If the scan_id has not changed, we can reuse the state
             self.stack_predictor.reset_state(self.init_state)
 
+    @log_execution_time
     def add_slice_prompt(self, request: PromptedSegmentationRequest):
         """ Add a slice prompt to the stack predictor.
             Args:
@@ -196,6 +199,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             box=prompts.box_prompts,
         )
 
+    @log_execution_time
     def process_prompted_segmentation_3D_request(self, request: ScanPromptedSegmentationRequest) -> dict:
         """ Propagate the mask across the scan.
             Args:
