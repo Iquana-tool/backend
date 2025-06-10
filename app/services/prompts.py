@@ -78,23 +78,39 @@ class Prompts:
         """ Add a polygon prompt to the list of prompts. The polygon vertices should be in the format [(x1, y1), (x2, y2), ...].
             Every point enclosed by the polygon will be treated as a positive annotation.
         """
-        positive_annotations = self.convert_polygon_vertices_to_point_annotations(vertices)
-        positive_annotations += np.mean(np.array(positive_annotations), axis=0).tolist()  # Add the center point
-        for x, y in positive_annotations:
-            self.add_point_annotation(x, y, 1)
+        # We create a slightly larger circle than the polygon to avoid edge effects when sampling points
+        polygon_center_x = np.mean([v[0] for v in vertices])
+        polygon_center_y = np.mean([v[1] for v in vertices])
+        polygon_radius = np.max([np.linalg.norm(np.array(v) - np.array([polygon_center_x, polygon_center_y])) for v in vertices])
+        slightly_larger_radius = polygon_radius * 1.1  # Slightly larger polygon to avoid edge effects
+        grid_size = 10  # Define the grid size for sampling
+        for point_x in np.arange(x - slightly_larger_radius, x + slightly_larger_radius, 2 * slightly_larger_radius / grid_size):
+            for point_y in np.arange(y - slightly_larger_radius, y + slightly_larger_radius, 2 * slightly_larger_radius / grid_size):
+                # Check if the point is inside the circle
+                if (point_x - polygon_center_x) ** 2 + (point_y - polygon_center_y) ** 2 > (slightly_larger_radius * 1.1) ** 2:
+                    # If the point is outside a slightly larger circle, skip it
+                    continue
+                else:
+                    label = cv2.pointPolygonTest(np.array(vertices) * 1000, (point_x * 1000, point_y * 1000), False) >= 0
+                    self.add_point_annotation(point_x, point_y, label)
 
     def add_circle_annotation(self, x: float, y: float, radius: float):
         """ Add a circle prompt to the list of prompts. The circle prompt will add a positive annotation for all points
             within the circle.
         """
-        # Add the center point
-        self.add_point_annotation(x, y, 1)
-        # In a circular manner add points within the circle
-        for _radius in np.arange(0, radius, radius / 3):
-            for angle in range(0, 360, 45):
-                x_coord = x + _radius * np.cos(np.radians(angle))
-                y_coord = y + _radius * np.sin(np.radians(angle))
-                self.add_point_annotation(x_coord, y_coord, 1)
+        # We create a slightly large circle to avoid edge effects when sampling points
+        # Then we lay a grid over the circle and check if the points are inside the circle
+        grid_size = 10  # Define the grid size for sampling
+        slightly_larger_radius = radius * 1.1  # Slightly larger radius to avoid edge effects
+        for point_x in np.arange(x - slightly_larger_radius, x + slightly_larger_radius, 2 * slightly_larger_radius / grid_size):
+            for point_y in np.arange(y - slightly_larger_radius, y + slightly_larger_radius, 2 * slightly_larger_radius / grid_size):
+                # Check if the point is inside the circle
+                if (point_x - x) ** 2 + (point_y - y) ** 2 > (slightly_larger_radius * 1.1) ** 2:
+                    # If the point is outside a slightly larger circle, skip it
+                    continue
+                else:
+                    label = (point_x - x) ** 2 + (point_y - y) ** 2 <= radius ** 2
+                    self.add_point_annotation(point_x, point_y, label)
 
     def get_prompts_as_ndarray(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """ Get the prompts as numpy arrays. The returned arrays should be used as input to the SAM2 model.
