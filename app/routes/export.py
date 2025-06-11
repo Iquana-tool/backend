@@ -3,7 +3,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 import pandas as pd
-import os
+import json
 from io import StringIO
 from app.database import get_session
 from sqlalchemy.orm import Session
@@ -66,4 +66,57 @@ def download_dataset(dataset_id: int, db: Session = Depends(get_session)):
 @router.get("/get_quantification/{mask_id}")
 def get_quantification(mask_id: int, db: Session = Depends(get_session)):
     """ Get quantification data for the given mask_id. """
-    return db.query(Contours).filter_by(mask_id=mask_id).all()
+    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
+
+    # Get mask and image info to find dataset for label lookup
+    mask = db.query(Masks).filter_by(id=mask_id).first()
+    if not mask:
+        return {"success": False, "error": "Mask not found"}
+
+    image = db.query(Images).filter_by(id=mask.image_id).first()
+    if not image:
+        return {"success": False, "error": "Image not found"}
+
+    # Get all labels for this dataset to map label IDs to names with hierarchy
+    labels = db.query(Labels).filter_by(dataset_id=image.dataset_id).all()
+    label_id_to_name = {label.id: label.name for label in labels}
+    label_id_to_parent = {label.id: label.parent_id for label in labels}
+
+    # Helper function to get full hierarchy name
+    def get_hierarchical_label_name(label_id):
+        if label_id not in label_id_to_name:
+            return f"Unknown Label ({label_id})"
+
+        label_name = label_id_to_name[label_id]
+        parent_id = label_id_to_parent.get(label_id)
+
+        # If this label has a parent, prepend parent name
+        if parent_id and parent_id in label_id_to_name:
+            parent_name = label_id_to_name[parent_id]
+            return f"{parent_name} › {label_name}"
+
+        return label_name
+
+    # Format quantifications data for frontend
+    quantifications = []
+    for contour in contours:
+        # Parse diameters from JSON string
+        diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
+        label_name = get_hierarchical_label_name(contour.label)
+
+        quantifications.append({
+            "id": contour.id,
+            "mask_id": contour.mask_id,
+            "label": contour.label,
+            "label_name": label_name,
+            "area": contour.area,
+            "perimeter": contour.perimeter,
+            "circularity": contour.circularity,
+            "diameters": diameters,
+            "coords": json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
+        })
+
+    return {
+        "success": True,
+        "quantifications": quantifications
+    }
