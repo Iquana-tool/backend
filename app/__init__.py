@@ -14,6 +14,7 @@ from app.routes.export import router as export_router
 from app.routes.datasets import router as dataset_router
 from app.routes.models import router as model_router
 from app.database import init_db
+import scripts.add_models_to_db as add_models_to_db
 from logging import getLogger
 
 
@@ -70,5 +71,7 @@ def create_app():
     app.include_router(label_router)
     app.include_router(export_router)
     app.include_router(model_router)
+
+    add_models_to_db.add_models_to_db()
 
     return app
