@@ -13,15 +13,13 @@ router = APIRouter(prefix="/labels", tags=["labels"])
 @router.get("/get_labels/{dataset_id}")
 def get_labels(dataset_id: int, db: Session = Depends(get_session)):
     classes = db.query(Labels).filter_by(dataset_id=dataset_id).all()
-    if not classes:
-        raise HTTPException(status_code=404, detail="No classes found.")
     return classes
 
 
 @router.post("/create_label")
 async def create_label(label_name: str,
                        dataset_id: int,
-                       parent_label_id: int,
+                       parent_label_id: int = None,
                        label_value: int = None,
                        db: Session = Depends(get_session)):
     try:

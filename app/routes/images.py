@@ -40,20 +40,33 @@ async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Sessio
 @router.post("/upload_images")
 async def upload_images(dataset_id: int, files: list[UploadFile] = File(...), db: Session = Depends(get_session)):
     """Upload multiple image files"""
-    try:
-        image_ids = []
-        for file in files:
+    image_ids = []
+    failed_files = []
+    for file in files:
+        try:
             image_id = (await upload_image(dataset_id, file, db))["image_id"]
             image_ids.append(image_id)
+        except HTTPException as e:
+            logger.error(f"Failed to upload {file.filename}: {str(e)}")
+            failed_files.append(file.filename)
 
-        return {
-            "success": True,
-            "image_ids": image_ids,
-            "message": f"Successfully uploaded {len(files)} images. Assigned ids {image_ids}"
+    # Prepare response message
+    if failed_files:
+        if len(image_ids) > 0:
+            message = f"Successfully processed {len(image_ids)} files. Failed to upload {len(failed_files)} files: {', '.join(failed_files)}"
+        else:
+            message = f"Failed to upload all {len(failed_files)} files: {', '.join(failed_files)}"
+    else:
+        message = f"Successfully processed {len(image_ids)} images. Assigned ids {image_ids}"
+
+    return {
+        "success": True,
+        "image_ids": image_ids,
+        "uploaded_count": len(image_ids),
+        "failed_count": len(failed_files),
+        "failed_files": failed_files,
+        "message": message,
         }
-    except Exception as e:
-        logger.error(f"Upload error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/delete_image/{image_id}")

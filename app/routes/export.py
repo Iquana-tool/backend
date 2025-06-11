@@ -1,15 +1,16 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 import pandas as pd
-import os
+import json
 from io import StringIO
 from app.database import get_session
 from sqlalchemy.orm import Session
 from app.database.mask_generation import Masks, Contours
 from app.database.datasets import Datasets, Labels
 from app.database.images import Images
+from services.util import get_hierarchical_label_name
 
 router = APIRouter(prefix="/export", tags=["export"])
 
@@ -66,4 +67,42 @@ def download_dataset(dataset_id: int, db: Session = Depends(get_session)):
 @router.get("/get_quantification/{mask_id}")
 def get_quantification(mask_id: int, db: Session = Depends(get_session)):
     """ Get quantification data for the given mask_id. """
-    return db.query(Contours).filter_by(mask_id=mask_id).all()
+    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
+
+    # Get mask and image info to find dataset for label lookup
+    mask = db.query(Masks).filter_by(id=mask_id).first()
+    if not mask:
+        return {"success": False, "error": "Mask not found"}
+
+    image = db.query(Images).filter_by(id=mask.image_id).first()
+    if not image:
+        return {"success": False, "error": "Image not found"}
+
+    # Get all labels for this dataset to map label IDs to names with hierarchy
+    labels = db.query(Labels).filter_by(dataset_id=image.dataset_id).all()
+    label_id_to_name = {label.id: label.name for label in labels}
+    label_id_to_parent = {label.id: label.parent_id for label in labels}
+
+    # Format quantifications data for frontend
+    quantifications = []
+    for contour in contours:
+        # Parse diameters from JSON string
+        diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
+        label_name = get_hierarchical_label_name(contour.label)
+
+        quantifications.append({
+            "id": contour.id,
+            "mask_id": contour.mask_id,
+            "label": contour.label,
+            "label_name": label_name,
+            "area": contour.area,
+            "perimeter": contour.perimeter,
+            "circularity": contour.circularity,
+            "diameters": diameters,
+            "coords": json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
+        })
+
+    return {
+        "success": True,
+        "quantifications": quantifications
+    }
