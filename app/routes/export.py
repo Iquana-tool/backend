@@ -1,7 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 import pandas as pd
 import json
 from io import StringIO
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.database.mask_generation import Masks, Contours
 from app.database.datasets import Datasets, Labels
 from app.database.images import Images
+from services.util import get_hierarchical_label_name
 
 router = APIRouter(prefix="/export", tags=["export"])
 
@@ -81,21 +82,6 @@ def get_quantification(mask_id: int, db: Session = Depends(get_session)):
     labels = db.query(Labels).filter_by(dataset_id=image.dataset_id).all()
     label_id_to_name = {label.id: label.name for label in labels}
     label_id_to_parent = {label.id: label.parent_id for label in labels}
-
-    # Helper function to get full hierarchy name
-    def get_hierarchical_label_name(label_id):
-        if label_id not in label_id_to_name:
-            return f"Unknown Label ({label_id})"
-
-        label_name = label_id_to_name[label_id]
-        parent_id = label_id_to_parent.get(label_id)
-
-        # If this label has a parent, prepend parent name
-        if parent_id and parent_id in label_id_to_name:
-            parent_name = label_id_to_name[parent_id]
-            return f"{parent_name} › {label_name}"
-
-        return label_name
 
     # Format quantifications data for frontend
     quantifications = []
