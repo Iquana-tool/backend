@@ -1,20 +1,22 @@
 from logging import getLogger
 from app.services.segmentation.base_model import SegmentationBaseModel
+from app.database.models import Models
 from app.services.segmentation.mockup import MockupSegmentationModel
 from app.services.logging import log_execution_time
+from app.database import get_context_session
+from configs.available_models import AvailableModels
 
 logger = getLogger(__name__)
 
 
 class ModelCache:
-    def __init__(self, identifier_to_model_func: dict[str, tuple[callable, any]]):
+    def __init__(self):
         """
         Initializes the ModelCache service which manages segmentation models.
         """
         logger.debug("PromptedModel service initialized.")
         self.model = None
         self.set_model_identifier = None
-        self.identifier_to_model_func = identifier_to_model_func
 
     def set_model(self, identifier: str):
         """
@@ -29,7 +31,15 @@ class ModelCache:
         if self.set_model_identifier is None or self.set_model_identifier != identifier:
             logger.debug(f"Model identifier changed from {self.set_model_identifier} to {identifier}.")
             self.set_model_identifier = identifier
-            self.model = self.identifier_to_model_func[identifier][0](self.identifier_to_model_func[identifier][1])
+            with get_context_session() as session:
+                model_class = session.query(Models).filter_by(identifier=identifier).first()
+                if model_class is None:
+                    logger.error(f"Model with identifier '{identifier}' not found.")
+                    raise ValueError(f"Model with identifier '{identifier}' not found.")
+                self.model = AvailableModels[model_class.model_type][model_class.base_model_identifier](
+                    model_class.weights, model_class.config
+                )
+                logger.debug(f"Model set to: {model_class.name} with identifier {identifier}.")
         else:
             logger.debug(f"Model identifier remains unchanged: {self.set_model_identifier}.")
 

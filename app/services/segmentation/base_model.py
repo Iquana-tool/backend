@@ -6,9 +6,15 @@ from abc import ABC, abstractmethod
 class SegmentationBaseModel(ABC):
     """Base class for segmentation models.
     """
-    def __init__(self):
-        self.model = None
-        self.model_name = None
+    @abstractmethod
+    def __init__(self, path_to_weights: str, path_to_config: str):
+        """Initialize the segmentation model with weights and configuration. Each model must be initializable with
+        exactly these two parameters.
+        Args:
+            path_to_weights (str): Path to the model weights file.
+            path_to_config (str): Path to the model configuration file.
+        """
+        pass
 
 
 class PromptedSegmentationBaseModel(ABC, SegmentationBaseModel):

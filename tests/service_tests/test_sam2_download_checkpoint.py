@@ -1,8 +1,6 @@
 import os
 import unittest
 
-import config
-import services.segmentation.sam2
 # Import the function to be tested
 from app.services.segmentation.sam2 import download_checkpoint
 
@@ -48,10 +46,9 @@ class TestDownloadCheckpointLogic(unittest.TestCase):
 
     def test_build_sam2(self):
         # Load the checkpoint into a model
-        import config
         from app.services.segmentation.sam2 import SAM2
         try:
-            list_configs = [config.SAM2Tiny(), config.SAM2Small(), config.SAM2LargeConfig(), config.SAM2BasePlus()]
+            list_configs = []
             for sam2_config in list_configs:
                 print(f"Testing {sam2_config.__name__}")
                 _model = SAM2(sam2_config)

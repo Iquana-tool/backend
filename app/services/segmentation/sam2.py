@@ -9,13 +9,11 @@ from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2 as build, build_sam2_video_predictor
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.sam2_video_predictor import SAM2VideoPredictor
-import config
 from app.services.prompts import Prompts
 from app.services.segmentation.base_model import *
 from app.services.database_access import load_image_as_array_from_disk, get_scan_image_folder_path, get_image_query
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, AutomaticSegmentationRequest
 from app.services.cropping import crop_image
-from config import SAM2Config
 
 logger = getLogger(__name__)
 
@@ -45,7 +43,7 @@ def download_checkpoint(ckpt_path: str) -> int:
     try:
         # Construct the full URL for the checkpoint file
         ckpt_filename = os.path.basename(ckpt_path)  # Extract the filename from the path
-        ckpt_url = f"{config.Paths.SAM2p1_BASE_URL.rstrip('/')}/{ckpt_filename}"
+        ckpt_url = f"{'https://dl.fbaipublicfiles.com/segment_anything_2/092824'.rstrip('/')}/{ckpt_filename}"
 
         # Download the checkpoint file
         logger.info(f"Downloading checkpoint from {ckpt_url} to {ckpt_path}...")
@@ -63,28 +61,27 @@ def download_checkpoint(ckpt_path: str) -> int:
 
 class SAM2Base(SegmentationBaseModel):
     """ Base class for SAM2 models. This class should not be instantiated directly. """
-    def __init__(self, model_config=None, device='auto'):
-        super().__init__()
+    def __init__(self, path_to_weights, path_to_config, device='auto'):
         self.model = None
-        if model_config is None:
-            model_config = self.__class__.config
-        self.model_name = model_config.__name__
+        self.model_name = "SAM2"
         self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
-        self.config = model_config
+        self.config = path_to_config
+        self.weights = path_to_weights
         download_checkpoint(ckpt_path=model_config.weights)
         self.set_image_id = None  # To track the current image being processed
 
 
 class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
-    def __init__(self, model_config: SAM2Config = None, device='auto'):
+    def __init__(self,  path_to_weights, path_to_config, device='auto'):
         """ Initialize the prompted SAM2 model.
             Args:
-                model_config (config.SAM2Config): The configuration for the SAM2 model.
+                path_to_weights (str): Path to the model weights file.
+                path_to_config (str): Path to the model configuration file.
                 device (str): The device to run the model on. Can be 'cpu', 'cuda', or 'auto'.
         """
-        super().__init__(model_config, device)
-        self.model = build(ckpt_path=model_config.weights,
-                           config_file=model_config.config,
+        super().__init__(path_to_weights, path_to_config, device)
+        self.model = build(ckpt_path=self.weights,
+                           config_file=self.config,
                            device=self.device)
         self.prompt_predictor = SAM2ImagePredictor(self.model)
 
@@ -119,15 +116,16 @@ class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
 
 
 class SAM2Automatic(SAM2Base, AutomaticSegmentationBaseModel):
-    def __init__(self, model_config: SAM2Config, device='auto'):
+    def __init__(self, path_to_weights, path_to_config, device='auto'):
         """ Initialize the automatic SAM2 model.
             Args:
-                model_config (config.SAM2Config): The configuration for the SAM2 model.
+                path_to_weights (str): Path to the model weights file.
+                path_to_config (str): Path to the model configuration file.
                 device (str): The device to run the model on. Can be 'cpu', 'cuda', or 'auto'.
         """
-        super().__init__(model_config, device)
-        self.model = build(ckpt_path=model_config.weights,
-                           config_file=model_config.config,
+        super().__init__(path_to_weights, path_to_config, device)
+        self.model = build(ckpt_path=self.weights,
+                           config_file=self.config,
                            device=self.device)
         self.mask_generator = SAM2AutomaticMaskGenerator(self.model, multimask_output=False)
 
@@ -148,15 +146,16 @@ class SAM2Automatic(SAM2Base, AutomaticSegmentationBaseModel):
 
 
 class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
-    def __init__(self, model_config: SAM2Config, device='auto'):
+    def __init__(self, path_to_weights, path_to_config, device='auto'):
         """ Initialize the SAM2 model.
             Args:
-                model_config (config.SAM2Config): The configuration for the SAM2 model.
+                path_to_weights (str): Path to the model weights file.
+                path_to_config (str): Path to the model configuration file.
                 device (str): The device to run the model on. Can be 'cpu', 'cuda', or 'auto'.
         """
-        super().__init__(model_config, device)
-        self.stack_predictor: SAM2VideoPredictor = build_sam2_video_predictor(self.config.config,
-                                                                              self.config.weights,
+        super().__init__(path_to_weights, path_to_config, device)
+        self.stack_predictor: SAM2VideoPredictor = build_sam2_video_predictor(self.config,
+                                                                              self.weights,
                                                                               self.device)
         self.init_state = None
 

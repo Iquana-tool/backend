@@ -6,46 +6,16 @@ from fastapi import APIRouter
 
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationMaskModel, SegmentationResponse, \
     AutomaticSegmentationRequest
-from app.services.contours import get_contours
-from app.services.postprocessing import postprocess_binary_mask
-
-from app.services.segmentation import MockupSegmentationModel, ModelCache
-from app.services.segmentation.sam2 import SAM2Prompted, SAM2Automatic
+from app.services.segmentation import ModelCache
 from app.routes.segmentation.util import get_masks_responses
-from config import SAM2TinyConfig, SAM2SmallConfig, SAM2LargeConfig, SAM2BasePlusConfig
+
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/segmentation", tags=["segmentation"])
 
 
-class PromptedSegmentationModelsConfig:
-    """ This class contains the configuration options for the model. """
-    selected_model = 'SAM2Tiny'
-    available_models = {
-        'Mockup': (MockupSegmentationModel, None),
-        'SAM2Tiny': (SAM2Prompted, SAM2TinyConfig),
-        'SAM2Small': (SAM2Prompted, SAM2SmallConfig),
-        'SAM2Large': (SAM2Prompted, SAM2LargeConfig),
-        'SAM2BasePlus': (SAM2Prompted, SAM2BasePlusConfig)
-    }
-
-
-prompted_model_cache = ModelCache(PromptedSegmentationModelsConfig().available_models)
-
-
-class AutomaticSegmentationModelsConfig:
-    """ This class contains the configuration options for the semantic segmentation model. """
-    selected_model = 'SAM2Tiny'
-    available_models = {
-        'Mockup': (MockupSegmentationModel, None),
-        'SAM2Tiny': (SAM2Automatic, SAM2TinyConfig),
-        'SAM2Small': (SAM2Automatic, SAM2SmallConfig),
-        'SAM2Large': (SAM2Automatic, SAM2LargeConfig),
-        'SAM2BasePlus': (SAM2Automatic, SAM2BasePlusConfig)
-    }
-
-
-automatic_model_cache = ModelCache(AutomaticSegmentationModelsConfig().available_models)
+prompted_model_cache = ModelCache()
+automatic_model_cache = ModelCache()
 
 
 @router.post('/segment_image')

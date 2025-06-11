@@ -1,11 +1,11 @@
+import os.path
 from typing import List, Annotated
 from pydantic import BaseModel, Field, field_validator, Extra, ConfigDict
-
-import app.routes.segmentation.image_segmentation
 from app.database import get_context_session
 from app.database.images import Images, Scans
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.schemas.segmentation.prompts import PointPrompt, BoxPrompt, PolygonPrompt, CirclePrompt
+from database.models import Models
 
 
 class PromptedSegmentationRequest(BaseModel):
@@ -38,6 +38,16 @@ class PromptedSegmentationRequest(BaseModel):
 
     @field_validator("model")
     def validate_model(cls, value):
+        with get_context_session() as session:
+            model = session.query(Models).filter_by(id=value).first()
+            if not model:
+                raise ValueError(f"Model with id {value} does not exist in the database. Please make sure you ran the "
+                                 f"scripts/add_models_to_db.py script to add the models to the database.")
+            if model.model_type not in "prompted":
+                raise ValueError(f"Model with id {value} is not an prompted segmentation model.")
+            if not (os.path.exists(model.weights) and os.path.exists(model.config)):
+                raise ValueError(f"Model with id {value} has invalid paths for weights or config. Please make sure "
+                                 f"they are correctly added.")
         return value
 
     @field_validator('min_x', 'min_y', 'max_x', 'max_y')
@@ -50,8 +60,8 @@ class PromptedSegmentationRequest(BaseModel):
 class AutomaticSegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
     #apply_post_processing: bool = False
-    image_id: Annotated[int, "ID of the image to segment."] = 1
-    model: Annotated[str, "Model to use for segmentation."] = "SAM2Tiny"
+    image_id: Annotated[int, "ID of the image to segment."]
+    model: Annotated[str, "Model id to use for segmentation."]
     min_x: Annotated[float, "Coordinates must be between 0 and 1."] = 0
     min_y: Annotated[float, "Coordinates must be between 0 and 1."] = 0
     max_x: Annotated[float, "Coordinates must be between 0 and 1."] = 1
@@ -68,9 +78,16 @@ class AutomaticSegmentationRequest(BaseModel):
 
     @field_validator("model")
     def validate_model(cls, value):
-        if not value in app.routes.segmentation.image_segmentation.PromptedSegmentationModelsConfig.available_models.keys():
-            raise ValueError("Model must be one of {}.".format(
-                app.routes.segmentation.image_segmentation.PromptedSegmentationModelsConfig.available_models.keys()))
+        with get_context_session() as session:
+            model = session.query(Models).filter_by(id=value).first()
+            if not model:
+                raise ValueError(f"Model with id {value} does not exist in the database. Please make sure you ran the "
+                                 f"scripts/add_models_to_db.py script to add the models to the database.")
+            if model.model_type not in "automatic":
+                raise ValueError(f"Model with id {value} is not an automatic segmentation model.")
+            if not (os.path.exists(model.weights) and os.path.exists(model.config)):
+                raise ValueError(f"Model with id {value} has invalid paths for weights or config. Please make sure "
+                                 f"they are correctly added.")
         return value
 
     @field_validator('min_x', 'min_y', 'max_x', 'max_y')
@@ -96,6 +113,16 @@ class ScanAutomaticSegmentationRequest(BaseModel):
 
     @field_validator("model")
     def validate_model(cls, value):
+        with get_context_session() as session:
+            model = session.query(Models).filter_by(id=value).first()
+            if not model:
+                raise ValueError(f"Model with id {value} does not exist in the database. Please make sure you ran the "
+                                 f"scripts/add_models_to_db.py script to add the models to the database.")
+            if model.model_type not in "automatic_3d":
+                raise ValueError(f"Model with id {value} is not an automatic 3D segmentation model.")
+            if not (os.path.exists(model.weights) and os.path.exists(model.config)):
+                raise ValueError(f"Model with id {value} has invalid paths for weights or config. Please make sure "
+                                 f"they are correctly added.")
         return value
 
 
@@ -118,6 +145,16 @@ class ScanPromptedSegmentationRequest(BaseModel):
 
     @field_validator("model")
     def validate_model(cls, value):
+        with get_context_session() as session:
+            model = session.query(Models).filter_by(id=value).first()
+            if not model:
+                raise ValueError(f"Model with id {value} does not exist in the database. Please make sure you ran the "
+                                 f"scripts/add_models_to_db.py script to add the models to the database.")
+            if model.model_type not in "prompted_3d":
+                raise ValueError(f"Model with id {value} is not a prompted 3D model segmentation model.")
+            if not (os.path.exists(model.weights) and os.path.exists(model.config)):
+                raise ValueError(f"Model with id {value} has invalid paths for weights or config. Please make sure "
+                                 f"they are correctly added.")
         return value
 
 
