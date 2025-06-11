@@ -1,4 +1,4 @@
-from services.segmentation.sam2 import SAM2Prompted, SAM2Automatic, SAM2Prompted3D
+from app.services.segmentation.sam2 import SAM2Prompted, SAM2Automatic, SAM2Prompted3D
 
 AvailableModels = {
     "prompted": {

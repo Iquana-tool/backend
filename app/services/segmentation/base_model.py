@@ -17,7 +17,7 @@ class SegmentationBaseModel(ABC):
         pass
 
 
-class PromptedSegmentationBaseModel(ABC, SegmentationBaseModel):
+class PromptedSegmentationBaseModel(SegmentationBaseModel):
     """Base class for prompted segmentation models.
     This class is intended for models that require user prompts to perform segmentation.
     It provides a common interface for processing prompted segmentation requests.
@@ -34,7 +34,7 @@ class PromptedSegmentationBaseModel(ABC, SegmentationBaseModel):
         pass
 
 
-class AutomaticSegmentationBaseModel(ABC, SegmentationBaseModel):
+class AutomaticSegmentationBaseModel(SegmentationBaseModel):
     """Base class for automatic segmentation models.
     This class is intended for models that perform automatic segmentation without user prompts.
     It provides a common interface for processing automatic segmentation requests.
@@ -51,7 +51,7 @@ class AutomaticSegmentationBaseModel(ABC, SegmentationBaseModel):
         pass
 
 
-class PromptedSegmentation3DBaseModel(ABC, SegmentationBaseModel):
+class PromptedSegmentation3DBaseModel(SegmentationBaseModel):
     """Base class for segmentation models that handle scans.
     This class is intended for models that work with scans, such as SAM2.
     It provides a common interface for preparing input and segmenting scans.
@@ -64,7 +64,7 @@ class PromptedSegmentation3DBaseModel(ABC, SegmentationBaseModel):
         raise NotImplementedError("Subclasses should implement this method.")
 
 
-class AutomaticSegmentation3DBaseModel(ABC, SegmentationBaseModel):
+class AutomaticSegmentation3DBaseModel(SegmentationBaseModel):
     """Base class for automatic segmentation models that handle scans.
     This class is intended for models that work with scans, such as SAM2.
     It provides a common interface for preparing input and segmenting scans.
