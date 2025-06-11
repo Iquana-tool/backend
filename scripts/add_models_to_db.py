@@ -1,7 +1,7 @@
 """This script adds segmentation models to the database. Add your models with their configurations here."""
 from app.database import get_context_session
 from app.database.models import Models
-from configs.available_models import AvailableModels
+from available_models import AvailableModels
 from logging import getLogger
 
 

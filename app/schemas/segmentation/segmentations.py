@@ -5,7 +5,7 @@ from app.database import get_context_session
 from app.database.images import Images, Scans
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.schemas.segmentation.prompts import PointPrompt, BoxPrompt, PolygonPrompt, CirclePrompt
-from database.models import Models
+from app.database.models import Models
 
 
 class PromptedSegmentationRequest(BaseModel):

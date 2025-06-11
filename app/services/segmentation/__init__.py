@@ -4,7 +4,7 @@ from app.database.models import Models
 from app.services.segmentation.mockup import MockupSegmentationModel
 from app.services.logging import log_execution_time
 from app.database import get_context_session
-from configs.available_models import AvailableModels
+from available_models import AvailableModels
 
 logger = getLogger(__name__)
 

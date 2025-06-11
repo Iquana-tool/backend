@@ -10,7 +10,7 @@ from typing import Union, AnyStr
 import numpy as np
 from fastapi import UploadFile
 
-from configs import paths
+import paths
 from app.database import get_context_session
 from app.database.datasets import Datasets
 from app.database.images import Images, Scans

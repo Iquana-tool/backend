@@ -3,7 +3,6 @@ import shutil
 from fastapi import APIRouter, Depends
 import os
 from typing import Literal
-from configs import paths
 from app.database import get_session
 from sqlalchemy.orm import Session
 from app.database.images import Images

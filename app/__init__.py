@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from configs import paths
+import paths
 from app.routes.segmentation.image_segmentation import router as segmentation_router
 from app.routes.images import router as image_router
 from app.routes.mask_generation import router as mask_router
@@ -21,6 +21,7 @@ logger.setLevel(logging.DEBUG)
 
 
 def create_app():
+    logger.debug("Creating FastAPI application")
     # Load environment variables
     load_dotenv()
     

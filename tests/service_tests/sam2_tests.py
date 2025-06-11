@@ -2,7 +2,7 @@ import os.path
 from PIL import Image
 import numpy as np
 import unittest
-from configs import paths as config
+import paths as config
 from app.services.segmentation.sam2 import SAM2
 from app.services.prompts import Prompts
 

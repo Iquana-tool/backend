@@ -1,7 +1,7 @@
 import logging
 import argparse
 import shutil
-from configs import paths
+import paths
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
