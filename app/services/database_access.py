@@ -10,7 +10,7 @@ from typing import Union, AnyStr
 import numpy as np
 from fastapi import UploadFile
 
-import config
+from configs import paths
 from app.database import get_context_session
 from app.database.datasets import Datasets
 from app.database.images import Images, Scans
@@ -87,7 +87,7 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
             image_id (int): The ID of the image embedding.
             model_name (str): The name of the model used to generate the embedding.
     """
-    base_path = join(config.Paths.embedding_dir, str(image_id))
+    base_path = join(paths.Paths.embedding_dir, str(image_id))
     os.makedirs(base_path, exist_ok=True)
     path = join(base_path, model_name + ".npz")
     new_dict = {"image_embed": embedding["image_embed"]}

@@ -1,12 +1,9 @@
 import shutil
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse, StreamingResponse
-import pandas as pd
 import os
-from io import StringIO
 from typing import Literal
-import config
+from configs import paths
 from app.database import get_session
 from sqlalchemy.orm import Session
 from app.database.images import Images
