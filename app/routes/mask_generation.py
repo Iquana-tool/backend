@@ -11,6 +11,7 @@ from app.services.quantifications import ContourQuantifier
 from app.services.mask_generation import (generate_mask, contour_is_enclosed_by_parent,
                                           contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour)
 from app.services.database_access import get_height_width_of_image
+from app.services.util import get_hierarchical_label_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
@@ -19,6 +20,14 @@ router = APIRouter(prefix="/masks", tags=["masks"])
 @router.put("/create_mask/{image_id}")
 async def create_mask(image_id: int, db: Session = Depends(get_session)):
     try:
+        # Check if mask already exists for the image
+        existing_mask = db.query(Masks).filter_by(image_id=image_id).first()
+        if existing_mask:
+            return {
+                "success": False,
+                "message": "Mask already exists for this image.",
+                "mask_id": existing_mask.id
+            }
         # Create a new mask
         new_mask = Masks(image_id=image_id)
         db.add(new_mask)
@@ -38,7 +47,28 @@ async def get_contours_of_mask(mask_id: int, db: Session = Depends(get_session))
     contours = db.query(Contours).filter_by(mask_id=mask_id).all()
     if not contours:
         raise HTTPException(status_code=404, detail="No contours found for mask.")
-    return contours
+    formatted_contours = []
+    for contour in contours:
+        coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
+        diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
+        label_name = get_hierarchical_label_name(contour.label)
+        formatted_contours.append({
+            "id": contour.id,
+            "x": coords["x"],
+            "y": coords["y"],
+            "label": contour.label,
+            "label_name": label_name,
+            "area": contour.area,
+            "perimeter": contour.perimeter,
+            "circularity": contour.circularity,
+            "diameters": diameters
+        })
+
+    return {
+        "success": True,
+        "mask_id": mask_id,
+        "contours": formatted_contours
+    }
 
 
 @router.get("/get_mask/{mask_id}")
@@ -100,7 +130,8 @@ async def add_contour(mask_id: int,
         # Check if contour overlaps with existing contours on the same level
         contours_on_same_level = db.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_contour_id).all()
         if contours_on_same_level:
-            contours_on_same_level = [coords_to_cv_contour(c.coords["x"], c.coords["y"]) for c in contours_on_same_level]
+            contours_on_same_level = [coords_to_cv_contour(c.coords["x"], c.coords["y"]) for c in
+                                      contours_on_same_level]
             if contour_overlaps_with_existing_on_parent_level(contour, contours_on_same_level):
                 return {
                     "success": False,
@@ -160,3 +191,37 @@ async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
     except Exception as e:
         logger.error(f"Error deleting contour: {e}")
         raise HTTPException(status_code=500, detail="Error deleting contour.")
+
+
+@router.post("/add_contours")
+async def add_contours(mask_id: int,
+                       contours_to_add: list[ContourModel],
+                       parent_contour_id: int = None,
+                       db: Session = Depends(get_session)):
+    failed = []
+    added_ids = []
+    for contour_to_add in contours_to_add:
+        result = await add_contour(mask_id, contour_to_add, parent_contour_id, db)
+        if not result["success"]:
+            failed.append({
+                "contour": contour_to_add,
+                "error": result["message"]
+            })
+        else:
+            added_ids.append(result["contour_id"])
+    if failed:
+        return {
+            "success": False,
+            "message": f"Added {len(added_ids)} contours. Failed to add {len(failed)} contours.",
+            "mask_id": mask_id,
+            "failed": failed,
+            "added_ids": added_ids
+        }
+    else:
+        return {
+            "success": True,
+            "message": "All contours added successfully.",
+            "mask_id": mask_id,
+            "added_ids": added_ids,
+            "failed": []
+        }
