@@ -1,6 +1,9 @@
 app/services/segmentation/weights/*
 !app/services/segmentation/weights/.gitkeep
 
+/app/services/segmentation/configs/*
+!app/services/segmentation/configs/.gitkeep
+
 # Byte-compiled / optimized Python files
 __pycache__/
 *.py[cod]
@@ -52,4 +55,3 @@ docker-compose.override.yml
 logs/
 *.log
 debug.log
-
