@@ -1,5 +1,5 @@
 import shutil
-
+from paths import Paths
 from fastapi import APIRouter, Depends
 import os
 from typing import Literal
@@ -20,7 +20,7 @@ async def create_dataset(name: str,
                          db: Session = Depends(get_session)):
     """Create a new dataset."""
     try:
-        dataset_path = os.path.join(config.Paths.datasets_dir, name)
+        dataset_path = os.path.join(Paths.datasets_dir, name)
         os.makedirs(dataset_path)
         new_dataset = Datasets(name=name.strip(),
                                description=description.strip(),
