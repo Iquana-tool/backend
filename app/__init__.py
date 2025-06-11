@@ -5,14 +5,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-import config
-from app.routes.segmentation import router as segmentation_router
+import paths
+from app.routes.segmentation.image_segmentation import router as segmentation_router
 from app.routes.images import router as image_router
 from app.routes.mask_generation import router as mask_router
 from app.routes.labels import router as label_router
 from app.routes.export import router as export_router
 from app.routes.datasets import router as dataset_router
+from app.routes.models import router as model_router
 from app.database import init_db
+import scripts.add_models_to_db as add_models_to_db
 from logging import getLogger
 
 
@@ -21,6 +23,7 @@ logger.setLevel(logging.DEBUG)
 
 
 def create_app():
+    logger.debug("Creating FastAPI application")
     # Load environment variables
     load_dotenv()
     
@@ -29,9 +32,9 @@ def create_app():
     logger.debug(f"Allowed origins: {allowed_origins}")
 
     # Initialize the directories
-    for directory in [directory for directory in dir(config.Paths) if "dir" in directory and not "__" in directory]:
-        os.makedirs(getattr(config.Paths, directory), exist_ok=True)
-        logger.debug(f"Created directory {getattr(config.Paths, directory)}")
+    for directory in [directory for directory in dir(paths.Paths) if "dir" in directory and not "__" in directory]:
+        os.makedirs(getattr(paths.Paths, directory), exist_ok=True)
+        logger.debug(f"Created directory {getattr(paths.Paths, directory)}")
 
     init_db()
 
@@ -67,5 +70,8 @@ def create_app():
     app.include_router(mask_router)
     app.include_router(label_router)
     app.include_router(export_router)
+    app.include_router(model_router)
+
+    add_models_to_db.add_models_to_db()
 
     return app

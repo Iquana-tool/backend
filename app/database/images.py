@@ -1,5 +1,4 @@
 from sqlalchemy import Column, Integer, String, ForeignKey, Float, JSON
-
 from . import database
 
 
@@ -8,7 +7,8 @@ class Images(database):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False)  # Foreign key to the datasets table
-    filename = Column(String, nullable=False)  # Path to the image file
+    file_name = Column(String, nullable=False)  # Path to the image file
+    file_path = Column(String, nullable=False)  # Full path to the image file on disk
     width = Column(Integer, nullable=False)  # Width of the image in pixels
     height = Column(Integer, nullable=False)  # Height of the image in pixels
     hash_code = Column(String(64), nullable=False, unique=True)  # Hash of the image file
@@ -20,7 +20,7 @@ class Images(database):
 
     def __repr__(self):
         return (f"<Image(id='{self.id}', "
-                f"path='{self.filename}', "
+                f"path='{self.file_name}', "
                 f"width='{self.width}',"
                 f"height='{self.height}')>"
                 f"scale_x='{self.scale_x}', "
@@ -49,6 +49,7 @@ class Scans(database):
     id = Column(Integer, primary_key=True, autoincrement=True)
     dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False)  # Foreign key to the datasets table
     name = Column(String, nullable=False)  # Name of the scan
+    folder_path = Column(String, nullable=False)  # Path to the folder containing the scan images
     type = Column(String)  # Type of scan (e.g., 'CT', 'MRI')
     description = Column(String)  # Description of the scan
     number_of_slices = Column(Integer, nullable=False)  # Number of slices in the scan

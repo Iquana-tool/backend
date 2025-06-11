@@ -1,0 +1,54 @@
+from logging import getLogger
+from fastapi import APIRouter, Depends
+from app.database import get_session, SessionLocal
+from app.database.models import Models
+
+logger = getLogger(__name__)  # Create a router for the models API
+router = APIRouter(
+    prefix="/models",
+    tags=["models"],
+)
+
+
+@router.get("/get_prompted_models")
+def get_prompted_models(db: SessionLocal = Depends(get_session)):
+    """Retrieve all prompted segmentation models from the database."""
+    logger.debug("Fetching prompted segmentation models from the database.")
+    models = db.query(Models).filter(Models.model_type == "prompted").all()
+    if not models:
+        logger.warning("No prompted segmentation models found in the database.")
+        return {"message": "No prompted segmentation models found."}
+    return {"success": True, "models": models}
+
+
+@router.get("/get_automatic_models")
+def get_automatic_models(db: SessionLocal = Depends(get_session)):
+    """Retrieve all automatic segmentation models from the database."""
+    logger.debug("Fetching automatic segmentation models from the database.")
+    models = db.query(Models).filter(Models.model_type == "automatic").all()
+    if not models:
+        logger.warning("No automatic segmentation models found in the database.")
+        return {"message": "No automatic segmentation models found."}
+    return {"success": True, "models": models}
+
+
+@router.get("/get_prompted_3d_models")
+def get_prompted_3d_models(db: SessionLocal = Depends(get_session)):
+    """Retrieve all prompted 3D segmentation models from the database."""
+    logger.debug("Fetching prompted 3D segmentation models from the database.")
+    models = db.query(Models).filter(Models.model_type == "prompted_3d").all()
+    if not models:
+        logger.warning("No prompted 3D segmentation models found in the database.")
+        return {"message": "No prompted 3D segmentation models found."}
+    return {"success": True, "models": models}
+
+
+@router.get("/get_automatic_3d_models")
+def get_automatic_3d_models(db: SessionLocal = Depends(get_session)):
+    """Retrieve all automatic 3D segmentation models from the database."""
+    logger.debug("Fetching automatic 3D segmentation models from the database.")
+    models = db.query(Models).filter(Models.model_type == "automatic_3d").all()
+    if not models:
+        logger.warning("No automatic 3D segmentation models found in the database.")
+        return {"message": "No automatic 3D segmentation models found."}
+    return {"success": True, "models": models}

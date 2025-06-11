@@ -1,8 +1,8 @@
+import shutil
+from paths import Paths
 from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse, StreamingResponse
-import pandas as pd
 import os
-from io import StringIO
+from typing import Literal
 from app.database import get_session
 from sqlalchemy.orm import Session
 from app.database.images import Images
@@ -14,10 +14,18 @@ router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 
 @router.post("/create_dataset")
-async def create_dataset(name: str, description: str, db: Session = Depends(get_session)):
+async def create_dataset(name: str,
+                         description: str,
+                         dataset_type: Literal["image", "scan", "DICOM"],
+                         db: Session = Depends(get_session)):
     """Create a new dataset."""
     try:
-        new_dataset = Datasets(name=name, description=description)
+        dataset_path = os.path.join(Paths.datasets_dir, name)
+        os.makedirs(dataset_path)
+        new_dataset = Datasets(name=name.strip(),
+                               description=description.strip(),
+                               folder_path=dataset_path,
+                               dataset_type=dataset_type)
         db.add(new_dataset)
         db.commit()
         return {"success": True,
@@ -92,10 +100,10 @@ async def delete_dataset(dataset_id: int, db: Session = Depends(get_session)):
         dataset = db.query(Datasets).filter_by(id=dataset_id).first()
         if not dataset:
             return {"success": False, "message": "Dataset not found."}
-
+        # Delete disk directory
+        shutil.rmtree(dataset.folder_path, ignore_errors=True)
         # Delete associated labels
         db.query(Labels).filter_by(dataset_id=dataset_id).delete()
-
         # Delete the dataset
         db.delete(dataset)
         db.commit()

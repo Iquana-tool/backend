@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-from config import Paths
+from paths import Paths
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
