@@ -1,12 +1,12 @@
 """This script adds segmentation models to the database. Add your models with their configurations here."""
+import os.path
+from os import chdir
 from app.database import get_context_session
 from app.database.models import Models
 from available_models import AvailableModels
 from logging import getLogger
 
-
 logger = getLogger(__name__)
-
 
 example_entry = {
     # This is an example entry for a segmentation model.
@@ -19,10 +19,9 @@ example_entry = {
     "version": "1.0",
     "created_at": None,  # Use a timestamp or datetime object if available
     "updated_at": None,  # Use a timestamp or datetime object if available
-    "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pth",
-    "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+    "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+    "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
 }
-
 
 prompted_models_to_add = [
     {
@@ -33,8 +32,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -44,8 +43,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_small.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -55,8 +54,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -66,11 +65,10 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
     },
 ]
-
 
 automatic_models_to_add = [
     {
@@ -81,8 +79,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -92,8 +90,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_small.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -103,8 +101,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -114,11 +112,10 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
     },
 ]
-
 
 prompted_3D_models_to_add = [
     {
@@ -129,8 +126,8 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -140,8 +137,8 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_small.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -151,8 +148,8 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -162,11 +159,10 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pth",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_base_plus.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"  #
     },
 ]
-
 
 automatic_3D_models_to_add = [
 
@@ -175,23 +171,45 @@ automatic_3D_models_to_add = [
 
 def add_models_to_db():
     """Add models to the database."""
+    os.chdir("..")  # Change directory to the base directory of the project
     with get_context_session() as session:
         # Combine all models into a single list
         models_to_add = (
-            prompted_models_to_add +
-            automatic_models_to_add +
-            prompted_3D_models_to_add +
-            automatic_3D_models_to_add
+                prompted_models_to_add +
+                automatic_models_to_add +
+                prompted_3D_models_to_add +
+                automatic_3D_models_to_add
         )
         for model in models_to_add:
-            existing_model = session.query(Models).filter_by(id=model['id']).first()
-            if model["model_type"] not in AvailableModels:
-                logger.warning(f"Model type {model['model_type']} is not available in the configuration. "
-                               f"Skipping model {model['name']}.")
-                continue
+            # Check if the model is already present in the database
+            existing_model = session.query(Models).filter_by(**model).first()
             if existing_model:
-                logger.warning(f"Model {model['name']} already exists in the database."
-                               f"Skipping to avoid duplicates.")
+                logger.error(f"Model {model['name']} already exists in the database."
+                             f"Skipping to avoid duplicates. For updating models, please use the respective routes.")
+                continue
+
+            # Check that the base_model_identifier is available in the configuration. This is important so we can map
+            # the model type to the correct class in the segmentation service.
+            if model["base_model_identifier"] not in (AvailableModels[model["model_type"]]).keys():
+                logger.error(f"Base model {model['base_model_identifier']} is not available in the configuration. "
+                             f"Skipping model {model['name']}. Please add it to the AvailableModels dictionary, before"
+                             f" adding models to the database.")
+                continue
+
+            # Check that weight paths and config paths are valid if they are given
+            if not model["weights"]:
+                logger.warning(f"Model {model['name']} does not have a weights path specified. Ignore this, if there "
+                               f"is no weights file for this model.")
+            elif not os.path.exists(model['weights']):
+                logger.error(f"Model {model['name']} has an invalid weights path. {model['weights']} not found. "
+                             f"Skipping to avoid incomplete entries.")
+                continue
+            if not model["config"]:
+                logger.warning(f"Model {model['name']} does not have a config path specified. Ignore this, if there "
+                               f"is no config file for this model.")
+            elif not model['config']:
+                logger.error(f"Model {model['name']} has an invalid config path. {model['config']} not found. "
+                             f"Skipping to avoid incomplete entries.")
                 continue
 
             new_model = Models(**model)
