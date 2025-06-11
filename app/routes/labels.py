@@ -19,7 +19,7 @@ def get_labels(dataset_id: int, db: Session = Depends(get_session)):
 @router.post("/create_label")
 async def create_label(label_name: str,
                        dataset_id: int,
-                       parent_label_id: int,
+                       parent_label_id: int = None,
                        label_value: int = None,
                        db: Session = Depends(get_session)):
     try:
