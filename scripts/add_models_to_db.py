@@ -13,7 +13,7 @@ example_entry = {
     # You need to add it to the right list below.
     "base_model_identifier": "SAM2Prompted",  # This should match the base model identifier used in an entry
     # of a subdict in paths.py AvailableModels
-    "name": "SAM2 Tiny",
+    "name": "SAM2Tiny",
     "description": "A very small version of the SAM2 model optimized for speed and efficiency.",
     "model_type": "prompted",  # This should match one of the keys used in paths.py Available models class
     "version": "1.0",
@@ -26,7 +26,7 @@ example_entry = {
 prompted_models_to_add = [
     {
         "base_model_identifier": "SAM2Prompted",
-        "name": "SAM2 Tiny",
+        "name": "SAM2Tiny",
         "description": "A very small version of the SAM2 model optimized for speed and efficiency.",
         "model_type": "prompted",
         "version": "1.0",
@@ -37,7 +37,7 @@ prompted_models_to_add = [
     },
     {
         "base_model_identifier": "SAM2Prompted",
-        "name": "SAM2 Small",
+        "name": "SAM2Small",
         "description": "A small version of the SAM2 model with a balance between performance and speed.",
         "model_type": "prompted",
         "version": "1.0",
@@ -48,7 +48,7 @@ prompted_models_to_add = [
     },
     {
         "base_model_identifier": "SAM2Prompted",
-        "name": "SAM2 Large",
+        "name": "SAM2Large",
         "description": "A larger version of the SAM2 model designed for high accuracy.",
         "model_type": "prompted",
         "version": "1.0",
@@ -59,7 +59,7 @@ prompted_models_to_add = [
     },
     {
         "base_model_identifier": "SAM2Prompted",
-        "name": "SAM2 Base Plus",
+        "name": "SAM2BasePlus",
         "description": "The Base version of the SAM2 model.",
         "model_type": "prompted",
         "version": "1.0",
@@ -73,7 +73,7 @@ prompted_models_to_add = [
 automatic_models_to_add = [
     {
         "base_model_identifier": "SAM2Automatic",
-        "name": "SAM2 Tiny",
+        "name": "SAM2Tiny",
         "description": "A very small version of the SAM2 model optimized for speed and efficiency.",
         "model_type": "automatic",
         "version": "1.0",
@@ -84,7 +84,7 @@ automatic_models_to_add = [
     },
     {
         "base_model_identifier": "SAM2Automatic",
-        "name": "SAM2 Small",
+        "name": "SAM2Small",
         "description": "A small version of the SAM2 model with a balance between performance and speed.",
         "model_type": "automatic",
         "version": "1.0",
@@ -95,7 +95,7 @@ automatic_models_to_add = [
     },
     {
         "base_model_identifier": "SAM2Automatic",
-        "name": "SAM2 Large",
+        "name": "SAM2Large",
         "description": "A larger version of the SAM2 model designed for high accuracy.",
         "model_type": "automatic",
         "version": "1.0",
@@ -106,7 +106,7 @@ automatic_models_to_add = [
     },
     {
         "base_model_identifier": "SAM2Automatic",
-        "name": "SAM2 Base Plus",
+        "name": "SAM2BasePlus",
         "description": "The Base version of the SAM2 model.",
         "model_type": "automatic",
         "version": "1.0",
@@ -120,7 +120,7 @@ automatic_models_to_add = [
 prompted_3D_models_to_add = [
     {
         "base_model_identifier": "SAM2Prompted3D",
-        "name": "SAM2 Tiny",
+        "name": "SAM2Tiny",
         "description": "A very small version of the SAM2 model optimized for speed and efficiency.",
         "model_type": "prompted_3d",
         "version": "1.0",
@@ -131,7 +131,7 @@ prompted_3D_models_to_add = [
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
-        "name": "SAM2 Small",
+        "name": "SAM2Small",
         "description": "A small version of the SAM2 model with a balance between performance and speed.",
         "model_type": "prompted_3d",
         "version": "1.0",
@@ -142,7 +142,7 @@ prompted_3D_models_to_add = [
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
-        "name": "SAM2 Large",
+        "name": "SAM2Large",
         "description": "A larger version of the SAM2 model designed for high accuracy.",
         "model_type": "prompted_3d",
         "version": "1.0",
@@ -153,7 +153,7 @@ prompted_3D_models_to_add = [
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
-        "name": "SAM2 Base Plus",
+        "name": "SAM2BasePlus",
         "description": "The Base version of the SAM2 model.",
         "model_type": "prompted_3d",
         "version": "1.0",
@@ -181,6 +181,9 @@ def add_models_to_db():
                 automatic_3D_models_to_add
         )
         for model in models_to_add:
+            if " " in model["name"]:
+                logger.error(f"Model name '{model['name']}' contains spaces. Please use underscores instead.")
+                continue
             # Check if the model is already present in the database
             existing_model = session.query(Models).filter_by(**model).first()
             if existing_model:
