@@ -2,7 +2,7 @@ import logging
 
 from fastapi import APIRouter
 
-from app.services.segmentation import MockupSegmentationModel, ModelCache
+from app.services.segmentation import ModelCache
 from app.services.segmentation.base_model import PromptedSegmentation3DBaseModel, AutomaticSegmentation3DBaseModel
 from app.schemas.segmentation.segmentations import ScanPromptedSegmentationRequest, SegmentationResponse
 
