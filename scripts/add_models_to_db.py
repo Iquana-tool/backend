@@ -19,8 +19,8 @@ example_entry = {
     "version": "1.0",
     "created_at": None,  # Use a timestamp or datetime object if available
     "updated_at": None,  # Use a timestamp or datetime object if available
-    "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
-    "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+    "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+    "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
 }
 
 prompted_models_to_add = [
@@ -32,8 +32,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -43,8 +43,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_small.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -54,8 +54,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -65,8 +65,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
     },
 ]
 
@@ -79,8 +79,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -90,8 +90,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_small.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -101,8 +101,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -112,8 +112,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
     },
 ]
 
@@ -126,8 +126,8 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -137,8 +137,8 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_small.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -148,8 +148,8 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -209,7 +209,7 @@ def add_models_to_db():
             if not model["config"]:
                 logger.warning(f"Model {model['name']} does not have a config path specified. Ignore this, if there "
                                f"is no config file for this model.")
-            elif os.path.exists(os.path.join(Paths.base_dir, model['weights'])):
+            elif not os.path.exists(os.path.join(Paths.base_dir, model['config'])):
                 logger.error(f"Model {model['name']} has an invalid config path. {model['config']} not found. "
                              f"Skipping to avoid incomplete entries.")
                 continue
