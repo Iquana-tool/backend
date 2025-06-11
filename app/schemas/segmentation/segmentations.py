@@ -162,4 +162,4 @@ class SegmentationResponse(BaseModel):
     """ Model for the segmentation response. """
     masks: List[SegmentationMaskModel]
     image_id: int = 0
-    model: str = "SAM2Tiny"
+    model: int

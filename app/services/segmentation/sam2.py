@@ -67,7 +67,7 @@ class SAM2Base(SegmentationBaseModel):
         self.device = device if device != 'auto' else ('cuda' if torch.cuda.is_available() else 'cpu')
         self.config = path_to_config
         self.weights = path_to_weights
-        download_checkpoint(ckpt_path=model_config.weights)
+        download_checkpoint(ckpt_path=path_to_weights)
         self.set_image_id = None  # To track the current image being processed
 
 

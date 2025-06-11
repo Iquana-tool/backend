@@ -1,3 +1,4 @@
+import os
 from logging import getLogger
 from app.services.segmentation.base_model import SegmentationBaseModel
 from app.database.models import Models
@@ -5,6 +6,7 @@ from app.services.segmentation.mockup import MockupSegmentationModel
 from app.services.logging import log_execution_time
 from app.database import get_context_session
 from available_models import AvailableModels
+from paths import Paths
 
 logger = getLogger(__name__)
 
@@ -32,12 +34,13 @@ class ModelCache:
             logger.debug(f"Model identifier changed from {self.set_model_identifier} to {identifier}.")
             self.set_model_identifier = identifier
             with get_context_session() as session:
-                model_class = session.query(Models).filter_by(identifier=identifier).first()
+                model_class = session.query(Models).filter_by(id=identifier).first()
                 if model_class is None:
                     logger.error(f"Model with identifier '{identifier}' not found.")
                     raise ValueError(f"Model with identifier '{identifier}' not found.")
                 self.model = AvailableModels[model_class.model_type][model_class.base_model_identifier](
-                    model_class.weights, model_class.config
+                    os.path.join(Paths.base_dir, model_class.weights),
+                    os.path.join(Paths.base_dir, model_class.config),
                 )
                 logger.debug(f"Model set to: {model_class.name} with identifier {identifier}.")
         else:

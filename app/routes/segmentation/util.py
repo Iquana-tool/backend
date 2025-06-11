@@ -19,6 +19,7 @@ def get_masks_responses(masks, qualities):
             contours = get_contours(mask_label)
             contours_response += get_contour_models(contours, label, mask_label.shape[0], mask_label.shape[1])
         masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
+    return masks_response
 
 
 def get_contour_models(contours, label, height, width):
