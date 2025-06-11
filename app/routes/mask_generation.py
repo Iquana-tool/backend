@@ -109,7 +109,6 @@ async def add_contour(mask_id: int,
                 }
 
         # Quantify contour
-        quantifier = ContourQuantifier().from_coordinates(contour_to_add.x, contour_to_add.y)
         height, width = get_height_width_of_image(existing_mask.image_id)
         rescaled_x = [int(x * width) for x in contour_to_add.x]
         rescaled_y = [int(y * height) for y in contour_to_add.y]
