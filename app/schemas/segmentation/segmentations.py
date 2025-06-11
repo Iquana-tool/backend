@@ -16,7 +16,7 @@ def check_model(model_id: Union[int, str], model_type: Literal["prompted", "auto
             try:
                 model_id = int(model_id)
             except ValueError:
-                model = session.query(Models).filter_by(base_model_identifier=model_id).first()
+                model = session.query(Models).filter_by(name=model_id).first()
                 if not model:
                     raise ValueError(f"Model with identifier '{model_id}' does not exist in the database. Please "
                                      f"make sure you ran the scripts/add_models_to_db.py script to add the models "
