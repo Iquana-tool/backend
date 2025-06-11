@@ -1,6 +1,6 @@
 """This script adds segmentation models to the database. Add your models with their configurations here."""
 import os.path
-from os import chdir
+from paths import Paths
 from app.database import get_context_session
 from app.database.models import Models
 from available_models import AvailableModels
@@ -171,7 +171,6 @@ automatic_3D_models_to_add = [
 
 def add_models_to_db():
     """Add models to the database."""
-    os.chdir("..")  # Change directory to the base directory of the project
     with get_context_session() as session:
         # Combine all models into a single list
         models_to_add = (
@@ -203,14 +202,14 @@ def add_models_to_db():
             if not model["weights"]:
                 logger.warning(f"Model {model['name']} does not have a weights path specified. Ignore this, if there "
                                f"is no weights file for this model.")
-            elif not os.path.exists(model['weights']):
+            elif not os.path.exists(os.path.join(Paths.base_dir, model['weights'])):
                 logger.error(f"Model {model['name']} has an invalid weights path. {model['weights']} not found. "
                              f"Skipping to avoid incomplete entries.")
                 continue
             if not model["config"]:
                 logger.warning(f"Model {model['name']} does not have a config path specified. Ignore this, if there "
                                f"is no config file for this model.")
-            elif not model['config']:
+            elif os.path.exists(os.path.join(Paths.base_dir, model['weights'])):
                 logger.error(f"Model {model['name']} has an invalid config path. {model['config']} not found. "
                              f"Skipping to avoid incomplete entries.")
                 continue
