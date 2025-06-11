@@ -18,7 +18,7 @@ def get_prompted_models(db: SessionLocal = Depends(get_session)):
     if not models:
         logger.warning("No prompted segmentation models found in the database.")
         return {"message": "No prompted segmentation models found."}
-    return {"models": [model.to_dict() for model in models]}
+    return {"success": True, "models": models}
 
 
 @router.get("/get_automatic_models")
@@ -29,7 +29,7 @@ def get_automatic_models(db: SessionLocal = Depends(get_session)):
     if not models:
         logger.warning("No automatic segmentation models found in the database.")
         return {"message": "No automatic segmentation models found."}
-    return {"models": [model.to_dict() for model in models]}
+    return {"success": True, "models": models}
 
 
 @router.get("/get_prompted_3d_models")
@@ -40,7 +40,7 @@ def get_prompted_3d_models(db: SessionLocal = Depends(get_session)):
     if not models:
         logger.warning("No prompted 3D segmentation models found in the database.")
         return {"message": "No prompted 3D segmentation models found."}
-    return {"models": [model.to_dict() for model in models]}
+    return {"success": True, "models": models}
 
 
 @router.get("/get_automatic_3d_models")
@@ -51,4 +51,4 @@ def get_automatic_3d_models(db: SessionLocal = Depends(get_session)):
     if not models:
         logger.warning("No automatic 3D segmentation models found in the database.")
         return {"message": "No automatic 3D segmentation models found."}
-    return {"models": [model.to_dict() for model in models]}
+    return {"success": True, "models": models}
