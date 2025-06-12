@@ -40,8 +40,7 @@ RUN apt-get update --allow-unauthenticated && \
 COPY . .
 
 # Create necessary directories for data and database
-RUN mkdir -p data/meso-scale/images data/meso-scale/embeddings data/meso-scale/masks data/micro-scale && \
-    chmod -R 777 data
+RUN chmod -R 777 data
 
 # Expose the port the app runs on
 EXPOSE 8000
