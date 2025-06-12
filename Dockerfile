@@ -16,6 +16,10 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install -r requirements.txt
 
+RUN git clone https://github.com/facebookresearch/sam2.git && cd sam2 && \
+    pip install -e . && \
+    cd ..
+
 # Stage 2: Final stage
 FROM python:3.13-slim
 
