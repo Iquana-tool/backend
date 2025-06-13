@@ -1,5 +1,7 @@
 import os.path
-from typing import List, Annotated, Union, Literal
+from typing import List, Annotated, Union, Literal, Dict
+
+import numpy as np
 from pydantic import BaseModel, Field, field_validator, Extra
 from app.database import get_context_session
 from app.database.images import Images, Scans
@@ -131,10 +133,10 @@ class ScanAutomaticSegmentationRequest(BaseModel):
 class ScanPromptedSegmentationRequest(BaseModel):
     """ Model for validating the mask propagation request. """
     scan_id: int = 1
-    prompted_requests: List[PromptedSegmentationRequest] = Field(default_factory=list,
-                                                                    description="List of prompted segmentation requests "
-                                                                                "for the scan. Each request should "
-                                                                                "represents one object to segment.")
+    prompted_requests: Dict[int, List[PromptedSegmentationRequest]] = (
+        Field(default_factory=dict,
+              description="Dictionary that maps objects to their prompted segmentation requests. Each key is one object "
+                          "ID, and can have multiple segmentation requests from different slices."))
     model: Annotated[Union[int, str], "Model to use for segmentation."] = "SAM2Tiny"
 
     @field_validator('scan_id')
@@ -150,6 +152,31 @@ class ScanPromptedSegmentationRequest(BaseModel):
     def validate_model(cls, value):
         with get_context_session() as session:
             value = check_model(value, "prompted_3d")
+        return value
+
+    @field_validator('prompted_requests')
+    def validate_prompted_requests(cls, value):
+        if not isinstance(value, dict):
+            raise ValueError("prompted_requests must be a dictionary.")
+        object_id_to_label = {}  # Keeps track of object IDs and their labels. Each object ID can only have one label.
+        for key, requests in value.items():
+            if not isinstance(key, int) or key <= 0:
+                raise ValueError("Keys in prompted_requests must be positive integers representing object IDs.")
+            if not isinstance(requests, list):
+                raise ValueError("Values in prompted_requests must be lists of PromptedSegmentationRequest.")
+            for request in requests:
+                if not key in object_id_to_label:
+                    object_id_to_label[key] = request.label  # Set the label for the object ID if not already set.
+                elif not object_id_to_label[key] == request.label:
+                    # If the label for the object ID is already set, it must match the current request's label.
+                    # If not, this means that some requests for the same object ID have different labels.
+                    # E.g. a coral object has been annotated with the labels coral and background by mistake.
+                    raise ValueError("All requests for the same object ID must have the same label!")
+                if not isinstance(request, PromptedSegmentationRequest):
+                    raise ValueError("Each item in the list must be a PromptedSegmentationRequest.")
+            image_ids = [request.image_id for request in requests]
+            if len(np.unique(image_ids)) != len(image_ids):
+                raise ValueError("You cannot have multiple requests for the same image ID in prompted_requests.")
         return value
 
 
