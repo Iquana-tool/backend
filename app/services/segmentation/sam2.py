@@ -1,3 +1,4 @@
+from collections import defaultdict
 from logging import getLogger
 from app.services.logging import log_execution_time
 import os
@@ -11,6 +12,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.sam2_video_predictor import SAM2VideoPredictor
 from app.services.prompts import Prompts
 from app.services.segmentation.base_model import *
+from app.services.labels import label_id_to_value
 from app.services.database_access import load_image_as_array_from_disk, get_scan_image_folder_path, get_image_query
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, AutomaticSegmentationRequest
 from app.services.cropping import crop_image
@@ -179,6 +181,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
         """ Add a slice prompt to the stack predictor.
             Args:
                 request (PromptedSegmentationRequest): The segmentation request containing the image and prompts.
+                object_id (int): The ID of the object to segment. Defaults to 1.
         """
         prompts = Prompts()
         prompts.from_segmentation_request(request)
@@ -207,14 +210,16 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             Returns:
                 tuple: A tuple containing an array of masks and an array of predicted iou scores.
         """
-        # FIXME: This method is not correctly implemented. It only tracks one object.
         self.set_scan(request.scan_id)
-        for prompt_request in request.prompted_requests:
-            self.add_slice_prompt(prompt_request)
-        video_segments = {}
+        object_id_to_label = {}  # Keeps track of object IDs and their labels. Each object ID can only have one label.
+        for object_id, requests in request.prompted_requests.items():
+            for req in requests:
+                object_id_to_label[req.object_id] = object_id  # Set the label
+                self.add_slice_prompt(req, object_id=object_id)
+        scan_segments = {}
         for idx, obj_ids, mask_logits in self.stack_predictor.propagate_in_video(self.init_state):
-            video_segments[idx] = {
+            scan_segments[idx] = {
                 out_obj_id: (mask_logits[i] > 0.0).cpu().numpy()
                 for i, out_obj_id in enumerate(obj_ids)
             }
-        return video_segments
+        return scan_segments
