@@ -175,7 +175,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             self.stack_predictor.reset_state(self.init_state)
 
     @log_execution_time
-    def add_slice_prompt(self, request: PromptedSegmentationRequest):
+    def add_slice_prompt(self, request: PromptedSegmentationRequest, object_id: int = 1):
         """ Add a slice prompt to the stack predictor.
             Args:
                 request (PromptedSegmentationRequest): The segmentation request containing the image and prompts.
@@ -192,7 +192,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
         _, out_obj_ids, out_mask_logits = self.stack_predictor.add_new_points_or_box(
             inference_state=self.init_state,
             frame_idx=image.index_in_scan,
-            obj_id=1,  # FIXME: here we could track different objects.
+            obj_id=object_id,
             points=prompts.point_prompts,
             labels=[int(label) for label in prompts.point_labels],
             box=prompts.box_prompts,
