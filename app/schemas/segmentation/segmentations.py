@@ -1,6 +1,6 @@
 import os.path
 from typing import List, Annotated, Union, Literal
-from pydantic import BaseModel, Field, field_validator, Extra, ConfigDict
+from pydantic import BaseModel, Field, field_validator, Extra
 from app.database import get_context_session
 from app.database.images import Images, Scans
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
@@ -133,7 +133,8 @@ class ScanPromptedSegmentationRequest(BaseModel):
     scan_id: int = 1
     prompted_requests: List[PromptedSegmentationRequest] = Field(default_factory=list,
                                                                     description="List of prompted segmentation requests "
-                                                                                "for the scan.")
+                                                                                "for the scan. Each request should "
+                                                                                "represents one object to segment.")
     model: Annotated[Union[int, str], "Model to use for segmentation."] = "SAM2Tiny"
 
     @field_validator('scan_id')
