@@ -170,6 +170,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
         if not scan_id == self.set_image_id or self.set_image_id is None:
             # If the scan_id has changed, we need to reset the state
             logger.info(f"Setting new scan for SAM2Prompted3D model. Changing from {self.set_image_id} to {scan_id}.")
+            logger.info(f"Folder path for scan {scan_id}: {get_scan_image_folder_path(scan_id)}")
             self.set_image_id = scan_id
             self.init_state = self.stack_predictor.init_state(get_scan_image_folder_path(scan_id))
         else:
@@ -199,7 +200,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             obj_id=object_id,
             points=prompts.point_prompts,
             labels=[int(label) for label in prompts.point_labels],
-            box=prompts.box_prompts,
+            box=None if not prompts.box_prompts else prompts.box_prompts,
         )
 
     @log_execution_time
@@ -215,7 +216,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
         object_id_to_label = {}  # Keeps track of object IDs and their labels. Each object ID can only have one label.
         for object_id, requests in request.prompted_requests.items():
             for req in requests:
-                object_id_to_label[req.object_id] = object_id  # Set the label
+                object_id_to_label[object_id] = req.label  # Set the label
                 self.add_slice_prompt(req, object_id=object_id)
         scan_segments = {}
         for idx, obj_ids, mask_logits in self.stack_predictor.propagate_in_video(self.init_state):
