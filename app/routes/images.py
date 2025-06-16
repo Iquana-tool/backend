@@ -8,7 +8,7 @@ from typing import Literal
 from app.database import get_session
 from app.database.images import Images, Scans
 from app.database.datasets import Datasets
-from app.services.database_access import delete_image_from_disk_and_db, parse_log_file
+from app.services.database_access import delete_image_from_disk_and_db, parse_log_file, get_height_width_of_image
 from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
 from app.services.util import extract_numbers
 import zipfile
@@ -155,6 +155,7 @@ async def upload_scan(dataset_id: int,
         #meta_data=meta_data
     )
     db.commit()
+    height, width = None, None
     try:
         image_ids = []
         for i, file in enumerate(files):
@@ -165,6 +166,16 @@ async def upload_scan(dataset_id: int,
 
             # Save the image to disk and the database
             image_id = await save_image_to_disk_and_db(file, dataset_id, new_scan.id, index_in_scan=index_in_scan)
+            if height is None or width is None:
+                height, width = get_height_width_of_image(image_id)
+            else:
+                # Validate that the image dimensions match the first image
+                current_height, current_width = get_height_width_of_image(image_id)
+                if current_height != height or current_width != width:
+                    raise HTTPException(status_code=400, detail=f"Image {file.filename} has different dimensions "
+                                                                f"({current_height}x{current_width}) than the first "
+                                                                f"image ({height}x{width}). All images of a scan must "
+                                                                f"have the same dimensions.")
             if image_id is None:
                 raise HTTPException(status_code=400, detail="Invalid file or upload failed")
             image_ids.append(image_id)
