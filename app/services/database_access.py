@@ -114,7 +114,7 @@ def get_reset_index_of_scan(scan_id: int, index_in_scan: int) -> int:
             raise ValueError(f"Scan with ID {scan_id} not found.")
         min_index = session.query(Images).filter_by(scan_id=scan_id).order_by(
             Images.index_in_scan).first().index_in_scan
-        return index_in_scan - min_index
+        return index_in_scan + min_index
 
 
 def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], image_id: int,
