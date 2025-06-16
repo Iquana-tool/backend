@@ -154,6 +154,7 @@ async def upload_scan(dataset_id: int,
         number_of_slices=len(files),
         #meta_data=meta_data
     )
+    db.add(new_scan)
     db.commit()
     height, width = None, None
     try:
@@ -188,6 +189,7 @@ async def upload_scan(dataset_id: int,
         }
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
+        raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 
