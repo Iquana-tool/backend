@@ -1,3 +1,4 @@
+import logging
 from collections import defaultdict
 from logging import getLogger
 from app.services.logging import log_execution_time
@@ -194,7 +195,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             raise ValueError(f"Image with ID {request.image_id} does not belong "
                              f"to the current scan {self.set_image_id}.")
         prompts.to_SAM2_input()
-        _, out_obj_ids, out_mask_logits = self.stack_predictor.add_new_points_or_box(
+        idx, out_obj_ids, out_mask_logits = self.stack_predictor.add_new_points_or_box(
             inference_state=self.init_state,
             frame_idx=image.index_in_scan,
             obj_id=object_id,
@@ -202,6 +203,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             labels=[int(label) for label in prompts.point_labels],
             box=None if not prompts.box_prompts else prompts.box_prompts,
         )
+        return idx, {obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, obj_id in enumerate(out_obj_ids)}
 
     @log_execution_time
     def process_prompted_segmentation_3D_request(self, request: ScanPromptedSegmentationRequest) -> dict:
@@ -214,14 +216,17 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
         """
         self.set_scan(request.scan_id)
         object_id_to_label = {}  # Keeps track of object IDs and their labels. Each object ID can only have one label.
+        scan_segments = {}
         for object_id, requests in request.prompted_requests.items():
             for req in requests:
                 object_id_to_label[object_id] = req.label  # Set the label
-                self.add_slice_prompt(req, object_id=object_id)
-        scan_segments = {}
+                idx, masks = self.add_slice_prompt(req, object_id=object_id)
+                scan_segments[idx] = masks
         for idx, obj_ids, mask_logits in self.stack_predictor.propagate_in_video(self.init_state):
             scan_segments[idx] = {
                 out_obj_id: (mask_logits[i] > 0.0).cpu().numpy()
                 for i, out_obj_id in enumerate(obj_ids)
             }
+        logging.info((f"Propagated {len(request.prompted_requests)} slice prompts resulting in {len(scan_segments)} "
+                      f"segments."))
         return scan_segments
