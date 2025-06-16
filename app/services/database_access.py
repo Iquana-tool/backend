@@ -134,7 +134,7 @@ def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarr
     np.savez_compressed(str(path), **new_dict)
 
 
-def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None) -> str:
+def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None, new_filename: str = None) -> str:
     """Save an image file to disk."""
     with get_context_session() as session:
         dataset = session.query(Datasets).filter_by(id=dataset_id).first()
@@ -148,7 +148,7 @@ def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None) 
         else:
             path = join(dataset.folder_path, "images")
     os.makedirs(path, exist_ok=True)
-    file_path = join(path, image.filename)
+    file_path = join(path, image.filename if not new_filename else new_filename + "." + image.filename.split(".")[-1])
     with open(file_path, "wb") as file:
         file.write(image.file.read())
     logger.info(f"Image saved to disk at {file_path}")
@@ -167,7 +167,8 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
         if images_with_hash:
             return session.query(Images).filter_by(dataset_id=dataset_id, hash_code=hash_code).first().id
         else:
-            file_path = save_image_to_disk(image, dataset_id, scan_id)
+            file_path = save_image_to_disk(image, dataset_id, scan_id,
+                                           new_filename=str(index_in_scan) if index_in_scan is not None else None)
             image_array = np.array(cv.imread(file_path))
             if convert_to:
                 os.remove(file_path)

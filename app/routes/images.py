@@ -2,6 +2,7 @@ import logging
 import os.path
 import shutil
 
+import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import Literal
@@ -159,17 +160,15 @@ async def upload_scan(dataset_id: int,
     height, width = None, None
     try:
         image_ids = []
+        scan_indices = [extract_numbers(file.filename)[-1] for file in files]
+        reset_indices = np.argsort(scan_indices)
+        files = np.array(files)[reset_indices]
         for i, file in enumerate(files):
-            # Extract numbers from the filename. The last number will be used as the index in the scan.
-            numbers_in_filename = extract_numbers(file.filename)
-            # If no numbers are found, use the index as a fallback
-            index_in_scan = i if not numbers_in_filename else numbers_in_filename[-1]
-
             # Save the image to disk and the database
             image_id = await save_image_to_disk_and_db(file,
                                                        dataset_id,
                                                        new_scan.id,
-                                                       index_in_scan=index_in_scan,
+                                                       index_in_scan=i,
                                                        convert_to="JPEG")
             if height is None or width is None:
                 height, width = get_height_width_of_image(image_id)
