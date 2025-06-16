@@ -57,5 +57,5 @@ def convert_to_multiclass_mask(object_mask_dict, height, width):
     """Convert a dictionary of object masks to a multiclass mask."""
     multiclass_mask = np.zeros((height, width), dtype=np.uint8)
     for label, mask in object_mask_dict.items():
-        multiclass_mask[mask] = label
+        multiclass_mask[mask.squeeze()] = label
     return multiclass_mask
