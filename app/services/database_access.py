@@ -79,6 +79,30 @@ def get_height_width_of_image(image_id: int) -> tuple[int, int]:
         raise ValueError(f"Image with ID {image_id} not found in database.")
 
 
+def get_height_width_of_scan(scan_id: int) -> tuple[int, int]:
+    """Get the height and width of a scan from the database by its ID."""
+    with get_context_session() as session:
+        scan = session.query(Scans).filter_by(id=scan_id).first()
+        if scan:
+            image = session.query(Images).filter_by(id=scan.id).first()
+            return image.height, image.width
+        else:
+            raise ValueError(f"Scan with ID {scan_id} not found in database.")
+
+
+def get_image_id_via_scan_index(scan_id: int, index_in_scan: int, reset_index: bool = False) -> int:
+    with get_context_session() as session:
+        scan = session.query(Scans).filter_by(id=scan_id).first()
+        if not scan:
+            raise ValueError(f"Scan with ID {scan_id} not found.")
+        if not reset_index:
+            return session.query(Images).filter_by(id=scan.id, index_in_scan=index_in_scan).first().id
+        else:
+            # The index given does not match the index in the database, so we need to reset it.
+            min_index = session.query(Images).filter_by(scan_id=scan_id).order_by(Images.index_in_scan).first().index_in_scan
+            return session.query(Images).filter_by(scan_id=scan_id, index_in_scan=index_in_scan + min_index).first().id
+
+
 def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], image_id: int,
                             model_name: str) -> None:
     """ Save an image embedding to disk.
