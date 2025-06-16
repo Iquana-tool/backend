@@ -305,15 +305,17 @@ async def delete_scan(scan_id: int, db: Session = Depends(get_session)):
     try:
         # Get the scan and its associated images
         images = db.query(Images).filter_by(scan_id=scan_id).all()
-        if not images:
-            raise HTTPException(status_code=404, detail="Scan not found")
 
         # Delete the scan and its associated images
         for image in images:
             delete_image_from_disk_and_db(image.id)
 
-        scan = db.query(Scans).join(Datasets).filter(Scans.id == scan_id).first()
-        shutil.rmtree(scan.folder_path)
+        scan = db.query(Scans).filter_by(id=scan_id).first()
+        if not scan:
+            return {"success": True, "message": "Scan not found."}
+        if os.path.exists(scan.folder_path):
+            # Remove the folder containing the scan images
+            shutil.rmtree(scan.folder_path)
         db.delete(scan)
         db.commit()
         return {"success": True, "message": f"Deleted scan {scan_id} and its associated images."}
