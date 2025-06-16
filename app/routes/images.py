@@ -170,7 +170,7 @@ async def upload_scan(dataset_id: int,
                                                        dataset_id,
                                                        new_scan.id,
                                                        index_in_scan=index_in_scan,
-                                                       convert_to="jpeg")
+                                                       convert_to="JPEG")
             if height is None or width is None:
                 height, width = get_height_width_of_image(image_id)
             else:
@@ -300,24 +300,24 @@ async def upload_scan_from_zip(
 
 
 @router.delete("/delete_scan/{scan_id}")
-async def delete_scan(scan_id: int):
+async def delete_scan(scan_id: int, db: Session = Depends(get_session)):
     """Delete a scan and all its associated images."""
     try:
         # Get the scan and its associated images
-        with get_session() as db:
-            images = db.query(Images).filter(Images.scan_id == scan_id).first()
-            if not images:
-                raise HTTPException(status_code=404, detail="Scan not found")
+        images = db.query(Images).filter_by(scan_id=scan_id).all()
+        if not images:
+            raise HTTPException(status_code=404, detail="Scan not found")
 
-            # Delete the scan and its associated images
-            for image in images:
-                delete_image_from_disk_and_db(image.id)
+        # Delete the scan and its associated images
+        for image in images:
+            delete_image_from_disk_and_db(image.id)
 
-            scan = db.query(Scans).join(Datasets).filter(Scans.id == scan_id).first()
-            shutil.rmtree(os.path.joi)
-            db.delete(scan)
-            db.commit()
+        scan = db.query(Scans).join(Datasets).filter(Scans.id == scan_id).first()
+        shutil.rmtree(scan.folder_path)
+        db.delete(scan)
+        db.commit()
         return {"success": True, "message": f"Deleted scan {scan_id} and its associated images."}
     except Exception as e:
         logger.error(f"Delete scan error: {str(e)}")
+        raise e
         raise HTTPException(status_code=500, detail=str(e))
