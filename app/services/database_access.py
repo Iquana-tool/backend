@@ -84,7 +84,7 @@ def get_height_width_of_scan(scan_id: int) -> tuple[int, int]:
     with get_context_session() as session:
         scan = session.query(Scans).filter_by(id=scan_id).first()
         if scan:
-            image = session.query(Images).filter_by(id=scan.id).first()
+            image = session.query(Images).filter_by(scan_id=scan.id).first()
             return image.height, image.width
         else:
             raise ValueError(f"Scan with ID {scan_id} not found in database.")
@@ -99,8 +99,22 @@ def get_image_id_via_scan_index(scan_id: int, index_in_scan: int, reset_index: b
             return session.query(Images).filter_by(id=scan.id, index_in_scan=index_in_scan).first().id
         else:
             # The index given does not match the index in the database, so we need to reset it.
-            min_index = session.query(Images).filter_by(scan_id=scan_id).order_by(Images.index_in_scan).first().index_in_scan
-            return session.query(Images).filter_by(scan_id=scan_id, index_in_scan=index_in_scan + min_index).first().id
+            return session.query(Images).filter_by(
+                scan_id=scan_id,
+                index_in_scan=get_reset_index_of_scan(scan_id, index_in_scan)
+            ).first().id
+
+
+def get_reset_index_of_scan(scan_id: int, index_in_scan: int) -> int:
+    """Get the reset index of a scan image based on the scan ID and index in scan.
+    This function adjusts the index based on the minimum index in the scan. """
+    with get_context_session() as session:
+        scan = session.query(Scans).filter_by(id=scan_id).first()
+        if not scan:
+            raise ValueError(f"Scan with ID {scan_id} not found.")
+        min_index = session.query(Images).filter_by(scan_id=scan_id).order_by(
+            Images.index_in_scan).first().index_in_scan
+        return index_in_scan - min_index
 
 
 def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], image_id: int,
@@ -141,7 +155,8 @@ def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None) 
     return str(file_path)
 
 
-async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None, index_in_scan=None, convert_to: str = None) -> int:
+async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None, index_in_scan=None,
+                                    convert_to: str = None) -> int:
     """Save an image to disk and to the database and return the new image ID."""
     # Generate hash for the image
     hash_code = generate_hash_for_image(image)
@@ -186,7 +201,7 @@ def get_scan_image_folder_path(scan_id: int) -> str:
         scan = session.query(Scans).filter_by(id=scan_id).first()
         if not scan:
             raise ValueError(f"Scan with ID {scan_id} not found.")
-        return scan.folder_path + "/images"
+        return scan.folder_path + "/slices"
 
 
 def get_image_query(image_id: int):
