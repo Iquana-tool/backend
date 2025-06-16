@@ -141,7 +141,7 @@ def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None) 
     return str(file_path)
 
 
-async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None, index_in_scan=None) -> int:
+async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None, index_in_scan=None, convert_to: str = None) -> int:
     """Save an image to disk and to the database and return the new image ID."""
     # Generate hash for the image
     hash_code = generate_hash_for_image(image)
@@ -154,6 +154,10 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
         else:
             file_path = save_image_to_disk(image, dataset_id, scan_id)
             image_array = np.array(cv.imread(file_path))
+            if convert_to:
+                os.remove(file_path)
+                file_path = file_path.split(".")[0] + f".{convert_to}"
+                cv.imwrite(file_path, image_array)
             try:
                 # Save the new image to the database
                 # Image comes in HWC format

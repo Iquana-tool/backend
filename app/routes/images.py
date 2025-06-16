@@ -166,7 +166,11 @@ async def upload_scan(dataset_id: int,
             index_in_scan = i if not numbers_in_filename else numbers_in_filename[-1]
 
             # Save the image to disk and the database
-            image_id = await save_image_to_disk_and_db(file, dataset_id, new_scan.id, index_in_scan=index_in_scan)
+            image_id = await save_image_to_disk_and_db(file,
+                                                       dataset_id,
+                                                       new_scan.id,
+                                                       index_in_scan=index_in_scan,
+                                                       convert_to="jpeg")
             if height is None or width is None:
                 height, width = get_height_width_of_image(image_id)
             else:
