@@ -11,7 +11,7 @@ from app.services.quantifications import ContourQuantifier
 from app.services.mask_generation import (generate_mask, contour_is_enclosed_by_parent,
                                           contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour)
 from app.services.database_access import get_height_width_of_image
-from app.services.util import get_hierarchical_label_name
+from app.services.labels import get_hierarchical_label_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])

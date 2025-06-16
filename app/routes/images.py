@@ -2,13 +2,14 @@ import logging
 import os.path
 import shutil
 
+import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import Literal
 from app.database import get_session
 from app.database.images import Images, Scans
 from app.database.datasets import Datasets
-from app.services.database_access import delete_image_from_disk_and_db, parse_log_file
+from app.services.database_access import delete_image_from_disk_and_db, parse_log_file, get_height_width_of_image
 from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
 from app.services.util import extract_numbers
 import zipfile
@@ -154,17 +155,31 @@ async def upload_scan(dataset_id: int,
         number_of_slices=len(files),
         #meta_data=meta_data
     )
+    db.add(new_scan)
     db.commit()
+    height, width = None, None
     try:
         image_ids = []
+        scan_indices = [extract_numbers(file.filename)[-1] for file in files]
+        reset_indices = np.argsort(scan_indices)
+        files = np.array(files)[reset_indices]
         for i, file in enumerate(files):
-            # Extract numbers from the filename. The last number will be used as the index in the scan.
-            numbers_in_filename = extract_numbers(file.filename)
-            # If no numbers are found, use the index as a fallback
-            index_in_scan = i if not numbers_in_filename else numbers_in_filename[-1]
-
             # Save the image to disk and the database
-            image_id = await save_image_to_disk_and_db(file, dataset_id, new_scan.id, index_in_scan=index_in_scan)
+            image_id = await save_image_to_disk_and_db(file,
+                                                       dataset_id,
+                                                       new_scan.id,
+                                                       index_in_scan=i,
+                                                       convert_to="JPEG")
+            if height is None or width is None:
+                height, width = get_height_width_of_image(image_id)
+            else:
+                # Validate that the image dimensions match the first image
+                current_height, current_width = get_height_width_of_image(image_id)
+                if current_height != height or current_width != width:
+                    raise HTTPException(status_code=400, detail=f"Image {file.filename} has different dimensions "
+                                                                f"({current_height}x{current_width}) than the first "
+                                                                f"image ({height}x{width}). All images of a scan must "
+                                                                f"have the same dimensions.")
             if image_id is None:
                 raise HTTPException(status_code=400, detail="Invalid file or upload failed")
             image_ids.append(image_id)
@@ -177,6 +192,7 @@ async def upload_scan(dataset_id: int,
         }
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
+        raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -283,24 +299,26 @@ async def upload_scan_from_zip(
 
 
 @router.delete("/delete_scan/{scan_id}")
-async def delete_scan(scan_id: int):
+async def delete_scan(scan_id: int, db: Session = Depends(get_session)):
     """Delete a scan and all its associated images."""
     try:
         # Get the scan and its associated images
-        with get_session() as db:
-            images = db.query(Images).filter(Images.scan_id == scan_id).first()
-            if not images:
-                raise HTTPException(status_code=404, detail="Scan not found")
+        images = db.query(Images).filter_by(scan_id=scan_id).all()
 
-            # Delete the scan and its associated images
-            for image in images:
-                delete_image_from_disk_and_db(image.id)
+        # Delete the scan and its associated images
+        for image in images:
+            delete_image_from_disk_and_db(image.id)
 
-            scan = db.query(Scans).join(Datasets).filter(Scans.id == scan_id).first()
-            shutil.rmtree(os.path.joi)
-            db.delete(scan)
-            db.commit()
+        scan = db.query(Scans).filter_by(id=scan_id).first()
+        if not scan:
+            return {"success": True, "message": "Scan not found."}
+        if os.path.exists(scan.folder_path):
+            # Remove the folder containing the scan images
+            shutil.rmtree(scan.folder_path)
+        db.delete(scan)
+        db.commit()
         return {"success": True, "message": f"Deleted scan {scan_id} and its associated images."}
     except Exception as e:
         logger.error(f"Delete scan error: {str(e)}")
+        raise e
         raise HTTPException(status_code=500, detail=str(e))

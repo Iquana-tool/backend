@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.database.mask_generation import Masks, Contours
 from app.database.datasets import Datasets, Labels
 from app.database.images import Images
-from services.util import get_hierarchical_label_name
+from app.services.labels import get_hierarchical_label_name
 
 router = APIRouter(prefix="/export", tags=["export"])
 

@@ -1,3 +1,5 @@
+import logging
+from collections import defaultdict
 from logging import getLogger
 from app.services.logging import log_execution_time
 import os
@@ -11,6 +13,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.sam2_video_predictor import SAM2VideoPredictor
 from app.services.prompts import Prompts
 from app.services.segmentation.base_model import *
+from app.services.labels import label_id_to_value
 from app.services.database_access import load_image_as_array_from_disk, get_scan_image_folder_path, get_image_query
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, AutomaticSegmentationRequest
 from app.services.cropping import crop_image
@@ -165,20 +168,23 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             Args:
                 scan_id (int): The ID of the scan to set.
         """
-        if not (scan_id == self.set_image_id or self.set_image_id is None):
+        if not scan_id == self.set_image_id or self.set_image_id is None:
             # If the scan_id has changed, we need to reset the state
-            self.stack_predictor.init_state()
+            logger.info(f"Setting new scan for SAM2Prompted3D model. Changing from {self.set_image_id} to {scan_id}.")
+            logger.info(f"Folder path for scan {scan_id}: {get_scan_image_folder_path(scan_id)}")
             self.set_image_id = scan_id
             self.init_state = self.stack_predictor.init_state(get_scan_image_folder_path(scan_id))
         else:
+            logger.info(f"Reusing existing scan state for SAM2Prompted3D model with scan_id {scan_id}.")
             # If the scan_id has not changed, we can reuse the state
             self.stack_predictor.reset_state(self.init_state)
 
     @log_execution_time
-    def add_slice_prompt(self, request: PromptedSegmentationRequest):
+    def add_slice_prompt(self, request: PromptedSegmentationRequest, object_id: int = 1):
         """ Add a slice prompt to the stack predictor.
             Args:
                 request (PromptedSegmentationRequest): The segmentation request containing the image and prompts.
+                object_id (int): The ID of the object to segment. Defaults to 1.
         """
         prompts = Prompts()
         prompts.from_segmentation_request(request)
@@ -189,14 +195,15 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             raise ValueError(f"Image with ID {request.image_id} does not belong "
                              f"to the current scan {self.set_image_id}.")
         prompts.to_SAM2_input()
-        _, out_obj_ids, out_mask_logits = self.stack_predictor.add_new_points_or_box(
+        idx, out_obj_ids, out_mask_logits = self.stack_predictor.add_new_points_or_box(
             inference_state=self.init_state,
             frame_idx=image.index_in_scan,
-            obj_id=1,  # FIXME: here we could track different objects.
+            obj_id=object_id,
             points=prompts.point_prompts,
             labels=[int(label) for label in prompts.point_labels],
-            box=prompts.box_prompts,
+            box=None if not prompts.box_prompts else prompts.box_prompts,
         )
+        return idx, {obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, obj_id in enumerate(out_obj_ids)}
 
     @log_execution_time
     def process_prompted_segmentation_3D_request(self, request: ScanPromptedSegmentationRequest) -> dict:
@@ -207,14 +214,19 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             Returns:
                 tuple: A tuple containing an array of masks and an array of predicted iou scores.
         """
-        # FIXME: This method is not correctly implemented. It only tracks one object.
         self.set_scan(request.scan_id)
-        for prompt_request in request.prompted_requests:
-            self.add_slice_prompt(prompt_request)
-        video_segments = {}
+        object_id_to_label = {}  # Keeps track of object IDs and their labels. Each object ID can only have one label.
+        scan_segments = {}
+        for object_id, requests in request.prompted_requests.items():
+            for req in requests:
+                object_id_to_label[object_id] = req.label  # Set the label
+                idx, masks = self.add_slice_prompt(req, object_id=object_id)
+                scan_segments[idx] = masks
         for idx, obj_ids, mask_logits in self.stack_predictor.propagate_in_video(self.init_state):
-            video_segments[idx] = {
+            scan_segments[idx] = {
                 out_obj_id: (mask_logits[i] > 0.0).cpu().numpy()
                 for i, out_obj_id in enumerate(obj_ids)
             }
-        return video_segments
+        logging.info((f"Propagated {len(request.prompted_requests)} slice prompts resulting in {len(scan_segments)} "
+                      f"segments."))
+        return scan_segments
