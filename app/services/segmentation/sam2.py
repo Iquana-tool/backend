@@ -167,12 +167,13 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
             Args:
                 scan_id (int): The ID of the scan to set.
         """
-        if not (scan_id == self.set_image_id or self.set_image_id is None):
+        if not scan_id == self.set_image_id or self.set_image_id is None:
             # If the scan_id has changed, we need to reset the state
-            self.stack_predictor.init_state()
+            logger.info(f"Setting new scan for SAM2Prompted3D model. Changing from {self.set_image_id} to {scan_id}.")
             self.set_image_id = scan_id
             self.init_state = self.stack_predictor.init_state(get_scan_image_folder_path(scan_id))
         else:
+            logger.info(f"Reusing existing scan state for SAM2Prompted3D model with scan_id {scan_id}.")
             # If the scan_id has not changed, we can reuse the state
             self.stack_predictor.reset_state(self.init_state)
 
