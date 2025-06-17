@@ -186,7 +186,7 @@ def add_models_to_db():
             # Check if the model is already present in the database
             existing_model = session.query(Models).filter_by(**model).first()
             if existing_model:
-                logger.error(f"Model {model['name']} already exists in the database."
+                logger.warning(f"Model {model['name']} already exists in the database."
                              f"Skipping to avoid duplicates. For updating models, please use the respective routes.")
                 continue
 
