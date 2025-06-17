@@ -1,16 +1,19 @@
 import json
 import logging
 
+import cv2
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-
+from paths import Paths
 from app.database import get_session
+from app.database.datasets import Datasets
+from app.database.images import Images
 from app.database.mask_generation import Masks, Contours
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.services.quantifications import ContourQuantifier
 from app.services.mask_generation import (generate_mask, contour_is_enclosed_by_parent,
                                           contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour)
-from app.services.database_access import get_height_width_of_image
+from app.services.database_access import get_height_width_of_image, save_array_to_disk
 from app.services.labels import get_hierarchical_label_name
 
 logger = logging.getLogger(__name__)
@@ -46,9 +49,20 @@ async def create_mask(image_id: int, db: Session = Depends(get_session)):
 async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
     try:
         # Check if mask exists
-        existing_mask = db.query(Masks).filter_by(id=mask_id).first()
+        existing_mask = db.query(Masks, Images).filter(Masks.id == mask_id).first()
         if not existing_mask:
             raise HTTPException(status_code=404, detail="Mask not found.")
+        # Check if the mask is already finished
+        if existing_mask.finished:
+            return {
+                "success": True,
+                "message": "Mask is already marked as finished.",
+                "mask_id": existing_mask.id
+            }
+        image = db.query(Images).filter_by(id=existing_mask.image_id).first()
+        # Generate the mask from contours
+        mask_image = generate_mask(mask_id)
+        save_array_to_disk(mask_image, image.dataset_id, image.scan_id, is_mask=True)
         # Mark the mask as finished
         existing_mask.finished = True
         db.commit()
