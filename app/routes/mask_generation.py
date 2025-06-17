@@ -42,6 +42,26 @@ async def create_mask(image_id: int, db: Session = Depends(get_session)):
         raise HTTPException(status_code=500, detail="Error creating mask.")
 
 
+@router.post("/finish_mask/{mask_id}")
+async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
+    try:
+        # Check if mask exists
+        existing_mask = db.query(Masks).filter_by(id=mask_id).first()
+        if not existing_mask:
+            raise HTTPException(status_code=404, detail="Mask not found.")
+        # Mark the mask as finished
+        existing_mask.finished = True
+        db.commit()
+        return {
+            "success": True,
+            "message": "Mask marked as finished successfully.",
+            "mask_id": existing_mask.id
+        }
+    except Exception as e:
+        logger.error(f"Error finishing mask: {e}")
+        raise HTTPException(status_code=500, detail="Error finishing mask.")
+
+
 @router.get("/get_contours_of_mask/{mask_id}")
 async def get_contours_of_mask(mask_id: int, db: Session = Depends(get_session)):
     contours = db.query(Contours).filter_by(mask_id=mask_id).all()
@@ -76,11 +96,9 @@ async def get_mask(mask_id: int, db: Session = Depends(get_session)):
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=404, detail="Mask not found.")
-    mask_arr = generate_mask(mask_id).tolist()
     return {
         "success": True,
-        "mask_id": mask.id,
-        "image": mask_arr
+        "mask": mask
     }
 
 
