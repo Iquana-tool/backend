@@ -16,12 +16,14 @@ from app.routes.segmentation.scan_segmentation import router as scan_segmentatio
 from app.database import init_db
 import scripts.add_models_to_db as add_models_to_db
 from logging import getLogger
+import hydra
 
 
 logger = getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+@hydra.main(version_base=None, config_path="./services/segmentation/configs")
 def create_app():
     logger.debug("Creating FastAPI application")
     # Load environment variables
