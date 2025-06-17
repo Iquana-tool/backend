@@ -33,7 +33,7 @@ prompted_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "config": "sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",

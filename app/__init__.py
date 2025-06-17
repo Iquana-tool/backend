@@ -39,7 +39,7 @@ def create_app():
 
     init_db()
     GlobalHydra.instance().clear()
-    initialize_config_dir(config_dir=paths.Paths.services_dir + "/segmentation/configs")
+    initialize_config_dir(config_dir=paths.Paths.services_dir + "/segmentation/configs/")
 
     app = FastAPI(
         title="Coral Segmentation API",
