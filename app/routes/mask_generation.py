@@ -159,17 +159,19 @@ async def add_contour(mask_id: int,
                     "contour_id": None
                 }
 
-        # Check if contour overlaps with existing contours on the same level
+        """# Check if contour overlaps with existing contours on the same level
         contours_on_same_level = db.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_contour_id).all()
         if contours_on_same_level:
-            contours_on_same_level = [coords_to_cv_contour(c.coords["x"], c.coords["y"]) for c in
-                                      contours_on_same_level]
-            if contour_overlaps_with_existing_on_parent_level(contour, contours_on_same_level):
+            contours_with_potential_overlap = []
+            for c_json in contours_on_same_level:
+                contour = json.loads(c_json.coords)
+                contours_with_potential_overlap.append(coords_to_cv_contour(contour["x"], contour["y"]))
+            if contour_overlaps_with_existing_on_parent_level(contour, contours_with_potential_overlap):
                 return {
                     "success": False,
                     "message": "Contour overlaps with existing contours on the same level.",
                     "contour_id": None
-                }
+                }"""
 
         # Quantify contour
         height, width = get_height_width_of_image(existing_mask.image_id)
@@ -198,6 +200,7 @@ async def add_contour(mask_id: int,
         }
     except Exception as e:
         logger.error(f"Error adding contour: {e}")
+        raise e
         raise HTTPException(status_code=500, detail="Error adding contour.")
 
 
