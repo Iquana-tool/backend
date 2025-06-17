@@ -1,6 +1,7 @@
 import logging
 import os
 
+import hydra
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -23,6 +24,7 @@ logger = getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+@hydra.main(version_base=None, config_path="./services/segmentation/configs")
 def create_app():
     logger.debug("Creating FastAPI application")
     # Load environment variables
@@ -73,7 +75,6 @@ def create_app():
     app.include_router(label_router)
     app.include_router(export_router)
     app.include_router(model_router)
-
 
     add_models_to_db.add_models_to_db()
 
