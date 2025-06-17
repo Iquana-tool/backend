@@ -83,6 +83,7 @@ async def get_annotation_progress(dataset_id: int, db: Session = Depends(get_ses
         "manually_annotated": manually_annotated,
         "auto_annotated_reviewed": auto_annotated_with_review,
         "auto_annotated_without_review": auto_annotated_without_review,
+        "total_images": n_images,
     }
 
 
