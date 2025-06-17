@@ -117,21 +117,25 @@ def get_reset_index_of_scan(scan_id: int, index_in_scan: int) -> int:
         return index_in_scan + min_index
 
 
-def save_embeddings_to_disk(embedding: dict[str, Union[np.ndarray, list[np.ndarray]]], image_id: int,
-                            model_name: str) -> None:
-    """ Save an image embedding to disk.
-        Args:
-            embedding (dict[str, Union[np.ndarray, list[np.ndarray]]]): The embedding to save.
-            image_id (int): The ID of the image embedding.
-            model_name (str): The name of the model used to generate the embedding.
-    """
-    base_path = join(paths.Paths.embedding_dir, str(image_id))
-    os.makedirs(base_path, exist_ok=True)
-    path = join(base_path, model_name + ".npz")
-    new_dict = {"image_embed": embedding["image_embed"]}
-    for i, mask in enumerate(embedding["high_res_feats"]):
-        new_dict[f"high_res_feats_{i}"] = mask
-    np.savez_compressed(str(path), **new_dict)
+def save_array_to_disk(array: np.ndarray, dataset_id: int, scan_id: int = None,
+                       new_filename: str = None, is_mask: bool = False) -> str:
+    """Save a numpy array as an image file to disk."""
+    with get_context_session() as session:
+        dataset = session.query(Datasets).filter_by(id=dataset_id).first()
+        if not dataset:
+            raise ValueError(f"Dataset with ID {dataset_id} not found.")
+        if dataset.dataset_type == "scan":
+            if scan_id is None:
+                raise ValueError("Scan ID must be provided for scan datasets.")
+            scan = session.query(Scans).filter_by(id=scan_id).first()
+            path = join(scan.folder_path, "masks" if is_mask else "slices")
+        else:
+            path = join(dataset.folder_path, "masks" if is_mask else "images")
+    os.makedirs(path, exist_ok=True)
+    file_path = join(path, new_filename if new_filename else "image.png")
+    cv.imwrite(file_path, array)
+    logger.info(f"Image saved to disk at {file_path}")
+    return str(file_path)
 
 
 def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None, new_filename: str = None) -> str:
