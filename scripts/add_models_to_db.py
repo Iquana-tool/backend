@@ -44,7 +44,7 @@ prompted_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "config": "sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -55,7 +55,7 @@ prompted_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "config": "sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -66,7 +66,7 @@ prompted_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "config": "sam2.1_hiera_large.yaml"
     },
 ]
 
@@ -80,7 +80,7 @@ automatic_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "config": "sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -91,7 +91,7 @@ automatic_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "config": "sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -102,7 +102,7 @@ automatic_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "config": "sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -113,7 +113,7 @@ automatic_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "config": "sam2.1_hiera_large.yaml"
     },
 ]
 
@@ -127,7 +127,7 @@ prompted_3D_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "config": "sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -138,7 +138,7 @@ prompted_3D_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "config": "sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -149,7 +149,7 @@ prompted_3D_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "config": "sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -160,7 +160,7 @@ prompted_3D_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_base_plus.pt",
-        "config": "./app/services/segmentation/configs/sam2.1_hiera_large.yaml"  #
+        "config": "sam2.1_hiera_large.yaml"  #
     },
 ]
 
