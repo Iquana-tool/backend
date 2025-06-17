@@ -17,6 +17,7 @@ from app.database import init_db
 import scripts.add_models_to_db as add_models_to_db
 from logging import getLogger
 from hydra import initialize_config_dir
+from hydra.core.global_hydra import GlobalHydra
 
 
 logger = getLogger(__name__)
@@ -37,7 +38,7 @@ def create_app():
         logger.debug(f"Created directory {getattr(paths.Paths, directory)}")
 
     init_db()
-
+    GlobalHydra.instance().clear()
     initialize_config_dir(config_dir=paths.Paths.services_dir + "/segmentation/configs")
 
     app = FastAPI(
