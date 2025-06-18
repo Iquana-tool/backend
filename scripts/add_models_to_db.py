@@ -116,7 +116,39 @@ automatic_models_to_add = [
         "config": "sam2.1_hiera_large.yaml"
     },
 ]
-
+ {
+        "base_model_identifier": "Unet",
+        "name": "UnetCoral",
+        "description": "Standard U-Net model trained on Coral dataset.",
+        "model_type": "automatic",
+        "version": "1.0",
+        "created_at": None,
+        "updated_at": None,
+        "weights": "./app/services/segmentation/weights/unet_coral_model.pth",
+        "config": "app/services/segmentation/configs/unet_coral_model.yaml"
+    },
+    {
+        "base_model_identifier": "UnetPlusPlus",
+        "name": "UnetPlusPlusCoral",
+        "description": "UNet++ model trained on Coral dataset.",
+        "model_type": "automatic",
+        "version": "1.0",
+        "created_at": None,
+        "updated_at": None,
+        "weights": "./app/services/segmentation/weights/unetplusplus_coral_model.pth",
+        "config": "app/services/segmentation/configs/unetplusplus_coral_model.yaml"
+    },
+    {
+        "base_model_identifier": "DeepLabV3PP",
+        "name": "DeepLabV3PPCoral",
+        "description": "DeepLabV3++ model trained on Coral dataset.",
+        "model_type": "automatic",
+        "version": "1.0",
+        "created_at": None,
+        "updated_at": None,
+        "weights": "./app/services/segmentation/weights/deeplabv3pp_coral_model.pth",
+        "config": "app/services/segmentation/configs/deeplabv3pp_coral_model.yaml"
+    },
 prompted_3D_models_to_add = [
     {
         "base_model_identifier": "SAM2Prompted3D",
