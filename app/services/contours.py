@@ -19,7 +19,7 @@ def get_contour_from_coordinates(x_coords: list[float], y_coords: list[float]) -
     return np.expand_dims(np.array(list(zip(x_coords, y_coords)), dtype=np.int32), 1)
 
 
-def create_binary_mask_from_contours(width, height, contours: list[ContourModel]):
+def create_binary_mask_from_contours(width, height, contours: list[np.ndarray]):
     """ Create a mask from the contours.
         Args:
             width (int): The width of the mask.
@@ -31,6 +31,5 @@ def create_binary_mask_from_contours(width, height, contours: list[ContourModel]
     """
     mask = np.zeros((height, width), dtype=np.uint8)
     for contour in contours:
-        contour = get_contour_from_coordinates(contour.x, contour.y)
         cv2.fillPoly(mask, [contour], 1)
     return mask

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationMaskModel, SegmentationResponse, \
     AutomaticSegmentationRequest
 from app.services.segmentation import ModelCache
+from app.services.postprocessing import fit_mask_to_already_created_masks
 from app.routes.segmentation.util import get_masks_responses
 from app.database import get_session
 from app.database.images import Images
@@ -42,7 +43,8 @@ async def segment_image(request: PromptedSegmentationRequest):
     # All model specific logic should be encapsulated in the model class
     masks, quality = model.process_prompted_request(request)
 
-    # Postprocess the masks and get contours
+    # Postprocess the masks. This fits the mask into the already existing contours.
+    masks = [fit_mask_to_already_created_masks(mask) for mask in masks]
     masks_response = get_masks_responses([mask * request.label for mask in masks], quality)
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
 
