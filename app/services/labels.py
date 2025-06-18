@@ -34,3 +34,23 @@ def label_id_to_value(label_id):
             return label.value
         else:
             return "Unknown Label"
+
+
+def label_value_to_label_id(dataset_id, label_value):
+    """
+    Converts a label value to its corresponding label ID.
+
+    Args:
+        dataset_id (int): The ID of the dataset.
+        label_value (int): The value of the label.
+
+    Returns:
+        int: The ID of the label or None if not found.
+    """
+    with get_context_session() as session:
+        label = session.query(Labels).filter_by(dataset_id=dataset_id, value=label_value).first()
+        if label:
+            return label.id
+        else:
+            return None
+
