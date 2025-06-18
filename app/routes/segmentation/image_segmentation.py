@@ -44,7 +44,7 @@ async def segment_image(request: PromptedSegmentationRequest):
     masks, quality = model.process_prompted_request(request)
 
     # Postprocess the masks. This fits the mask into the already existing contours.
-    masks = [fit_mask_to_already_created_masks(mask) for mask in masks]
+    masks = [fit_mask_to_already_created_masks(request.mask_id, mask, request.parent_contour_id) for mask in masks]
     masks_response = get_masks_responses([mask * request.label for mask in masks], quality)
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
 
