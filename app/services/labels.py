@@ -12,7 +12,7 @@ def get_hierarchical_label_name(label_id):
 
         # If this label has a parent, prepend parent name
         if parent_id:
-            parent_name = session.query(Labels).filter_by(parent_id=parent_id).first().name
+            parent_name = session.query(Labels).filter_by(id=parent_id).first().name
             return f"{parent_name} › {label_name}"
 
         return label_name
