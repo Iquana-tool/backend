@@ -125,7 +125,7 @@ automatic_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/unet_coral_model.pth",
-        "config": "app/services/segmentation/configs/unet_coral_model.yaml"
+        "config": "app/services/segmentation/configs/unet_config.yaml"
     },
     {
         "base_model_identifier": "UnetPlusPlus",
@@ -136,7 +136,7 @@ automatic_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/unetplusplus_coral_model.pth",
-        "config": "app/services/segmentation/configs/unetplusplus_coral_model.yaml"
+        "config": "app/services/segmentation/configs/unetplusplus_config.yaml"
     },
     {
         "base_model_identifier": "DeepLabV3PP",
@@ -147,7 +147,7 @@ automatic_models_to_add = [
         "created_at": None,
         "updated_at": None,
         "weights": "./app/services/segmentation/weights/deeplabv3pp_coral_model.pth",
-        "config": "app/services/segmentation/configs/deeplabv3pp_coral_model.yaml"
+        "config": "app/services/segmentation/configs/deeplabv3pp_config.yaml"
     },
 ]
 prompted_3D_models_to_add = [
