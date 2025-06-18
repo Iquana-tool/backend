@@ -150,12 +150,18 @@ class DeepLabV3PP(AutomaticSegmentationBaseModel):
             ToTensorV2()
         ])
 
-    def process_automatic_request(self, image_np, **kwargs):
-        augmented = self.transform(image=image_np)
-        input_tensor = augmented['image'].unsqueeze(0).to(self.device)
+    def process_automatic_request(self, request: AutomaticSegmentationRequest):
+    image_np = request.image  # This is usually the image (as NumPy array) from the request
 
-        with torch.no_grad():
-            output = self.model(input_tensor)
+    # Preprocess the image
+    augmented = self.transform(image=image_np)
+    input_tensor = augmented['image'].unsqueeze(0).to(self.device)
 
-        mask = output.squeeze().cpu().numpy()
-        return (mask > 0.5).astype(np.uint8) * 255
+    # Run prediction
+    with torch.no_grad():
+        output = self.model(input_tensor)
+
+    # Post-process and return mask
+    mask = output.squeeze().cpu().numpy()
+    mask = (mask > 0.5).astype(np.uint8) * 255
+    return mask
