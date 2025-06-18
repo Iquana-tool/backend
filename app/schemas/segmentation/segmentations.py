@@ -40,6 +40,7 @@ class PromptedSegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
     apply_post_processing: bool = True
     image_id: int = 1
+    mask_id: int = None
     parent_contour_id: int = None
     previous_contours: List[ContourModel] = None
     model: Union[int, str] = "SAM2Tiny"
