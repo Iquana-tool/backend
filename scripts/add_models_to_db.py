@@ -149,6 +149,7 @@ automatic_models_to_add = [
         "weights": "./app/services/segmentation/weights/deeplabv3pp_coral_model.pth",
         "config": "app/services/segmentation/configs/deeplabv3pp_coral_model.yaml"
     },
+]
 prompted_3D_models_to_add = [
     {
         "base_model_identifier": "SAM2Prompted3D",
