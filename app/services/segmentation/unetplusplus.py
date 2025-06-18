@@ -91,12 +91,17 @@ class UnetPlusPlus(AutomaticSegmentationBaseModel):
             ToTensorV2()
         ])
 
-    def process_automatic_request(self, image_np, **kwargs):
+    def process_automatic_request(self, request: AutomaticSegmentationRequest):
+        image_np = request.image
+
+        # Preprocess
         augmented = self.transform(image=image_np)
         input_tensor = augmented['image'].unsqueeze(0).to(self.device)
 
+        # Inference
         with torch.no_grad():
             output = self.model(input_tensor)
 
+        # Postprocess
         mask = output.squeeze().cpu().numpy()
         return (mask > 0.5).astype(np.uint8) * 255
