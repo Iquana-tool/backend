@@ -40,6 +40,7 @@ class PromptedSegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
     apply_post_processing: Annotated[bool, "Apply post-processing to the segmentation."] = True
     image_id: Annotated[int, "ID of the image to segment."] = 1
+    previous_contours = List[ContourModel] = None
     model: Annotated[Union[int, str], "Model to use for segmentation."] = "SAM2Tiny"
     min_x: Annotated[float, "Coordinates must be between 0 and 1."] = 0
     min_y: Annotated[float, "Coordinates must be between 0 and 1."] = 0
