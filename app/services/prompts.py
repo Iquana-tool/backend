@@ -2,6 +2,9 @@
 import cv2
 import numpy as np
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest
+from logging import getLogger
+
+logger = getLogger(__name__)
 
 
 class Prompts:
@@ -78,21 +81,20 @@ class Prompts:
         """ Add a polygon prompt to the list of prompts. The polygon vertices should be in the format [(x1, y1), (x2, y2), ...].
             Every point enclosed by the polygon will be treated as a positive annotation.
         """
-        # We create a slightly larger circle than the polygon to avoid edge effects when sampling points
-        polygon_center_x = np.mean([v[0] for v in vertices])
-        polygon_center_y = np.mean([v[1] for v in vertices])
-        polygon_radius = np.max([np.linalg.norm(np.array(v) - np.array([polygon_center_x, polygon_center_y])) for v in vertices])
-        slightly_larger_radius = polygon_radius * 1.1  # Slightly larger polygon to avoid edge effects
-        grid_size = 10  # Define the grid size for sampling
-        for point_x in np.arange(x - slightly_larger_radius, x + slightly_larger_radius, 2 * slightly_larger_radius / grid_size):
-            for point_y in np.arange(y - slightly_larger_radius, y + slightly_larger_radius, 2 * slightly_larger_radius / grid_size):
+        max_x = np.max([v[0] for v in vertices])
+        min_x = np.min([v[0] for v in vertices])
+        max_y = np.max([v[1] for v in vertices])
+        min_y = np.min([v[1] for v in vertices])
+        grid_size = 4  # Define the grid size for sampling
+        contour = (np.array(vertices) * 1000).astype(np.int32)  # Scale vertices to pixel coordinates
+        # Create a box annotation around the polygon to sample points
+        # and add negative annotations for points outside the polygon
+        self.add_box_annotation(min_x, min_y, max_x, max_y)
+        for point_x in np.arange(min_x, max_x, (max_x - min_x) / grid_size):
+            for point_y in np.arange(min_y, max_y, (max_y - min_y) / grid_size):
                 # Check if the point is inside the circle
-                if (point_x - polygon_center_x) ** 2 + (point_y - polygon_center_y) ** 2 > (slightly_larger_radius * 1.1) ** 2:
-                    # If the point is outside a slightly larger circle, skip it
-                    continue
-                else:
-                    label = cv2.pointPolygonTest(np.array(vertices) * 1000, (point_x * 1000, point_y * 1000), False) >= 0
-                    self.add_point_annotation(point_x, point_y, label)
+                if cv2.pointPolygonTest(contour, (point_x * 1000, point_y * 1000), False) <= 0:
+                    self.add_point_annotation(point_x, point_y, 0)
 
     def add_circle_annotation(self, x: float, y: float, radius: float):
         """ Add a circle prompt to the list of prompts. The circle prompt will add a positive annotation for all points
@@ -100,17 +102,19 @@ class Prompts:
         """
         # We create a slightly large circle to avoid edge effects when sampling points
         # Then we lay a grid over the circle and check if the points are inside the circle
-        grid_size = 10  # Define the grid size for sampling
-        slightly_larger_radius = radius * 1.1  # Slightly larger radius to avoid edge effects
-        for point_x in np.arange(x - slightly_larger_radius, x + slightly_larger_radius, 2 * slightly_larger_radius / grid_size):
-            for point_y in np.arange(y - slightly_larger_radius, y + slightly_larger_radius, 2 * slightly_larger_radius / grid_size):
+        grid_size = 4  # Define the grid size for sampling
+        min_x = max(0, x - radius)
+        min_y = max(0, y - radius)
+        max_x = min(1, x + radius)
+        max_y = min(1, y + radius)
+        # Create a box annotation around the polygon to sample points
+        # and add negative annotations for points outside the polygon
+        self.add_box_annotation(min_x, min_y, max_x, max_y)
+        for point_x in np.arange(min_x, max_x, (max_x - min_x) / grid_size):
+            for point_y in np.arange(min_y, max_y, (max_y - min_y) / grid_size):
                 # Check if the point is inside the circle
-                if (point_x - x) ** 2 + (point_y - y) ** 2 > (slightly_larger_radius * 1.1) ** 2:
-                    # If the point is outside a slightly larger circle, skip it
-                    continue
-                else:
-                    label = (point_x - x) ** 2 + (point_y - y) ** 2 <= radius ** 2
-                    self.add_point_annotation(point_x, point_y, label)
+                if ((point_x - x) ** 2 + (point_y - y) ** 2) <= radius ** 2:
+                    self.add_point_annotation(point_x, point_y, 0)
 
     def get_prompts_as_ndarray(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """ Get the prompts as numpy arrays. The returned arrays should be used as input to the SAM2 model.
