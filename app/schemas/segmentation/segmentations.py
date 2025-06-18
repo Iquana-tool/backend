@@ -8,6 +8,10 @@ from app.database.images import Images, Scans
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.schemas.segmentation.prompts import PointPrompt, BoxPrompt, PolygonPrompt, CirclePrompt
 from app.database.models import Models
+from logging import getLogger
+
+
+logger = getLogger(__name__)
 
 
 def check_model(model_id: Union[int, str], model_type: Literal["prompted", "automatic", "prompted_3d", "automatic_3d"]) \
@@ -44,10 +48,6 @@ class PromptedSegmentationRequest(BaseModel):
     parent_contour_id: int = None
     previous_contours: List[ContourModel] = None
     model: Union[int, str] = "SAM2Tiny"
-    min_x: float= 0
-    min_y: float = 0
-    max_x: float = 1
-    max_y: float = 1
     point_prompts: List[PointPrompt] = Field(default_factory=list,
                                              description="List of point prompts supplied by the user.")
     box_prompts: List[BoxPrompt] = Field(default_factory=list,
@@ -57,6 +57,12 @@ class PromptedSegmentationRequest(BaseModel):
     circle_prompts: List[CirclePrompt] = Field(default_factory=list,
                                                description="List of circle prompts supplied by the user.")
     label: Annotated[int, "Label of the mask."] = 0
+
+    # Deprecated fields, kept for backwards compatibility
+    min_x: float = 0
+    min_y: float = 0
+    max_x: float = 1
+    max_y: float = 1
 
     @field_validator('image_id')
     def validate_image_id(cls, value):
@@ -75,6 +81,8 @@ class PromptedSegmentationRequest(BaseModel):
 
     @field_validator('min_x', 'min_y', 'max_x', 'max_y')
     def validate_coordinates(cls, value):
+        logger.warning("The min_x, min_y, max_x, max_y fields are deprecated and will be removed in a future version. "
+                       "Instead, pass the parent contour id.")
         if not (0 <= value <= 1):
             raise ValueError("Coordinates must be between 0 and 1.")
         return value
