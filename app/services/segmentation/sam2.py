@@ -19,7 +19,7 @@ from app.services.segmentation.base_model import *
 from app.services.database_access import load_image_as_array_from_disk, get_scan_image_folder_path, get_image_query
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, AutomaticSegmentationRequest
 from app.services.cropping import crop_image
-from app.services.contours import create_binary_mask_from_contours
+from app.services.contours import create_binary_mask_from_contours, get_contour_from_coordinates
 
 logger = getLogger(__name__)
 
@@ -122,9 +122,10 @@ class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
             self.set_image_id = request_unique_id
         if request.previous_contours:
             # If previous contours are provided, we need to build a mask from them to feed them to the model
+            prev_contours = [get_contour_from_coordinates(contour.x, contour.y) for contour in request.previous_contours]
             mask = create_binary_mask_from_contours(self.set_image_width,
                                                     self.set_image_height,
-                                                    request.previous_contours)
+                                                    prev_contours)
             mask = cv2.resize(mask, dsize=(256, 256), interpolation=cv2.INTER_NEAREST)
         mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(),
                                                         multimask_output=False,
