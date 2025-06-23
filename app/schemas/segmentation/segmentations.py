@@ -2,7 +2,7 @@ import os.path
 from typing import List, Annotated, Union, Literal, Dict
 
 import numpy as np
-from pydantic import BaseModel, Field, field_validator, Extra
+from pydantic import BaseModel, Field, field_validator, Extra, validator
 from app.database import get_context_session
 from app.database.images import Images, Scans
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
@@ -76,29 +76,11 @@ class PromptedSegmentationRequest(BaseModel):
             raise ValueError("Coordinates must be between 0 and 1.")
         return value
 
-    @field_validator('box_prompt')
-    def validate_box_prompt(cls, value, values):
-        """ Validate the ROI prompts. """
-        if value is not None:
-            if values["circle_prompt"] or values["polygon_prompt"]:
-                raise ValueError("You can only use one type of ROI prompt at a time. "
-                                 "Either box_prompt, polygon_prompt or circle_prompt.")
-        return value
-
-    @field_validator('polygon_prompt')
-    def validate_polygon_prompt(cls, value, values):
-        """ Validate the polygon prompt. """
-        if value is not None:
-            if values["box_prompt"] or values["circle_prompt"]:
-                raise ValueError("You can only use one type of ROI prompt at a time. "
-                                 "Either box_prompt, polygon_prompt or circle_prompt.")
-        return value
-
     @field_validator('circle_prompt')
     def validate_circle_prompt(cls, value, values):
         """ Validate the circle prompt. """
         if value is not None:
-            if values["box_prompt"] or values["polygon_prompt"]:
+            if values.data["box_prompt"] or values.data["polygon_prompt"]:
                 raise ValueError("You can only use one type of ROI prompt at a time. "
                                  "Either box_prompt, polygon_prompt or circle_prompt.")
         return value
