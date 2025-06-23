@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from app.schemas.segmentation.contours_and_quantifications import ContourModel
 
 
 def get_contours(mask: np.ndarray) -> np.ndarray:
@@ -14,4 +15,21 @@ def get_contours(mask: np.ndarray) -> np.ndarray:
     return contours
 
 
+def get_contour_from_coordinates(x_coords: list[float], y_coords: list[float]) -> np.array:
+    return np.expand_dims(np.array(list(zip(x_coords, y_coords)), dtype=np.int32), 1)
 
+
+def create_binary_mask_from_contours(width, height, contours: list[np.ndarray]):
+    """ Create a mask from the contours.
+        Args:
+            width (int): The width of the mask.
+            height (int): The height of the mask.
+            contours (list[ContourModel]): The contours to create the mask from.
+
+        Returns:
+            np.ndarray: The mask created from the contours.
+    """
+    mask = np.zeros((height, width), dtype=np.uint8)
+    for contour in contours:
+        cv2.fillPoly(mask, [contour], 1)
+    return mask

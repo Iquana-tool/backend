@@ -1,6 +1,5 @@
 import logging
 import os
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -17,11 +16,12 @@ from app.routes.segmentation.scan_segmentation import router as scan_segmentatio
 from app.database import init_db
 import scripts.add_models_to_db as add_models_to_db
 from logging import getLogger
+from hydra import initialize_config_dir
+from hydra.core.global_hydra import GlobalHydra
 
 
 logger = getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
 
 def create_app():
     logger.debug("Creating FastAPI application")
@@ -38,6 +38,8 @@ def create_app():
         logger.debug(f"Created directory {getattr(paths.Paths, directory)}")
 
     init_db()
+    GlobalHydra.instance().clear()
+    initialize_config_dir(config_dir=paths.Paths.services_dir + "/segmentation/configs/")
 
     app = FastAPI(
         title="Coral Segmentation API",
@@ -73,7 +75,6 @@ def create_app():
     app.include_router(label_router)
     app.include_router(export_router)
     app.include_router(model_router)
-
 
     add_models_to_db.add_models_to_db()
 

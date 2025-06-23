@@ -1,6 +1,9 @@
 import logging
 from collections import defaultdict
 from logging import getLogger
+
+import cv2
+
 from app.services.logging import log_execution_time
 import os
 import urllib
@@ -13,10 +16,10 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.sam2_video_predictor import SAM2VideoPredictor
 from app.services.prompts import Prompts
 from app.services.segmentation.base_model import *
-from app.services.labels import label_id_to_value
 from app.services.database_access import load_image_as_array_from_disk, get_scan_image_folder_path, get_image_query
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, AutomaticSegmentationRequest
 from app.services.cropping import crop_image
+from app.services.contours import create_binary_mask_from_contours, get_contour_from_coordinates
 
 logger = getLogger(__name__)
 
@@ -87,6 +90,8 @@ class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
                            config_file=self.config,
                            device=self.device)
         self.prompt_predictor = SAM2ImagePredictor(self.model)
+        self.set_image_height = None  # To track the current image height
+        self.set_image_width = None  # To track the current image being processed
 
     @log_execution_time
     def process_prompted_request(self, request: PromptedSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
@@ -103,6 +108,7 @@ class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
         prompts = Prompts()
         prompts.from_segmentation_request(request)
         request_unique_id = f"{request.image_id}_{request.min_x}_{request.min_y}_{request.max_x}_{request.max_y}"
+        mask = None
         if use_crop or (request_unique_id != self.set_image_id):
             # If cropping is needed or the image_id has changed, we need to set the image
             # Temporary fix for embedding loading
@@ -110,10 +116,20 @@ class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
             image = crop_image(request.min_x, request.min_y,
                                request.max_x, request.max_y,
                                image)
+            self.set_image_height = image.shape[0]
+            self.set_image_width = image.shape[1]
             self.prompt_predictor.set_image(image)
             self.set_image_id = request_unique_id
+        if request.previous_contours:
+            # If previous contours are provided, we need to build a mask from them to feed them to the model
+            prev_contours = [get_contour_from_coordinates(contour.x, contour.y) for contour in request.previous_contours]
+            mask = create_binary_mask_from_contours(self.set_image_width,
+                                                    self.set_image_height,
+                                                    prev_contours)
+            mask = cv2.resize(mask, dsize=(256, 256), interpolation=cv2.INTER_NEAREST)
         mask, scores, _ = self.prompt_predictor.predict(**prompts.to_SAM2_input(),
                                                         multimask_output=False,
+                                                        mask_input=mask,
                                                         normalize_coords=False)
         return mask, scores
 

@@ -1,16 +1,19 @@
 import json
 import logging
 
+import cv2
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-
+from paths import Paths
 from app.database import get_session
+from app.database.datasets import Datasets
+from app.database.images import Images
 from app.database.mask_generation import Masks, Contours
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.services.quantifications import ContourQuantifier
 from app.services.mask_generation import (generate_mask, contour_is_enclosed_by_parent,
                                           contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour)
-from app.services.database_access import get_height_width_of_image
+from app.services.database_access import get_height_width_of_image, save_array_to_disk
 from app.services.labels import get_hierarchical_label_name
 
 logger = logging.getLogger(__name__)
@@ -40,6 +43,37 @@ async def create_mask(image_id: int, db: Session = Depends(get_session)):
     except Exception as e:
         logger.error(f"Error creating mask: {e}")
         raise HTTPException(status_code=500, detail="Error creating mask.")
+
+
+@router.post("/finish_mask/{mask_id}")
+async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
+    try:
+        # Check if mask exists
+        existing_mask = db.query(Masks, Images).filter(Masks.id == mask_id).first()
+        if not existing_mask:
+            raise HTTPException(status_code=404, detail="Mask not found.")
+        # Check if the mask is already finished
+        if existing_mask.finished:
+            return {
+                "success": True,
+                "message": "Mask is already marked as finished.",
+                "mask_id": existing_mask.id
+            }
+        image = db.query(Images).filter_by(id=existing_mask.image_id).first()
+        # Generate the mask from contours
+        mask_image = generate_mask(mask_id)
+        save_array_to_disk(mask_image, image.dataset_id, image.scan_id, is_mask=True)
+        # Mark the mask as finished
+        existing_mask.finished = True
+        db.commit()
+        return {
+            "success": True,
+            "message": "Mask marked as finished successfully.",
+            "mask_id": existing_mask.id
+        }
+    except Exception as e:
+        logger.error(f"Error finishing mask: {e}")
+        raise HTTPException(status_code=500, detail="Error finishing mask.")
 
 
 @router.get("/get_contours_of_mask/{mask_id}")
@@ -76,11 +110,9 @@ async def get_mask(mask_id: int, db: Session = Depends(get_session)):
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=404, detail="Mask not found.")
-    mask_arr = generate_mask(mask_id).tolist()
     return {
         "success": True,
-        "mask_id": mask.id,
-        "image": mask_arr
+        "mask": mask
     }
 
 
@@ -127,17 +159,19 @@ async def add_contour(mask_id: int,
                     "contour_id": None
                 }
 
-        # Check if contour overlaps with existing contours on the same level
+        """# Check if contour overlaps with existing contours on the same level
         contours_on_same_level = db.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_contour_id).all()
         if contours_on_same_level:
-            contours_on_same_level = [coords_to_cv_contour(c.coords["x"], c.coords["y"]) for c in
-                                      contours_on_same_level]
-            if contour_overlaps_with_existing_on_parent_level(contour, contours_on_same_level):
+            contours_with_potential_overlap = []
+            for c_json in contours_on_same_level:
+                contour = json.loads(c_json.coords)
+                contours_with_potential_overlap.append(coords_to_cv_contour(contour["x"], contour["y"]))
+            if contour_overlaps_with_existing_on_parent_level(contour, contours_with_potential_overlap):
                 return {
                     "success": False,
                     "message": "Contour overlaps with existing contours on the same level.",
                     "contour_id": None
-                }
+                }"""
 
         # Quantify contour
         height, width = get_height_width_of_image(existing_mask.image_id)
@@ -166,6 +200,7 @@ async def add_contour(mask_id: int,
         }
     except Exception as e:
         logger.error(f"Error adding contour: {e}")
+        raise e
         raise HTTPException(status_code=500, detail="Error adding contour.")
 
 

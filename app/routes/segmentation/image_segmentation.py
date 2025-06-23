@@ -1,13 +1,16 @@
 from logging import getLogger
-from app.services.logging import log_execution_time
-
+from app.services.labels import label_value_to_label_id
 import numpy as np
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationMaskModel, SegmentationResponse, \
     AutomaticSegmentationRequest
 from app.services.segmentation import ModelCache
+from app.services.postprocessing import fit_mask_to_already_created_masks
 from app.routes.segmentation.util import get_masks_responses
+from app.database import get_session
+from app.database.images import Images
+from sqlalchemy.orm import Session
 
 
 logger = getLogger(__name__)
@@ -40,19 +43,27 @@ async def segment_image(request: PromptedSegmentationRequest):
     # All model specific logic should be encapsulated in the model class
     masks, quality = model.process_prompted_request(request)
 
-    # Postprocess the masks and get contours
-    masks_response = get_masks_responses(masks, quality)
+    # Postprocess the masks. This fits the mask into the already existing contours.
+    if request.mask_id:
+        masks = [mask * request.label for mask in masks]
+        masks = [fit_mask_to_already_created_masks(request.mask_id, mask, request.parent_contour_id) for mask in masks]
+    else:
+        # If no mask_id is provided, we cannot correct the masks.
+        logger.warning("No mask_id provided, skipping mask fitting to existing contours.")
+    masks_response = get_masks_responses([mask * request.label for mask in masks], quality)
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
 
 
 @router.post('/generate_mask')
-async def generate_mask(request: AutomaticSegmentationRequest):
+async def generate_mask(request: AutomaticSegmentationRequest, db: Session = Depends(get_session)):
     """ Generate segmentation masks for an image using automatic semantic segmentation. """
     # Get the model based on the identifier
     model = automatic_model_cache.set_and_get_model(request.model)
     logger.debug(f"Using model: {model.model_name}")
     # Process the request with the model
     masks, qualities = model.process_automatic_request(request)
+    dataset_id = db.query(Images).filter_by(id=request.image_id).first().dataset_id
+    masks = [np.vectorize(lambda x: label_value_to_label_id(dataset_id, x))(mask) for mask in masks]
     masks_response = get_masks_responses(masks, qualities)
     return SegmentationResponse(
         masks=masks_response, image_id=request.image_id, model=request.model

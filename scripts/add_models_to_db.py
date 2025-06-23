@@ -32,8 +32,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+        "config": "sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -43,8 +43,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_small.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
+        "config": "sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -54,8 +54,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted",
@@ -65,8 +65,8 @@ prompted_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "sam2.1_hiera_large.yaml"
     },
 ]
 
@@ -79,8 +79,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+        "config": "sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -90,8 +90,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_small.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
+        "config": "sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -101,8 +101,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Automatic",
@@ -112,8 +112,8 @@ automatic_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "sam2.1_hiera_large.yaml"
     },
 ]
 
@@ -126,8 +126,8 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_tiny.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_tiny.pt",
+        "config": "sam2.1_hiera_tiny.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -137,8 +137,8 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_small.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_small.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_small.pt",
+        "config": "sam2.1_hiera_small.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -148,8 +148,8 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_large.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
+        "config": "sam2.1_hiera_large.yaml"
     },
     {
         "base_model_identifier": "SAM2Prompted3D",
@@ -159,8 +159,8 @@ prompted_3D_models_to_add = [
         "version": "1.0",
         "created_at": None,
         "updated_at": None,
-        "weights": "app/services/segmentation/weights/sam2.1_hiera_base_plus.pt",
-        "config": "app/services/segmentation/configs/sam2.1_hiera_large.yaml"  #
+        "weights": "./app/services/segmentation/weights/sam2.1_hiera_base_plus.pt",
+        "config": "sam2.1_hiera_large.yaml"  #
     },
 ]
 
@@ -186,7 +186,7 @@ def add_models_to_db():
             # Check if the model is already present in the database
             existing_model = session.query(Models).filter_by(**model).first()
             if existing_model:
-                logger.error(f"Model {model['name']} already exists in the database."
+                logger.warning(f"Model {model['name']} already exists in the database."
                              f"Skipping to avoid duplicates. For updating models, please use the respective routes.")
                 continue
 

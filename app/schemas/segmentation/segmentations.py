@@ -38,13 +38,16 @@ def check_model(model_id: Union[int, str], model_type: Literal["prompted", "auto
 
 class PromptedSegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
-    apply_post_processing: Annotated[bool, "Apply post-processing to the segmentation."] = True
-    image_id: Annotated[int, "ID of the image to segment."] = 1
-    model: Annotated[Union[int, str], "Model to use for segmentation."] = "SAM2Tiny"
-    min_x: Annotated[float, "Coordinates must be between 0 and 1."] = 0
-    min_y: Annotated[float, "Coordinates must be between 0 and 1."] = 0
-    max_x: Annotated[float, "Coordinates must be between 0 and 1."] = 1
-    max_y: Annotated[float, "Coordinates must be between 0 and 1."] = 1
+    apply_post_processing: bool = True
+    image_id: int = 1
+    mask_id: int = None
+    parent_contour_id: int = None
+    previous_contours: List[ContourModel] = None
+    model: Union[int, str] = "SAM2Tiny"
+    min_x: float= 0
+    min_y: float = 0
+    max_x: float = 1
+    max_y: float = 1
     point_prompts: List[PointPrompt] = Field(default_factory=list,
                                              description="List of point prompts supplied by the user.")
     box_prompts: List[BoxPrompt] = Field(default_factory=list,

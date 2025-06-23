@@ -30,6 +30,9 @@ sam_vit_b_01ec64.pth
 data/*
 !data/.gitkeep
 
+# SAM2 Configuration Files
+sam2*.yaml
+
 # Pytest / Unittest
 .coverage
 htmlcov/
