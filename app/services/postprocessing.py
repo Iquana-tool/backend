@@ -38,7 +38,7 @@ def fit_mask_to_already_created_masks(mask_id: int, mask: np.ndarray,
         contours_on_same_level = session.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_contour_id).all()
         parent_contour = session.query(Contours).filter_by(id=parent_contour_id).first() if parent_contour_id else None
         if parent_contour:
-            coords = json.load(parent_contour.coords)
+            coords = json.loads(parent_contour.coords)
             parent_contour = get_contour_from_coordinates(coords["x"], coords["y"])
         contours = []
         for contour in contours_on_same_level:
