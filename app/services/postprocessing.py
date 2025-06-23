@@ -42,7 +42,7 @@ def fit_mask_to_already_created_masks(mask_id: int, mask: np.ndarray,
             parent_contour = get_contour_from_coordinates(coords["x"], coords["y"])
         contours = []
         for contour in contours_on_same_level:
-            coords = json.load(contour.coords)
+            coords = json.loads(contour.coords)
             contours.append(get_contour_from_coordinates(coords["x"], coords["y"]))
 
         positive_mask = create_binary_mask_from_contours(width, height, [parent_contour])
