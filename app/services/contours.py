@@ -15,7 +15,11 @@ def get_contours(mask: np.ndarray) -> np.ndarray:
     return contours
 
 
-def get_contour_from_coordinates(x_coords: list[float], y_coords: list[float]) -> np.array:
+def get_contour_from_coordinates(x_coords: list[float], y_coords: list[float], height=None, width=None) -> np.array:
+    if height is not None and width is not None:
+        # Ensure coordinates are within bounds
+        x_coords = [max(0, min(width - 1, int(x * width))) for x in x_coords]
+        y_coords = [max(0, min(height - 1, int(y * height))) for y in y_coords]
     return np.expand_dims(np.array(list(zip(x_coords, y_coords)), dtype=np.int32), 1)
 
 
@@ -31,5 +35,10 @@ def create_binary_mask_from_contours(width, height, contours: list[np.ndarray]):
     """
     mask = np.zeros((height, width), dtype=np.uint8)
     for contour in contours:
-        cv2.fillPoly(mask, [contour], 1)
+        try:
+            cv2.fillPoly(mask, [contour], 1)
+        except cv2.error as e:
+            print(contour.shape)
+            print(contour)
+            raise e
     return mask

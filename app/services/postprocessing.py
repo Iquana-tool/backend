@@ -39,13 +39,16 @@ def fit_mask_to_already_created_masks(mask_id: int, mask: np.ndarray,
         parent_contour = session.query(Contours).filter_by(id=parent_contour_id).first() if parent_contour_id else None
         if parent_contour:
             coords = json.loads(parent_contour.coords)
-            parent_contour = get_contour_from_coordinates(coords["x"], coords["y"])
+            parent_contour = get_contour_from_coordinates(coords["x"], coords["y"], height, width)
         contours = []
         for contour in contours_on_same_level:
             coords = json.loads(contour.coords)
-            contours.append(get_contour_from_coordinates(coords["x"], coords["y"]))
+            contours.append(get_contour_from_coordinates(coords["x"], coords["y"], height, width))
 
-        positive_mask = create_binary_mask_from_contours(width, height, [parent_contour])
+        if parent_contour:
+            positive_mask = create_binary_mask_from_contours(width, height, [parent_contour])
+        else:
+            positive_mask = np.ones((height, width), dtype=np.uint8)
         negative_mask = create_binary_mask_from_contours(width, height, contours)
 
         # Fit the entire mask to the parent masks. Pixels outside the parent are not allowed.
