@@ -52,3 +52,19 @@ def get_automatic_3d_models(db: SessionLocal = Depends(get_session)):
         logger.warning("No automatic 3D segmentation models found in the database.")
         return {"message": "No automatic 3D segmentation models found."}
     return {"success": True, "models": models}
+
+
+@router.get("/get_automatic_models_for_dataset/{dataset_id}")
+def get_automatic_models_for_dataset(dataset_id: int, db: SessionLocal = Depends(get_session)):
+    """Retrieve all automatic segmentation models for a specific dataset."""
+    logger.debug(f"Fetching automatic segmentation models for dataset {dataset_id}.")
+    models = db.query(Models).filter(
+        Models.model_type == "automatic",
+        Models.dataset_id == dataset_id
+    ).all()
+    if not models:
+        logger.warning(f"No automatic segmentation models found for dataset {dataset_id}.")
+        return {"message": f"No automatic segmentation models found for dataset {dataset_id}."}
+    return {"success": True,
+            "message": f"Found {len(models)} automatic segmentation models for dataset {dataset_id}.",
+            "models": models}
