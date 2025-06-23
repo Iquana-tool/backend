@@ -76,6 +76,32 @@ class PromptedSegmentationRequest(BaseModel):
             raise ValueError("Coordinates must be between 0 and 1.")
         return value
 
+    @field_validator('box_prompt')
+    def validate_box_prompt(cls, value, values):
+        """ Validate the ROI prompts. """
+        if value is not None:
+            if values["circle_prompt"] or values["polygon_prompt"]:
+                raise ValueError("You can only use one type of ROI prompt at a time. "
+                                 "Either box_prompt, polygon_prompt or circle_prompt.")
+        return value
+
+    @field_validator('polygon_prompt')
+    def validate_polygon_prompt(cls, value, values):
+        """ Validate the polygon prompt. """
+        if value is not None:
+            if values["box_prompt"] or values["circle_prompt"]:
+                raise ValueError("You can only use one type of ROI prompt at a time. "
+                                 "Either box_prompt, polygon_prompt or circle_prompt.")
+        return value
+
+    @field_validator('circle_prompt')
+    def validate_circle_prompt(cls, value, values):
+        """ Validate the circle prompt. """
+        if value is not None:
+            if values["box_prompt"] or values["polygon_prompt"]:
+                raise ValueError("You can only use one type of ROI prompt at a time. "
+                                 "Either box_prompt, polygon_prompt or circle_prompt.")
+        return value
 
 class AutomaticSegmentationRequest(BaseModel):
     """ Model for validating the segmentation request. """
