@@ -48,16 +48,9 @@ def fit_mask_to_already_created_masks(mask_id: int, mask: np.ndarray,
         if parent_contour is not None:
             coords = json.loads(parent_contour.coords)
             parent_contour = get_contour_from_coordinates(coords["x"], coords["y"], height, width)
-        contours = []
-        for contour in contours_on_same_level:
-            coords = json.loads(contour.coords)
-            contours.append(get_contour_from_coordinates(coords["x"], coords["y"], height, width))
-
-        if parent_contour is not None:
             positive_mask = create_binary_mask_from_contours(width, height, [parent_contour])
         else:
             positive_mask = np.ones((height, width), dtype=np.uint8)
-        negative_mask = create_binary_mask_from_contours(width, height, contours)
 
         if not np.any(positive_mask):
             logger.warning("No positive mask found! Returning empty mask.")
@@ -65,6 +58,13 @@ def fit_mask_to_already_created_masks(mask_id: int, mask: np.ndarray,
 
         # Fit the entire mask to the parent masks. Pixels outside the parent are not allowed.
         on_parent_mask = np.logical_and(positive_mask, mask).astype(np.uint8)
+
+        contours = []
+        for contour in contours_on_same_level:
+            coords = json.loads(contour.coords)
+            contours.append(get_contour_from_coordinates(coords["x"], coords["y"], height, width))
+
+        negative_mask = create_binary_mask_from_contours(width, height, contours)
 
         if not np.any(on_parent_mask):
             logger.warning("Predicted mask does not overlap with parent mask! Returning empty mask.")
