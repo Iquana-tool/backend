@@ -45,7 +45,7 @@ def fit_mask_to_already_created_masks(mask_id: int, mask: np.ndarray,
         height, width = get_height_width_of_image(mask_db.image_id)
         contours_on_same_level = session.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_contour_id).all()
         parent_contour = session.query(Contours).filter_by(id=parent_contour_id).first() if parent_contour_id else None
-        if parent_contour:
+        if parent_contour is not None:
             coords = json.loads(parent_contour.coords)
             parent_contour = get_contour_from_coordinates(coords["x"], coords["y"], height, width)
         contours = []
