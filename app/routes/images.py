@@ -14,7 +14,7 @@ from app.database import get_session
 from app.database.images import Images, Scans
 from app.database.datasets import Datasets
 from app.database.mask_generation import Masks
-from app.services.database_access import parse_log_file, get_height_width_of_image, save_low_res_image_to_disk
+from app.services.database_access import parse_log_file, get_height_width_of_image, save_as_low_res_image_to_disk
 from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
 from app.services.util import extract_numbers
 import zipfile
@@ -109,7 +109,7 @@ def list_images(dataset_id: int, db: Session = Depends(get_session)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/get_image/{image_id}{low_res}", response_model=dict[int, str])
+@router.get("/get_image/{image_id}&{low_res}", response_model=dict[int, str])
 async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(get_session)):
     """Get images via ids.
 
@@ -126,7 +126,7 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
         if not os.path.exists(file_path) and low_res:
             # The thumbnail has not been created yet, so create it
             image = cv2.imread(image.file_path)
-            save_low_res_image_to_disk(image, image_id)
+            save_as_low_res_image_to_disk(image, image_id)
         image_b64 = load_image_as_base64_from_disk(file_path)
         if not image_b64:
             raise HTTPException(status_code=404, detail="Image not found")

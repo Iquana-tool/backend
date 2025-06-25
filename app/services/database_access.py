@@ -185,7 +185,7 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
                                    index_in_scan=index_in_scan,
                                    hash_code=hash_code)
                 session.add(new_entry)
-                save_low_res_image_to_disk(image_array, new_entry.id)
+                save_as_low_res_image_to_disk(image_array, new_entry.id)
                 session.commit()
                 logger.info("New image saved to disk and database.")
                 return new_entry.id
@@ -196,8 +196,18 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
                 return None
 
 
-def save_low_res_image_to_disk(image: np.ndarray, image_id: int) -> str:
+def save_as_low_res_image_to_disk(image: np.ndarray, image_id: int) -> str:
     """Save a low resolution version of the image to disk."""
+    # Scale down the image to low resolution of max 256 pixels on the longest side
+    max_size = 256
+    height, width = image.shape[:2]
+    if height > width:
+        scale_factor = max_size / height
+    else:
+        scale_factor = max_size / width
+    new_height = int(height * scale_factor)
+    new_width = int(width * scale_factor)
+    image = cv.resize(image, (new_width, new_height), interpolation=cv.INTER_AREA)
     low_res_path = join(Paths.thumbnails_dir, f"{image_id}.png")
     cv.imwrite(low_res_path, image)
     logger.info(f"Low resolution image saved to disk at {low_res_path}")
