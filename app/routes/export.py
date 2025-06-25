@@ -58,12 +58,6 @@ def download_dataset(dataset_id: int,
     return query_to_streaming_response(query, f"{dataset_name}_quantifications.csv")
 
 
-@router.post("/download_dataset/{dataset_id")
-def download_dataset(dataset_id: int, db: Session = Depends(get_session)):
-    """ Download the dataset as a zip containing the images and masks. """
-    raise NotImplementedError("This is not implemented yet!")
-
-
 @router.get("/get_quantification/{mask_id}")
 def get_quantification(mask_id: int, db: Session = Depends(get_session)):
     """ Get quantification data for the given mask_id. """
