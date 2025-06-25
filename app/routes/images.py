@@ -105,8 +105,8 @@ def list_images(dataset_id: int, db: Session = Depends(get_session)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/get_image/{image_id}", response_model=dict[int, str])
-async def get_image(image_id: int):
+@router.get("/get_image/{image_id}{low_res}", response_model=dict[int, str])
+async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(get_session)):
     """Get images via ids.
 
     Args:
@@ -117,10 +117,12 @@ async def get_image(image_id: int):
     """
     try:
         response = {}
-        image = load_image_as_base64_from_disk(image_id)
-        if not image:
+        image = db.query(Images).filter_by(id=image_id).first()
+        file_path = image.file_path if not low_res else image.file_path.split('.')[0] + "_low_res.png"
+        image_b64 = load_image_as_base64_from_disk(file_path)
+        if not image_b64:
             raise HTTPException(status_code=404, detail="Image not found")
-        response[image_id] = image
+        response[image_id] = image_b64
         return response
     except Exception as e:
         logger.error(f"Get image error: {str(e)}")

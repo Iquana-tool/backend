@@ -42,17 +42,12 @@ def delete_image_from_disk_and_db(image_id: int):
         session.commit()
 
 
-def load_image_as_base64_from_disk(image_id):
+def load_image_as_base64_from_disk(file_path: Union[str, AnyStr]) -> str:
     """Load an image from the database by its ID and return it as a base64 string."""
-    with get_context_session() as session:
-        image = session.query(Images).filter_by(id=image_id).first()
-    if image:
-        with open(image.file_path, "rb") as image_file:
-            image = image_file.read()
-        # Encode the image to base64
-        return base64.b64encode(image)
-    else:
-        raise ValueError(f"Image with ID {image_id} not found in database.")
+    with open(file_path, "rb") as image_file:
+        image = image_file.read()
+    # Encode the image to base64
+    return base64.b64encode(image)
 
 
 def load_image_as_array_from_disk(image_id):
@@ -178,6 +173,13 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
                 os.remove(file_path)
                 file_path = file_path.split(".")[0] + f".{convert_to}"
                 cv.imwrite(file_path, image_array)
+            # Resize the image to low resolution such that either width or height is at most 300 pixels
+            scale = 300 / max(image_array.shape[0], image_array.shape[1])
+            new_size = (int(image_array.shape[1] * scale), int(image_array.shape[0] * scale))
+            low_res = cv.resize(image_array, new_size, interpolation=cv.INTER_AREA)
+            # Save the low resolution thumbnail
+            low_res_file_path = file_path.split(".")[0] + "_low_res.png"
+            cv.imwrite(low_res_file_path, low_res)
             try:
                 # Save the new image to the database
                 # Image comes in HWC format
