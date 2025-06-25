@@ -2,7 +2,7 @@ import os.path
 from typing import List, Annotated, Union, Literal, Dict
 
 import numpy as np
-from pydantic import BaseModel, Field, field_validator, Extra
+from pydantic import BaseModel, Field, field_validator, Extra, validator
 from app.database import get_context_session
 from app.database.images import Images, Scans
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
@@ -50,12 +50,9 @@ class PromptedSegmentationRequest(BaseModel):
     model: Union[int, str] = "SAM2Tiny"
     point_prompts: List[PointPrompt] = Field(default_factory=list,
                                              description="List of point prompts supplied by the user.")
-    box_prompts: List[BoxPrompt] = Field(default_factory=list,
-                                         description="List of box prompts supplied by the user.")
-    polygon_prompts: List[PolygonPrompt] = Field(default_factory=list,
-                                                 description="List of polygon prompts supplied by the user.")
-    circle_prompts: List[CirclePrompt] = Field(default_factory=list,
-                                               description="List of circle prompts supplied by the user.")
+    box_prompt: BoxPrompt = None
+    polygon_prompt: PolygonPrompt = None
+    circle_prompt: CirclePrompt = None
     label: Annotated[int, "Label of the mask."] = 0
 
     # Deprecated fields, kept for backwards compatibility
