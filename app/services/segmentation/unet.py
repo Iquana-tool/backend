@@ -7,6 +7,7 @@ import yaml
 import numpy as np
 
 from app.services.segmentation.base_model import AutomaticSegmentationBaseModel
+from app.schemas.segmentation.segmentations import AutomaticSegmentationRequest
 
 # ---------------------------
 # U-Net Architecture 

@@ -8,6 +8,7 @@ from albumentations.pytorch import ToTensorV2
 import numpy as np
 
 from app.services.segmentation.base_model import AutomaticSegmentationBaseModel
+from app.schemas.segmentation.segmentations import AutomaticSegmentationRequest
 
 # ---------------------------
 # Parallel Attention Aggregation Block (PAAB)
@@ -151,17 +152,17 @@ class DeepLabV3PP(AutomaticSegmentationBaseModel):
         ])
 
     def process_automatic_request(self, request: AutomaticSegmentationRequest):
-    image_np = request.image  # This is usually the image (as NumPy array) from the request
+        image_np = request.image  # This is usually the image (as NumPy array) from the request
 
-    # Preprocess the image
-    augmented = self.transform(image=image_np)
-    input_tensor = augmented['image'].unsqueeze(0).to(self.device)
+        # Preprocess the image
+        augmented = self.transform(image=image_np)
+        input_tensor = augmented['image'].unsqueeze(0).to(self.device)
 
-    # Run prediction
-    with torch.no_grad():
-        output = self.model(input_tensor)
+        # Run prediction
+        with torch.no_grad():
+            output = self.model(input_tensor)
 
-    # Post-process and return mask
-    mask = output.squeeze().cpu().numpy()
-    mask = (mask > 0.5).astype(np.uint8) * 255
-    return mask
+        # Post-process and return mask
+        mask = output.squeeze().cpu().numpy()
+        mask = (mask > 0.5).astype(np.uint8) * 255
+        return mask

@@ -115,7 +115,6 @@ automatic_models_to_add = [
         "weights": "./app/services/segmentation/weights/sam2.1_hiera_large.pt",
         "config": "sam2.1_hiera_large.yaml"
     },
-]
  {
         "base_model_identifier": "Unet",
         "name": "UnetCoral",
