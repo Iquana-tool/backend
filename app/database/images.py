@@ -14,7 +14,7 @@ class Images(database):
     hash_code = Column(String(64), nullable=False)  # Hash of the image file
     scale_x = Column(Float, nullable=True)  # mm per pixel in X
     scale_y = Column(Float, nullable=True)  # mm per pixel in Y
-    unit = Column(String(10), default="mm")  # Default unit: mm
+    unit = Column(String(10), default="px")  # Default unit: px (for pixels)
     scan_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'))  # Scan id for CT or MRI or OCT, etc.
     index_in_scan = Column(Integer)  # Index of the image in the scan
 
