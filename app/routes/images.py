@@ -10,6 +10,7 @@ from app.routes.mask_generation import delete_mask
 from app.database import get_session
 from app.database.images import Images, Scans
 from app.database.datasets import Datasets
+from app.database.mask_generation import Masks
 from app.services.database_access import delete_image_from_disk_and_db, parse_log_file, get_height_width_of_image
 from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
 from app.services.util import extract_numbers
@@ -77,7 +78,7 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
         image = db.query(Images).filter_by(id=image_id).first()
         if not image:
             raise HTTPException(status_code=404, detail="Image not found")
-        masks = db.query(Images).filter_by(image_id=image_id).all()
+        masks = db.query(Masks).filter_by(image_id=image_id).all()
         for mask in masks:
             await delete_mask(mask.id, db)
         os.remove(image.file_path)
