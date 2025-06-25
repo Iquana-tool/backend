@@ -6,6 +6,7 @@ import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import Literal
+from app.routes.mask_generation import delete_mask
 from app.database import get_session
 from app.database.images import Images, Scans
 from app.database.datasets import Datasets
@@ -71,9 +72,17 @@ async def upload_images(dataset_id: int, files: list[UploadFile] = File(...), db
 
 
 @router.delete("/delete_image/{image_id}")
-async def delete_image(image_id: int):
+async def delete_image(image_id: int, db: Session = Depends(get_session)):
     try:
-        delete_image_from_disk_and_db(image_id)
+        image = db.query(Images).filter_by(id=image_id).first()
+        if not image:
+            raise HTTPException(status_code=404, detail="Image not found")
+        masks = db.query(Images).filter_by(image_id=image_id).all()
+        for mask in masks:
+            await delete_mask(mask.id, db)
+        os.remove(image.file_path)
+        db.delete(image)
+        db.commit()
         return {"success": True,
                 "message": f"Deleted image {image_id}."}
     except Exception as e:
@@ -307,7 +316,7 @@ async def delete_scan(scan_id: int, db: Session = Depends(get_session)):
 
         # Delete the scan and its associated images
         for image in images:
-            delete_image_from_disk_and_db(image.id)
+            await delete_image(image.id)
 
         scan = db.query(Scans).filter_by(id=scan_id).first()
         if not scan:

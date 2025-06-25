@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.database.images import Images
 from app.database.datasets import Datasets, Labels
 from app.database.mask_generation import Masks
+from app.routes.images import delete_image
+from app.routes.labels import delete_label
 
 # Create a router for the export functionality
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -100,10 +102,15 @@ async def delete_dataset(dataset_id: int, db: Session = Depends(get_session)):
         dataset = db.query(Datasets).filter_by(id=dataset_id).first()
         if not dataset:
             return {"success": False, "message": "Dataset not found."}
+        images = db.query(Images).filter_by(dataset_id=dataset_id).all()
+        for image in images:
+            await delete_image(image.id, db)
         # Delete disk directory
         shutil.rmtree(dataset.folder_path, ignore_errors=True)
         # Delete associated labels
-        db.query(Labels).filter_by(dataset_id=dataset_id).delete()
+        labels = db.query(Labels).filter_by(dataset_id=dataset_id).all()
+        for label in labels:
+            await delete_label(label.id, db)
         # Delete the dataset
         db.delete(dataset)
         db.commit()
