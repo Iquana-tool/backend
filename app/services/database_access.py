@@ -10,7 +10,7 @@ from typing import Union, AnyStr
 import numpy as np
 from fastapi import UploadFile
 
-import paths
+from paths import Paths
 from app.database import get_context_session
 from app.database.datasets import Datasets
 from app.database.images import Images, Scans
@@ -173,13 +173,6 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
                 os.remove(file_path)
                 file_path = file_path.split(".")[0] + f".{convert_to}"
                 cv.imwrite(file_path, image_array)
-            # Resize the image to low resolution such that either width or height is at most 300 pixels
-            scale = 300 / max(image_array.shape[0], image_array.shape[1])
-            new_size = (int(image_array.shape[1] * scale), int(image_array.shape[0] * scale))
-            low_res = cv.resize(image_array, new_size, interpolation=cv.INTER_AREA)
-            # Save the low resolution thumbnail
-            low_res_file_path = file_path.split(".")[0] + "_low_res.png"
-            cv.imwrite(low_res_file_path, low_res)
             try:
                 # Save the new image to the database
                 # Image comes in HWC format
@@ -192,6 +185,7 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
                                    index_in_scan=index_in_scan,
                                    hash_code=hash_code)
                 session.add(new_entry)
+                save_low_res_image_to_disk(image_array, new_entry.id)
                 session.commit()
                 logger.info("New image saved to disk and database.")
                 return new_entry.id
@@ -200,6 +194,14 @@ async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None
                 logger.error(f"Deleting image '{image.file_name}' from disk to ensure consistency.")
                 os.remove(file_path)
                 return None
+
+
+def save_low_res_image_to_disk(image: np.ndarray, image_id: int) -> str:
+    """Save a low resolution version of the image to disk."""
+    low_res_path = join(Paths.thumbnails_dir, f"{image_id}.png")
+    cv.imwrite(low_res_path, image)
+    logger.info(f"Low resolution image saved to disk at {low_res_path}")
+    return low_res_path
 
 
 def get_scan_image_folder_path(scan_id: int) -> str:

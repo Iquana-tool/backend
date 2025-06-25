@@ -2,6 +2,9 @@ import logging
 import os.path
 import shutil
 
+import cv2
+
+from paths import Paths
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
@@ -11,7 +14,7 @@ from app.database import get_session
 from app.database.images import Images, Scans
 from app.database.datasets import Datasets
 from app.database.mask_generation import Masks
-from app.services.database_access import delete_image_from_disk_and_db, parse_log_file, get_height_width_of_image
+from app.services.database_access import parse_log_file, get_height_width_of_image, save_low_res_image_to_disk
 from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
 from app.services.util import extract_numbers
 import zipfile
@@ -81,7 +84,8 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
         masks = db.query(Masks).filter_by(image_id=image_id).all()
         for mask in masks:
             await delete_mask(mask.id, db)
-        os.remove(image.file_path)
+        os.remove(image.file_path)  # Remove the original image file
+        os.remove(os.path.join(Paths.thumbnails_dir, f"{image_id}.png"))  # Remove the thumbnail
         db.delete(image)
         db.commit()
         return {"success": True,
@@ -118,7 +122,11 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
     try:
         response = {}
         image = db.query(Images).filter_by(id=image_id).first()
-        file_path = image.file_path if not low_res else image.file_path.split('.')[0] + "_low_res.png"
+        file_path = image.file_path if not low_res else os.path.join(Paths.thumbnails_dir, f"{image_id}.png")
+        if not os.path.exists(file_path) and low_res:
+            # The thumbnail has not been created yet, so create it
+            image = cv2.imread(image.file_path)
+            save_low_res_image_to_disk(image, image_id)
         image_b64 = load_image_as_base64_from_disk(file_path)
         if not image_b64:
             raise HTTPException(status_code=404, detail="Image not found")
