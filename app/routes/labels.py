@@ -4,6 +4,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.datasets import Labels
+from app.database.mask_generation import Contours
 
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,16 @@ async def delete_label(label_id: int, db: Session = Depends(get_session)):
         existing_label = db.query(Labels).filter_by(id=label_id).first()
         if not existing_label:
             raise HTTPException(status_code=404, detail="Class not found.")
+
+        # Check if class has children
+        children = db.query(Labels).filter_by(parent_id=label_id).all()
+        for child in children:
+            await delete_label(child.id, db)
+
+        # Delete all contours with this label
+        contours = db.query(Contours).filter_by(label=label_id).all()
+        for contour in contours:
+            db.delete(contour)
 
         # Delete the class
         db.delete(existing_label)
