@@ -149,6 +149,7 @@ class Prompts:
             return_dict['point_labels'] = points_labels
         if box_prompts is not None:
             return_dict['box'] = box_prompts
+        logger.debug(f"Converted prompts to SAM2 input: {return_dict}")
         return return_dict
 
     @staticmethod
