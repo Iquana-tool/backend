@@ -9,7 +9,7 @@ import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import Literal
-from app.routes.mask_generation import delete_mask
+from app.routes.mask_generation import delete_mask, create_mask
 from app.database import get_session
 from app.database.images import Images, Scans
 from app.database.datasets import Datasets
@@ -32,7 +32,8 @@ async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Sessio
         image_id = await save_image_to_disk_and_db(file, dataset_id)
         if image_id is None:
             raise HTTPException(status_code=400, detail="Invalid file or upload failed")
-
+        # Also create a mask for the image
+        await create_mask(image_id, db)
         return {
             "success": True,
             "image_id": image_id,
