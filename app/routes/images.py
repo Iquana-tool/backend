@@ -84,8 +84,10 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
         masks = db.query(Masks).filter_by(image_id=image_id).all()
         for mask in masks:
             await delete_mask(mask.id, db)
-        os.remove(image.file_path)  # Remove the original image file
-        os.remove(os.path.join(Paths.thumbnails_dir, f"{image_id}.png"))  # Remove the thumbnail
+        if os.path.exists(image.file_path):
+            os.remove(image.file_path)  # Remove the original image file
+        if os.path.exists(os.path.join(Paths.thumbnails_dir, f"{image_id}.png")):
+            os.remove(os.path.join(Paths.thumbnails_dir, f"{image_id}.png"))  # Remove the thumbnail
         db.delete(image)
         db.commit()
         return {"success": True,
