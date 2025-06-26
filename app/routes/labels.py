@@ -58,7 +58,12 @@ async def delete_label(label_id: int, db: Session = Depends(get_session)):
         # Check if class exists
         existing_label = db.query(Labels).filter_by(id=label_id).first()
         if not existing_label:
-            raise HTTPException(status_code=404, detail="Class not found.")
+            # If class does not exist, return success with message
+            # Remark: Not sure if this is the desired behavior, but it is consistent.
+            return {
+                "success": True,
+                "message": "Class never existed."
+            }
 
         # Check if class has children
         children = db.query(Labels).filter_by(parent_id=label_id).all()
