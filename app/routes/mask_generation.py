@@ -47,33 +47,54 @@ async def create_mask(image_id: int, db: Session = Depends(get_session)):
 
 @router.post("/finish_mask/{mask_id}")
 async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
-    try:
-        # Check if mask exists
-        existing_mask = db.query(Masks, Images).filter(Masks.id == mask_id).first()
-        if not existing_mask:
-            raise HTTPException(status_code=404, detail="Mask not found.")
-        # Check if the mask is already finished
-        if existing_mask.finished:
-            return {
-                "success": True,
-                "message": "Mask is already marked as finished.",
-                "mask_id": existing_mask.id
-            }
-        image = db.query(Images).filter_by(id=existing_mask.image_id).first()
-        # Generate the mask from contours
-        mask_image = generate_mask(mask_id)
-        save_array_to_disk(mask_image, image.dataset_id, image.scan_id, is_mask=True)
-        # Mark the mask as finished
-        existing_mask.finished = True
-        db.commit()
+    # Check if mask exists
+    existing_mask = db.query(Masks).filter_by(id=mask_id).first()
+    if not existing_mask:
+        raise HTTPException(status_code=404, detail="Mask not found.")
+    print(f"Finishing this mask: {existing_mask}")
+    # Check if the mask is already finished
+    if bool(existing_mask.finished):
         return {
             "success": True,
-            "message": "Mask marked as finished successfully.",
+            "message": "Mask is already marked as finished.",
             "mask_id": existing_mask.id
         }
-    except Exception as e:
-        logger.error(f"Error finishing mask: {e}")
-        raise HTTPException(status_code=500, detail="Error finishing mask.")
+    image = db.query(Images).filter_by(id=existing_mask.image_id).first()
+    # Generate the mask from contours
+    mask_image = generate_mask(mask_id)
+    save_array_to_disk(mask_image, image.dataset_id, image.scan_id, is_mask=True,
+                       new_filename=image.file_name.split(".")[0] + "_mask.png")
+    # Mark the mask as finished
+    existing_mask.finished = True
+    db.commit()
+    return {
+        "success": True,
+        "message": "Mask marked as finished successfully.",
+        "mask_id": existing_mask.id
+    }
+
+
+@router.post("/unfinish_mask/{mask_id}")
+async def unfinish_mask(mask_id: int, db: Session = Depends(get_session)):
+    # Check if mask exists
+    existing_mask = db.query(Masks).filter_by(id=mask_id).first()
+    if not existing_mask:
+        raise HTTPException(status_code=404, detail="Mask not found.")
+    # Check if the mask is already unfinished
+    if not existing_mask.finished:
+        return {
+            "success": True,
+            "message": "Mask is not marked as finished.",
+            "mask_id": existing_mask.id
+        }
+    # Mark the mask as unfinished
+    existing_mask.finished = False
+    db.commit()
+    return {
+        "success": True,
+        "message": "Mask marked as unfinished successfully.",
+        "mask_id": existing_mask.id
+    }
 
 
 @router.get("/get_contours_of_mask/{mask_id}")
@@ -113,6 +134,38 @@ async def get_mask(mask_id: int, db: Session = Depends(get_session)):
     return {
         "success": True,
         "mask": mask
+    }
+
+
+@router.get("/get_mask_annotation_status/{mask_id}")
+async def get_mask_annotation_status(mask_id: int, db: Session = Depends(get_session)):
+    mask = db.query(Masks).filter_by(id=mask_id).first()
+    if mask is None:
+        raise HTTPException(status_code=404, detail="Mask not found.")
+
+    # Check if the mask is finished
+    if mask.finished:
+        return {
+            "success": True,
+            "message": "Mask is finished.",
+            "status": "finished",
+            "mask_id": mask.id
+        }
+
+    # Check if the mask is generated
+    if mask.generated:
+        return {
+            "success": True,
+            "message": "Mask is generated but not finished.",
+            "status": "auto generated",
+            "mask_id": mask.id
+        }
+
+    return {
+        "success": True,
+        "message": "Mask is not finished or generated.",
+        "status": "not finished nor generated",
+        "mask_id": mask.id
     }
 
 
