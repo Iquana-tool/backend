@@ -1,6 +1,7 @@
 import logging
 import os.path
 import shutil
+from collections import defaultdict
 
 import cv2
 
@@ -109,6 +110,44 @@ def list_images(dataset_id: int, db: Session = Depends(get_session)):
         }
     except Exception as e:
         logger.error(f"List images error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/list_images_with_annotation_status/{dataset_id}&status={status}")
+async def list_images_with_annotation_status(dataset_id: int, status: Literal["finished", "generated", "missing"],
+                                          db: Session = Depends(get_session)):
+    """List all images with finished masks for a given image ID.
+
+    Args:
+        dataset_id: Dataset ID to retrieve images from.
+        status: The status of the masks to filter by. Can be "finished", "generated", or "missing".
+        db: Database session dependency.
+
+    Returns:
+        A list of image IDs.
+    """
+    try:
+        if status == "finished":
+            images = db.query(Images, Masks).join(Images.id == Masks.image_id).filter_by(dataset_id=dataset_id,
+                                                                                     finished=True).all()
+        elif status == "generated":
+            images = db.query(Images, Masks).join(Images.id == Masks.image_id).filter_by(dataset_id=dataset_id,
+                                                                                     generated=True).all()
+        elif status == "missing":
+            images = db.query(Images, Masks).join(Images.id == Masks.image_id).filter_by(dataset_id=dataset_id,
+                                                                                         generated=False,
+                                                                                         finished=False).all()
+        else:
+            raise HTTPException(status_code=400, detail="Invalid status. Use 'finished', 'generated', or 'missing'.")
+        if not images:
+            raise HTTPException(status_code=404, detail="No images found for this dataset")
+
+        return {
+            "success": True,
+            "images": [image.id for image, mask in images],
+        }
+    except Exception as e:
+        logger.error(f"Get image with finished masks error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
