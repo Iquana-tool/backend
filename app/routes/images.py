@@ -128,23 +128,47 @@ async def list_images_with_annotation_status(dataset_id: int, status: Literal["f
     """
     try:
         if status == "finished":
-            images = db.query(Images, Masks).join(Images.id == Masks.image_id).filter_by(dataset_id=dataset_id,
-                                                                                     finished=True).all()
+            image_ids = (
+                db.query(Images.id)
+                .join(Masks, Images.id == Masks.image_id)
+                .filter(
+                    Images.dataset_id == dataset_id,
+                    Masks.finished == True
+                )
+                .distinct()
+                .all()
+            )
         elif status == "generated":
-            images = db.query(Images, Masks).join(Images.id == Masks.image_id).filter_by(dataset_id=dataset_id,
-                                                                                     generated=True).all()
+            image_ids = (
+                db.query(Images.id)
+                .join(Masks, Images.id == Masks.image_id)
+                .filter(
+                    Images.dataset_id == dataset_id,
+                    Masks.generated == True
+                )
+                .distinct()
+                .all()
+            )
         elif status == "missing":
-            images = db.query(Images, Masks).join(Images.id == Masks.image_id).filter_by(dataset_id=dataset_id,
-                                                                                         generated=False,
-                                                                                         finished=False).all()
+            image_ids = (
+                db.query(Images.id)
+                .join(Masks, Images.id == Masks.image_id)
+                .filter(
+                    Images.dataset_id == dataset_id,
+                    Masks.generated == False,
+                    Masks.finished == False
+                )
+                .distinct()
+                .all()
+            )
         else:
             raise HTTPException(status_code=400, detail="Invalid status. Use 'finished', 'generated', or 'missing'.")
-        if not images:
+        if not image_ids:
             raise HTTPException(status_code=404, detail="No images found for this dataset")
-
         return {
             "success": True,
-            "images": [image.id for image, mask in images],
+            "message": f"Found {len(image_ids)} images with status '{status}' in dataset {dataset_id}.",
+            "images": [id_object.id for id_object in image_ids],
         }
     except Exception as e:
         logger.error(f"Get image with finished masks error: {str(e)}")
