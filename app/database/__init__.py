@@ -33,6 +33,7 @@ def init_db():
 
 def get_session():
     session = SessionLocal()
+    logging.info(f"DB connections: {engine.pool.checkedout()}")
     try:
         yield session
     except Exception:
@@ -45,6 +46,7 @@ def get_session():
 @contextmanager
 def get_context_session():
     session = SessionLocal()
+    logging.info(f"DB connections: {engine.pool.checkedout()}")
     try:
         yield session
     except Exception:
