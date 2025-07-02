@@ -1,6 +1,6 @@
-from sqlalchemy import Column, String, Text, Integer
-
+from sqlalchemy import Column, String, Text, Integer, ForeignKey
 from . import database
+from .datasets import Datasets
 
 
 class Models(database):
@@ -21,8 +21,8 @@ class Models(database):
 class Training(database):
     __tablename__ = 'training'
     id = Column(String, primary_key=True, unique=True, nullable=False)
-    model_id = Column(String, nullable=False)  # Foreign key to Models table
-    dataset_id = Column(String, nullable=False)  # Foreign key to Datasets table
+    model_id = Column(String, ForeignKey(Models.id), nullable=False)
+    dataset_id = Column(String, ForeignKey(Datasets.id), nullable=False)  # if datasets table exists
     status = Column(String, nullable=False)  # e.g., 'pending', 'in_progress', 'completed', 'failed'
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
