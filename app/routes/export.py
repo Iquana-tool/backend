@@ -1,7 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 import pandas as pd
 import json
 from io import StringIO
@@ -21,8 +21,7 @@ def query_to_streaming_response(query, filename: str):
     # Send the dataframe as a CSV file without saving locally
     stream = StringIO()
     df.to_csv(stream, index=False)  # Write to the StringIO stream
-    response = StreamingResponse(
-        iter([stream.getvalue()]), media_type="text/csv")
+    response = FileResponse(stream.getvalue(), media_type="text/csv")
     response.headers["Content-Disposition"] = f"attachment; filename={filename}"
     return response
 
