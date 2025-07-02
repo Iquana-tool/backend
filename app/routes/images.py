@@ -244,6 +244,40 @@ async def get_images(image_ids: list[int], low_res: bool = False, db: Session = 
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/get_all_images_of_dataset/{dataset_id}")
+async def get_all_images_of_dataset(dataset_id: int, low_res: bool = False, db: Session = Depends(get_session)):
+    """Get all images of a dataset.
+
+    Args:
+        dataset_id: ID of the dataset to retrieve images from.
+        low_res: Whether to return low resolution images (thumbnails).
+
+    Returns:
+        A dict mapping from image ID to base64 encoded image.
+    """
+    try:
+        response = {}
+        images = db.query(Images).filter_by(dataset_id=dataset_id).all()
+        db.close()
+        if not images:
+            raise HTTPException(status_code=404, detail="No images found for this dataset")
+        for image in images:
+            file_path = image.file_path if not low_res else os.path.join(Paths.thumbnails_dir, f"{image.id}.png")
+            if not os.path.exists(file_path) and low_res:
+                # The thumbnail has not been created yet, so create it
+                img = cv2.imread(image.file_path)
+                save_as_low_res_image_to_disk(img, image.id)
+            response[image.id] = load_image_as_base64_from_disk(file_path)
+        return {
+            "success": True,
+            "message": f"Successfully retrieved {len(images)} images from dataset {dataset_id}.",
+            "images": response
+        }
+    except Exception as e:
+        logger.error(f"Get all images of dataset error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/upload_scan")
 async def upload_scan(dataset_id: int,
                       files: list[UploadFile] = File(...),
