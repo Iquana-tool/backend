@@ -204,6 +204,7 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
     try:
         response = {}
         image = db.query(Images).filter_by(id=image_id).first()
+        db.close()
         file_path = image.file_path if not low_res else os.path.join(Paths.thumbnails_dir, f"{image_id}.png")
         if not os.path.exists(file_path) and low_res:
             # The thumbnail has not been created yet, so create it
