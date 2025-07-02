@@ -103,10 +103,26 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
 def list_images(dataset_id: int, db: Session = Depends(get_session)):
     """List all uploaded image ids"""
     try:
-        images = db.query(Images).filter_by(dataset_id=dataset_id).all()
+        images = (
+            db.query(Images, Masks.finished, Masks.generated)
+            .join(Masks, Images.id == Masks.image_id)
+            .filter(Images.dataset_id == dataset_id)
+            .all()
+        )
+        image_response = []
+        for entry in images:
+            image = entry[0]
+            finished = entry[1]
+            generated = entry[2]
+            image_response.append({
+                **image.__dict__,
+                "finished": finished,
+                "generated": generated
+            })
+
         return {
             "success": True,
-            "images": images
+            "images": image_response
         }
     except Exception as e:
         logger.error(f"List images error: {str(e)}")
