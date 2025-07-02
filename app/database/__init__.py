@@ -15,9 +15,9 @@ database = declarative_base()
 # Create an engine
 engine = create_engine(Paths.database,
                        pool_size=20,  # Default is usually 5
-                       max_overflow=30,  # Default is usually 10
-                       pool_pre_ping=True,  # Validates connections
-                       pool_recycle=3600,  # Recycle connections after 1 hour
+                       max_overflow=50,  # Increase from default 10
+                       pool_pre_ping=True,  # Validate connections
+                       pool_recycle=3600,  # Recycle after 1 hour
                        )
 
 database.metadata.create_all(engine)
