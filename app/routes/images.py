@@ -244,20 +244,22 @@ async def get_images(image_ids: list[int], low_res: bool = False, db: Session = 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/get_all_images_of_dataset/{dataset_id}")
-async def get_all_images_of_dataset(dataset_id: int, low_res: bool = False, db: Session = Depends(get_session)):
+@router.get("/get_images_of_dataset/{dataset_id}")
+async def get_images_of_dataset(dataset_id: int, low_res: bool = False, limit: int = None,
+                                db: Session = Depends(get_session)):
     """Get all images of a dataset.
 
     Args:
         dataset_id: ID of the dataset to retrieve images from.
         low_res: Whether to return low resolution images (thumbnails).
+        limit: Optional limit on the number of images to return. If not provided, all images will be returned.
 
     Returns:
         A dict mapping from image ID to base64 encoded image.
     """
     try:
         response = {}
-        images = db.query(Images).filter_by(dataset_id=dataset_id).all()
+        images = db.query(Images).filter_by(dataset_id=dataset_id).limit(limit).all()
         db.close()
         if not images:
             raise HTTPException(status_code=404, detail="No images found for this dataset")
