@@ -13,7 +13,12 @@ logger.setLevel(logging.DEBUG)
 database = declarative_base()
 
 # Create an engine
-engine = create_engine(Paths.database)
+engine = create_engine(Paths.database,
+                       pool_size=20,  # Default is usually 5
+                       max_overflow=30,  # Default is usually 10
+                       pool_pre_ping=True,  # Validates connections
+                       pool_recycle=3600,  # Recycle connections after 1 hour
+                       )
 
 database.metadata.create_all(engine)
 
