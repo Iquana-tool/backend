@@ -64,7 +64,7 @@ async def set_pixel_scale(scale_x: float, scale_y: float, unit: str, image_id: i
 
 
 @router.post('/set_pixel_scale_via_drawn_line')
-def set_pixel_scale_via_drawn_line(scale_input: ScaleInput, db: Session = Depends(get_session)):
+async def set_pixel_scale_via_drawn_line(scale_input: ScaleInput, db: Session = Depends(get_session)):
     """
     Set the pixel scale based on a known distance between two points drawn on the image.
     """

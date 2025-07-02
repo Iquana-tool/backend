@@ -100,7 +100,7 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
 
 
 @router.get("/list_images/{dataset_id}")
-def list_images(dataset_id: int, db: Session = Depends(get_session)):
+async def list_images(dataset_id: int, db: Session = Depends(get_session)):
     """List all uploaded image ids"""
     try:
         images = (

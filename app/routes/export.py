@@ -27,7 +27,7 @@ def query_to_streaming_response(query, filename: str):
 
 
 @router.post("/download_quantification/{mask_id}")
-def download_quantification(mask_id: int, label_ids: list[int] = None, db: Session = Depends(get_session)):
+async def download_quantification(mask_id: int, label_ids: list[int] = None, db: Session = Depends(get_session)):
     """ Export quantification data for the given mask_id and labels. """
     query = db.query(Contours).filter_by(mask_id=mask_id)
     if label_ids:
@@ -36,7 +36,7 @@ def download_quantification(mask_id: int, label_ids: list[int] = None, db: Sessi
 
 
 @router.post("/download_dataset/{dataset_id}")
-def download_dataset(dataset_id: int,
+async def download_dataset(dataset_id: int,
                      label_ids: list[int] = None,
                      annotation_level: Literal["manual_only", "manual+reviewed", "all"] = "manual_only",
                      db: Session = Depends(get_session)):
@@ -58,7 +58,7 @@ def download_dataset(dataset_id: int,
 
 
 @router.get("/get_quantification/{mask_id}")
-def get_quantification(mask_id: int, db: Session = Depends(get_session)):
+async def get_quantification(mask_id: int, db: Session = Depends(get_session)):
     """ Get quantification data for the given mask_id. """
     contours = db.query(Contours).filter_by(mask_id=mask_id).all()
 

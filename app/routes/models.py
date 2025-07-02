@@ -11,7 +11,7 @@ router = APIRouter(
 
 
 @router.get("/get_prompted_models")
-def get_prompted_models(db: SessionLocal = Depends(get_session)):
+async def get_prompted_models(db: SessionLocal = Depends(get_session)):
     """Retrieve all prompted segmentation models from the database."""
     logger.debug("Fetching prompted segmentation models from the database.")
     models = db.query(Models).filter(Models.model_type == "prompted").all()
@@ -22,7 +22,7 @@ def get_prompted_models(db: SessionLocal = Depends(get_session)):
 
 
 @router.get("/get_automatic_models")
-def get_automatic_models(db: SessionLocal = Depends(get_session)):
+async def get_automatic_models(db: SessionLocal = Depends(get_session)):
     """Retrieve all automatic segmentation models from the database."""
     logger.debug("Fetching automatic segmentation models from the database.")
     models = db.query(Models).filter(Models.model_type == "automatic").all()
@@ -33,7 +33,7 @@ def get_automatic_models(db: SessionLocal = Depends(get_session)):
 
 
 @router.get("/get_prompted_3d_models")
-def get_prompted_3d_models(db: SessionLocal = Depends(get_session)):
+async def get_prompted_3d_models(db: SessionLocal = Depends(get_session)):
     """Retrieve all prompted 3D segmentation models from the database."""
     logger.debug("Fetching prompted 3D segmentation models from the database.")
     models = db.query(Models).filter(Models.model_type == "prompted_3d").all()
@@ -44,7 +44,7 @@ def get_prompted_3d_models(db: SessionLocal = Depends(get_session)):
 
 
 @router.get("/get_automatic_3d_models")
-def get_automatic_3d_models(db: SessionLocal = Depends(get_session)):
+async def get_automatic_3d_models(db: SessionLocal = Depends(get_session)):
     """Retrieve all automatic 3D segmentation models from the database."""
     logger.debug("Fetching automatic 3D segmentation models from the database.")
     models = db.query(Models).filter(Models.model_type == "automatic_3d").all()
@@ -55,7 +55,7 @@ def get_automatic_3d_models(db: SessionLocal = Depends(get_session)):
 
 
 @router.get("/get_automatic_models_for_dataset/{dataset_id}")
-def get_automatic_models_for_dataset(dataset_id: int, db: SessionLocal = Depends(get_session)):
+async def get_automatic_models_for_dataset(dataset_id: int, db: SessionLocal = Depends(get_session)):
     """Retrieve all automatic segmentation models for a specific dataset."""
     logger.debug(f"Fetching automatic segmentation models for dataset {dataset_id}.")
     models = db.query(Models).filter(

@@ -12,7 +12,7 @@ router = APIRouter(prefix="/labels", tags=["labels"])
 
 
 @router.get("/get_labels/{dataset_id}")
-def get_labels(dataset_id: int, db: Session = Depends(get_session)):
+async def get_labels(dataset_id: int, db: Session = Depends(get_session)):
     classes = db.query(Labels).filter_by(dataset_id=dataset_id).all()
     return classes
 

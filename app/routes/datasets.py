@@ -40,7 +40,7 @@ async def create_dataset(name: str,
 
 
 @router.get("/get_dataset/{dataset_id}")
-def get_dataset(dataset_id: int, db: Session = Depends(get_session)):
+async def get_dataset(dataset_id: int, db: Session = Depends(get_session)):
     """Get dataset information."""
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
@@ -49,7 +49,7 @@ def get_dataset(dataset_id: int, db: Session = Depends(get_session)):
 
 
 @router.get("/get_number_of_images/{dataset_id}")
-def get_number_of_images(dataset_id: int, db: Session = Depends(get_session)):
+async def get_number_of_images(dataset_id: int, db: Session = Depends(get_session)):
     """Get the number of images in a dataset."""
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
@@ -91,7 +91,7 @@ async def get_annotation_progress(dataset_id: int, db: Session = Depends(get_ses
 
 
 @router.get("/get_datasets")
-def get_datasets(db: Session = Depends(get_session)):
+async def get_datasets(db: Session = Depends(get_session)):
     """Get all datasets."""
     datasets = db.query(Datasets).all()
     return {"success": True, "datasets": datasets}
