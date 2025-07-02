@@ -219,6 +219,29 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/get_images")
+async def get_images(image_ids: list[int], low_res: bool = False, db: Session = Depends(get_session)):
+    try:
+        response = {}
+        file_paths = db.query(Images.file_path, Images.id).filter(Images.id.in_(image_ids)).all()
+        db.close()
+        for (fp, id) in file_paths:
+            file_path = fp if not low_res else os.path.join(Paths.thumbnails_dir, f"{id}.png")
+            if not os.path.exists(file_path) and low_res:
+                # The thumbnail has not been created yet, so create it
+                image = cv2.imread(image.file_path)
+                save_as_low_res_image_to_disk(image, id)
+            response[id] = load_image_as_base64_from_disk(file_path)
+        return {
+            "success": True,
+            "message": f"Successfully retrieved {len(image_ids)} images.",
+            "images": response
+        }
+    except Exception as e:
+        logger.error(f"Get images error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/upload_scan")
 async def upload_scan(dataset_id: int,
                       files: list[UploadFile] = File(...),
