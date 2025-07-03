@@ -21,7 +21,7 @@ class TestSAM2(unittest.TestCase):
         self.assertIsNotNone(segmentation, )
         self.assertIsInstance(segmentation, list, f"Returned type is not a list: {type(segmentation)}")
         print(f"Segmentation result: List of length {len(segmentation)}")
-        Image.fromarray(segmentation[0]['segmentation']).save(os.path.join(config.Paths.meso_dir, "test_mask.jpg"))
+        Image.fromarray(segmentation[0]['prompted_segmentation']).save(os.path.join(config.Paths.meso_dir, "test_mask.jpg"))
 
     def testPointPromptedSegmentation(self):
         test_img = np.array(Image.open(os.path.join(config.Paths.meso_dir, "test_img.jpg")))

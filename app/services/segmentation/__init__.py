@@ -14,7 +14,7 @@ logger = getLogger(__name__)
 class ModelCache:
     def __init__(self):
         """
-        Initializes the ModelCache service which manages segmentation models.
+        Initializes the ModelCache service which manages prompted_segmentation models.
         """
         logger.debug("PromptedModel service initialized.")
         self.model = None
@@ -22,10 +22,10 @@ class ModelCache:
 
     def set_model(self, identifier: str):
         """
-        Sets the segmentation model based on the provided identifier.
+        Sets the prompted_segmentation model based on the provided identifier.
 
         Args:
-            identifier (str): The identifier for the segmentation model.
+            identifier (str): The identifier for the prompted_segmentation model.
 
         Raises:
             ValueError: If the identifier does not match any known model.
@@ -48,10 +48,10 @@ class ModelCache:
 
     def get_model(self) -> SegmentationBaseModel:
         """
-        Returns the currently set segmentation model.
+        Returns the currently set prompted_segmentation model.
 
         Returns:
-            SegmentationBaseModel: The currently set segmentation model.
+            SegmentationBaseModel: The currently set prompted_segmentation model.
 
         Raises:
             ValueError: If no model has been set.
@@ -64,13 +64,13 @@ class ModelCache:
     @log_execution_time
     def set_and_get_model(self, identifier: str) -> SegmentationBaseModel:
         """
-        Sets the segmentation model based on the identifier and returns it.
+        Sets the prompted_segmentation model based on the identifier and returns it.
 
         Args:
-            identifier (str): The identifier for the segmentation model.
+            identifier (str): The identifier for the prompted_segmentation model.
 
         Returns:
-            SegmentationBaseModel: The segmentation model set based on the identifier.
+            SegmentationBaseModel: The prompted_segmentation model set based on the identifier.
 
         Raises:
             ValueError: If the identifier does not match any known model.

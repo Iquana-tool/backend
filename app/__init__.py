@@ -5,14 +5,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 import paths
-from app.routes.segmentation.image_segmentation import router as segmentation_router
+from app.routes.prompted_segmentation.image_segmentation import router as segmentation_router
 from app.routes.images import router as image_router
 from app.routes.mask_generation import router as mask_router
 from app.routes.labels import router as label_router
 from app.routes.export import router as export_router
 from app.routes.datasets import router as dataset_router
 from app.routes.models import router as model_router
-from app.routes.segmentation.scan_segmentation import router as scan_segmentation_router
+from app.routes.prompted_segmentation.scan_segmentation import router as scan_segmentation_router
 from app.database import init_db
 import scripts.add_models_to_db as add_models_to_db
 from logging import getLogger
@@ -39,11 +39,11 @@ def create_app():
 
     init_db()
     GlobalHydra.instance().clear()
-    initialize_config_dir(config_dir=paths.Paths.services_dir + "/segmentation/configs/")
+    initialize_config_dir(config_dir=paths.Paths.services_dir + "/prompted_segmentation/configs/")
 
     app = FastAPI(
         title="Coral Segmentation API",
-        description="FastAPI backend for interactive coral segmentation",
+        description="FastAPI backend for interactive coral prompted_segmentation",
         version="0.1.0",
     )
 

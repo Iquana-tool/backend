@@ -95,9 +95,9 @@ class SAM2Prompted(SAM2Base, PromptedSegmentationBaseModel):
 
     @log_execution_time
     def process_prompted_request(self, request: PromptedSegmentationRequest) -> tuple[np.ndarray, np.ndarray]:
-        """ Process the segmentation request.
+        """ Process the prompted_segmentation request.
             Args:
-                request (PromptedSegmentationRequest): The segmentation request containing the image and prompts.
+                request (PromptedSegmentationRequest): The prompted_segmentation request containing the image and prompts.
 
             Returns:
                 tuple: A tuple containing an array of masks and an array of predicted iou scores.
@@ -159,7 +159,7 @@ class SAM2Automatic(SAM2Base, AutomaticSegmentationBaseModel):
                                request.max_x, request.max_y,
                                image)
         result = self.mask_generator.generate(image)
-        masks = np.array([mask['segmentation'] for mask in result])
+        masks = np.array([mask['prompted_segmentation'] for mask in result])
         scores = np.array([mask['stability_score'] for mask in result])
         return masks, scores
 
@@ -199,7 +199,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
     def add_slice_prompt(self, request: PromptedSegmentationRequest, object_id: int = 1):
         """ Add a slice prompt to the stack predictor.
             Args:
-                request (PromptedSegmentationRequest): The segmentation request containing the image and prompts.
+                request (PromptedSegmentationRequest): The prompted_segmentation request containing the image and prompts.
                 object_id (int): The ID of the object to segment. Defaults to 1.
         """
         prompts = Prompts()
@@ -225,7 +225,7 @@ class SAM2Prompted3D(SAM2Prompted, PromptedSegmentation3DBaseModel):
     def process_prompted_segmentation_3D_request(self, request: ScanPromptedSegmentationRequest) -> dict:
         """ Propagate the mask across the scan.
             Args:
-                request (ScanPromptedSegmentationRequest): The segmentation request containing the scan and prompts.
+                request (ScanPromptedSegmentationRequest): The prompted_segmentation request containing the scan and prompts.
 
             Returns:
                 tuple: A tuple containing an array of masks and an array of predicted iou scores.

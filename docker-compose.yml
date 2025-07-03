@@ -9,7 +9,7 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/data
-      - ./app/services/segmentation/weights:/app/services/segmentation/weights
+      - ./app/services/prompted_segmentation/weights:/app/services/prompted_segmentation/weights
     environment:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://coral.ni.dfki.de,http://localhost:3000}
     restart: unless-stopped

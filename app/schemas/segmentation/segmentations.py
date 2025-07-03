@@ -33,7 +33,7 @@ def check_model(model_id: Union[int, str], model_type: Literal["prompted", "auto
             raise ValueError(f"Model with id {model_id} does not exist in the database. Please make sure you ran the "
                              f"scripts/add_models_to_db.py script to add the models to the database.")
         if model.model_type not in model_type:
-            raise ValueError(f"Model with id {model_id} is not an prompted segmentation model.")
+            raise ValueError(f"Model with id {model_id} is not an prompted prompted_segmentation model.")
         if not (os.path.exists(model.weights) and os.path.exists(model.config)):
             raise ValueError(f"Model with id {model_id} has invalid paths for weights or config. Please make sure "
                              f"they are correctly added.")
@@ -41,7 +41,7 @@ def check_model(model_id: Union[int, str], model_type: Literal["prompted", "auto
 
 
 class PromptedSegmentationRequest(BaseModel):
-    """ Model for validating the segmentation request. """
+    """ Model for validating the prompted_segmentation request. """
     apply_post_processing: bool = True
     image_id: int = 1
     mask_id: int = None
@@ -86,10 +86,10 @@ class PromptedSegmentationRequest(BaseModel):
 
 
 class AutomaticSegmentationRequest(BaseModel):
-    """ Model for validating the segmentation request. """
+    """ Model for validating the prompted_segmentation request. """
     #apply_post_processing: bool = False
     image_id: Annotated[int, "ID of the image to segment."]
-    model: Annotated[Union[int, str], "Model to use for segmentation."] = "SAM2Tiny"
+    model: Annotated[Union[int, str], "Model to use for prompted_segmentation."] = "SAM2Tiny"
     min_x: Annotated[float, "Coordinates must be between 0 and 1."] = 0
     min_y: Annotated[float, "Coordinates must be between 0 and 1."] = 0
     max_x: Annotated[float, "Coordinates must be between 0 and 1."] = 1
@@ -120,7 +120,7 @@ class AutomaticSegmentationRequest(BaseModel):
 class ScanAutomaticSegmentationRequest(BaseModel):
     """ Model for validating the mask propagation request. """
     scan_id: int = 1
-    model: Annotated[Union[int, str], "Model to use for segmentation."] = "SAM2Tiny"
+    model: Annotated[Union[int, str], "Model to use for prompted_segmentation."] = "SAM2Tiny"
 
     @field_validator('scan_id')
     def validate_scan_id(cls, value):
@@ -143,9 +143,9 @@ class ScanPromptedSegmentationRequest(BaseModel):
     scan_id: int = 1
     prompted_requests: Dict[int, List[PromptedSegmentationRequest]] = (
         Field(default_factory=dict,
-              description="Dictionary that maps objects to their prompted segmentation requests. Each key is one object "
-                          "ID, and can have multiple segmentation requests from different slices."))
-    model: Annotated[Union[int, str], "Model to use for segmentation."] = "SAM2Tiny"
+              description="Dictionary that maps objects to their prompted prompted_segmentation requests. Each key is one object "
+                          "ID, and can have multiple prompted_segmentation requests from different slices."))
+    model: Annotated[Union[int, str], "Model to use for prompted_segmentation."] = "SAM2Tiny"
 
     @field_validator('scan_id')
     def validate_scan_id(cls, value):
@@ -195,7 +195,7 @@ class SegmentationMaskModel(BaseModel):
 
 
 class SegmentationResponse(BaseModel):
-    """ Model for the segmentation response. """
+    """ Model for the prompted_segmentation response. """
     masks: List[SegmentationMaskModel]
     image_id: int = 0
     model: int

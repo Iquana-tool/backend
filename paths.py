@@ -28,5 +28,5 @@ class Paths:
     routes_dir = os.path.join(app_dir, 'routes')
     schemas_dir = os.path.join(app_dir, 'schemas')
     services_dir = os.path.join(app_dir, 'services')
-    segmentation_dir = os.path.join(services_dir, 'segmentation')
+    segmentation_dir = os.path.join(services_dir, 'prompted_segmentation')
     weights_dir = os.path.join(segmentation_dir, 'weights')
