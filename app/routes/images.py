@@ -2,6 +2,7 @@ import logging
 import os.path
 import shutil
 from collections import defaultdict
+import json
 
 import cv2
 
@@ -222,8 +223,13 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
 
 
 @router.post("/get_images")
-async def get_images(image_ids: list[int], low_res: bool = False, db: Session = Depends(get_session)):
+async def get_images(image_ids: str, low_res: bool = False, db: Session = Depends(get_session)):
     try:
+        # Parse image_ids from JSON string
+        image_ids = json.loads(image_ids)
+        if not isinstance(image_ids, list):
+            raise HTTPException(status_code=400, detail="image_ids must be a list")
+            
         response = {}
         file_paths = db.query(Images.file_path, Images.id).filter(Images.id.in_(image_ids)).all()
         db.close()
@@ -231,7 +237,7 @@ async def get_images(image_ids: list[int], low_res: bool = False, db: Session = 
             file_path = fp if not low_res else os.path.join(Paths.thumbnails_dir, f"{id}.png")
             if not os.path.exists(file_path) and low_res:
                 # The thumbnail has not been created yet, so create it
-                image = cv2.imread(image.file_path)
+                image = cv2.imread(fp)
                 save_as_low_res_image_to_disk(image, id)
             response[id] = load_image_as_base64_from_disk(file_path)
         return {
