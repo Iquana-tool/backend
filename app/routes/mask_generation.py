@@ -4,6 +4,8 @@ import logging
 import cv2
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
+
+from app.schemas.segmentation.segmentations import SegmentationMaskModel
 from paths import Paths
 from app.database import get_session
 from app.database.datasets import Datasets
@@ -196,11 +198,7 @@ async def add_contour(mask_id: int,
                       parent_contour_id: int = None,
                       db: Session = Depends(get_session)):
     try:
-        # Check if mask exists
         existing_mask = db.query(Masks).filter_by(id=mask_id).first()
-        if not existing_mask:
-            mask_id = await create_mask(db=db)
-
         contour = coords_to_cv_contour(contour_to_add.x, contour_to_add.y)
 
         # Check if contour is enclosed by its parent contour
@@ -316,3 +314,22 @@ async def add_contours(mask_id: int,
             "added_ids": added_ids,
             "failed": []
         }
+
+
+async def create_masks_and_add_contours_for_images(image_ids: list[int],
+                                                   mask_responses: list[SegmentationMaskModel],
+                                                   db: Session = Depends(get_session)):
+    if len(image_ids) != len(mask_responses):
+        raise ValueError(
+            f"Number of image_ids does not match number of mask_responses."
+        )
+    responses = []
+    for image_id, mask_response in zip(image_ids, mask_responses):
+        mask = db.query(Masks).filter_by(image_id=image_id).first()
+        if not mask:
+            response = await create_mask(image_id, db)
+            mask = db.query(Masks).filter_by(image_id=image_id).first()
+        responses.append(await add_contours(mask.id, mask_responses, None, db))
+
+
+
