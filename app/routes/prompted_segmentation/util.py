@@ -4,7 +4,7 @@ from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.schemas.segmentation.segmentations import SegmentationMaskModel
 
 
-def get_masks_responses(masks, qualities):
+async def get_masks_responses(masks, qualities):
     masks_response = []
     for mask, quality in zip(masks, qualities):
         # Get contours of the postprocessed mask if postprocessing is enabled

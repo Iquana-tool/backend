@@ -50,7 +50,7 @@ async def segment_image(request: PromptedSegmentationRequest):
     else:
         # If no mask_id is provided, we cannot correct the masks.
         logger.warning("No mask_id provided, skipping mask fitting to existing contours.")
-    masks_response = get_masks_responses([mask * request.label for mask in masks], quality)
+    masks_response = await get_masks_responses([mask * request.label for mask in masks], quality)
     return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
 
 
