@@ -1,4 +1,8 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+AUTOMATIC_SEGMENTATION_BACKEND_URL = os.environ.get("AUTOMATIC_SEGMENTATION_BACKEND_URL", "http://localhost:7000")
 
 
 class Paths:
