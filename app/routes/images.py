@@ -93,6 +93,7 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
             os.remove(os.path.join(Paths.thumbnails_dir, f"{image_id}.png"))  # Remove the thumbnail
         db.delete(image)
         db.commit()
+        db.close()
         return {"success": True,
                 "message": f"Deleted image {image_id}."}
     except Exception as e:
@@ -120,7 +121,7 @@ async def list_images(dataset_id: int, db: Session = Depends(get_session)):
                 "finished": finished,
                 "generated": generated
             })
-
+        db.close()
         return {
             "success": True,
             "images": image_response
