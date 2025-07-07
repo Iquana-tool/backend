@@ -1,8 +1,8 @@
-app/services/segmentation/weights/*
-!app/services/segmentation/weights/.gitkeep
+app/services/prompted_segmentation/weights/*
+!app/services/prompted_segmentation/weights/.gitkeep
 
-/app/services/segmentation/configs/*
-!app/services/segmentation/configs/.gitkeep
+/app/services/prompted_segmentation/configs/*
+!app/services/prompted_segmentation/configs/.gitkeep
 
 # Byte-compiled / optimized Python files
 __pycache__/

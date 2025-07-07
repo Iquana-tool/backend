@@ -1,5 +1,5 @@
 import numpy as np
-from app.services.segmentation import SegmentationBaseModel
+from app.services.prompted_segmentation import SegmentationBaseModel
 from app.services.database_access import get_height_width_of_image
 from typing import Union
 

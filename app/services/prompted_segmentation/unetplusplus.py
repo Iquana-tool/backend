@@ -6,7 +6,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import numpy as np
 
-from app.services.segmentation.base_model import AutomaticSegmentationBaseModel
+from app.services.prompted_segmentation.base_model import AutomaticSegmentationBaseModel
 from app.schemas.segmentation.segmentations import AutomaticSegmentationRequest
 
 # ---------------------------

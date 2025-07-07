@@ -3,7 +3,7 @@ from PIL import Image
 import numpy as np
 import unittest
 import paths as config
-from app.services.segmentation.sam2 import SAM2
+from app.services.prompted_segmentation.sam2 import SAM2
 from app.services.prompts import Prompts
 
 

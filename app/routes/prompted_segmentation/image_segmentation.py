@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationMaskModel, SegmentationResponse, \
     AutomaticSegmentationRequest
-from app.services.segmentation import ModelCache
+from app.services.prompted_segmentation import ModelCache
 from app.services.postprocessing import fit_mask_to_already_created_masks
 from app.routes.prompted_segmentation.util import get_masks_responses
 from app.database import get_session
@@ -57,3 +57,4 @@ async def segment_image(request: PromptedSegmentationRequest):
 @router.post('/generate_mask')
 async def generate_mask(request: AutomaticSegmentationRequest, db: Session = Depends(get_session)):
     """ Generate prompted_segmentation masks for an image using automatic semantic prompted_segmentation. """
+    pass

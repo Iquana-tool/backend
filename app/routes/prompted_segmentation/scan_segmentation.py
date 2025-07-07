@@ -3,8 +3,8 @@ import logging
 import numpy as np
 from fastapi import APIRouter
 
-from app.services.segmentation import ModelCache
-from app.services.segmentation.base_model import PromptedSegmentation3DBaseModel, AutomaticSegmentation3DBaseModel
+from app.services.prompted_segmentation import ModelCache
+from app.services.prompted_segmentation.base_model import PromptedSegmentation3DBaseModel, AutomaticSegmentation3DBaseModel
 from app.schemas.segmentation.segmentations import ScanPromptedSegmentationRequest, SegmentationResponse
 from app.routes.prompted_segmentation.util import get_masks_responses
 from app.services.database_access import get_height_width_of_scan, get_image_id_via_scan_index

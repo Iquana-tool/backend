@@ -1,7 +1,7 @@
-from app.services.segmentation.sam2 import SAM2Prompted, SAM2Automatic, SAM2Prompted3D
-from app.services.segmentation.unet import Unet
-from app.services.segmentation.unetplusplus import UnetPlusPlus
-from app.services.segmentation.deeplabv3pp import DeepLabV3PP
+from app.services.prompted_segmentation.sam2 import SAM2Prompted, SAM2Automatic, SAM2Prompted3D
+from app.services.prompted_segmentation.unet import Unet
+from app.services.prompted_segmentation.unetplusplus import UnetPlusPlus
+from app.services.prompted_segmentation.deeplabv3pp import DeepLabV3PP
 
 AvailableModels = {
     "prompted": {

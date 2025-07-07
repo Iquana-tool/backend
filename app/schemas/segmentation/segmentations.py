@@ -89,7 +89,7 @@ class AutomaticSegmentationRequest(BaseModel):
     """ Model for validating the prompted_segmentation request. """
     #apply_post_processing: bool = False
     image_id: Annotated[int, "ID of the image to segment."]
-    model: Annotated[Union[int, str], "Model to use for prompted_segmentation."] = "SAM2Tiny"
+    model: Annotated[Union[int, str], "Model to use for automatic prompted_segmentation."] = "SAM2Tiny"
     min_x: Annotated[float, "Coordinates must be between 0 and 1."] = 0
     min_y: Annotated[float, "Coordinates must be between 0 and 1."] = 0
     max_x: Annotated[float, "Coordinates must be between 0 and 1."] = 1

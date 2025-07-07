@@ -18,11 +18,11 @@ from app.routes.mask_generation import create_masks_and_add_contours_for_images
 async def segment_batch_with_backend(model_id: str, image_ids: list[int], db: Session = Depends(get_session)):
     try:
         model = db.query(Models).filter_by(id=model_id).one()
-        logger.info(f"{model.name} with model_id {model_id} is being used for batch segmentation of {len(image_ids)} "
+        logger.info(f"{model.name} with model_id {model_id} is being used for batch prompted_segmentation of {len(image_ids)} "
                     f"images.")
         dataset_ids = db.query(Images.dataset_id).filter(Images.id.in_(image_ids)).distinct().all()
         if len(dataset_ids) > 1:
-            logger.warning("Batch segmentation is being performed on images from multiple datasets. "
+            logger.warning("Batch prompted_segmentation is being performed on images from multiple datasets. "
                            "This may lead to unexpected results.")
         image_paths = db.query(Images.file_path).filter(Images.id.in_(image_ids)).all()
         response = await send_batch_request(model_id, image_paths)
@@ -49,7 +49,7 @@ async def segment_batch_with_backend(model_id: str, image_ids: list[int], db: Se
         }
 
     except Exception as e:
-        logger.error(f"Batch segmentation failed: {e}")
+        logger.error(f"Batch prompted_segmentation failed: {e}")
         return {"success": False, "message": str(e)}
 
 
