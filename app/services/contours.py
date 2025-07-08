@@ -11,8 +11,12 @@ def get_contours(mask: np.ndarray) -> np.ndarray:
         Returns:
             np.ndarray: The contours of the mask.
     """
-    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    return contours
+    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:  # check if any contours found
+        biggest = max(contours, key=cv2.contourArea)
+    else:
+        biggest = None  # No contour found
+    return [biggest]
 
 
 def get_contour_from_coordinates(x_coords: list[float], y_coords: list[float], height=None, width=None) -> np.array:
