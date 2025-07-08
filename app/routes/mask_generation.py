@@ -1,5 +1,6 @@
 import json
 import logging
+import os.path
 
 import cv2
 from fastapi import APIRouter, HTTPException, Depends
@@ -65,7 +66,7 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
     # Generate the mask from contours
     mask_image = generate_mask(mask_id)
     save_array_to_disk(mask_image, image.dataset_id, image.scan_id, is_mask=True,
-                       new_filename=image.file_name.split(".")[0] + "_mask.png")
+                       new_filename=image.file_name)
     # Mark the mask as finished
     existing_mask.finished = True
     db.commit()
