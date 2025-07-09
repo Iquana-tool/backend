@@ -6,9 +6,14 @@ from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from . import router, logger
 from app.database import get_session
 from sqlalchemy.orm import Session
-
+from logging import getLogger
 from app.database.images import Images
 from app.database.mask_generation import Masks
+
+
+logger = getLogger(__name__)
+router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
+
 
 
 @router.post("/upload_file_to_dataset")

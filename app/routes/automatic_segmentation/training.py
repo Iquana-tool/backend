@@ -1,8 +1,14 @@
-from . import router, logger
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.schemas.automatic_segmentation.training import TrainingRequest
 import httpx
 from fastapi.responses import JSONResponse
+from fastapi import APIRouter
+from logging import getLogger
+
+
+logger = getLogger(__name__)
+router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
+
 
 @router.post("/start_training")
 async def start_training(request: TrainingRequest):

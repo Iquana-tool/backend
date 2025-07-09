@@ -5,7 +5,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 import paths
-from app.routes.prompted_segmentation.image_segmentation import router as segmentation_router
+from app.routes.prompted_segmentation.image_segmentation import router as prompted_segmentation_router
+
+from app.routes.automatic_segmentation import router as automatic_general_router
+from app.routes.automatic_segmentation.segmentation import router as automatic_inference_router
+from app.routes.automatic_segmentation.training import router as automatic_training_router
+from app.routes.automatic_segmentation.models import router as automatic_models_router
+from app.routes.automatic_segmentation.upload_data import router as automatic_upload_router
+
 from app.routes.images import router as image_router
 from app.routes.mask_generation import router as mask_router
 from app.routes.labels import router as label_router
@@ -69,7 +76,12 @@ def create_app():
     # Include the routers
     app.include_router(dataset_router)
     app.include_router(image_router)
-    app.include_router(segmentation_router)
+    app.include_router(prompted_segmentation_router)
+    app.include_router(automatic_general_router)
+    app.include_router(automatic_training_router)
+    app.include_router(automatic_inference_router)
+    app.include_router(automatic_models_router)
+    app.include_router(automatic_upload_router)
     app.include_router(scan_segmentation_router)
     app.include_router(mask_router)
     app.include_router(label_router)

@@ -1,5 +1,4 @@
-from . import router, logger
-from fastapi import Depends
+from fastapi import Depends, APIRouter
 from app.database import get_session
 from sqlalchemy.orm import Session
 import httpx
@@ -12,6 +11,11 @@ from app.database.models import Models
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.routes.prompted_segmentation.util import get_masks_responses
 from app.routes.mask_generation import create_masks_and_add_contours_for_images
+from logging import getLogger
+
+
+logger = getLogger(__name__)
+router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
 
 
 @router.post("/segment_batch")
