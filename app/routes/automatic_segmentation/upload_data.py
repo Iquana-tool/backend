@@ -49,61 +49,70 @@ async def proxy_upload_dataset(
     db: Session = Depends(get_session)
 ):
     """
-    Finds all finished mask/image pairs for this dataset, loads them as files, and proxies to segmentation backend.
+    Finds all finished mask/image pairs for this dataset, and uploads them one-by-one to the segmentation backend.
     """
     image_tuples = (
         db.query(Images.file_path)
         .join(Masks, Images.id == Masks.image_id)
-        .filter(
-            Masks.finished == True,
-            Images.dataset_id == dataset_id
-        )
+        .filter(Masks.finished == True, Images.dataset_id == dataset_id)
         .all()
     )
     image_paths = [row[0] for row in image_tuples]
     mask_paths = []
     paired_image_paths = []
-
-    # Only include pairs where both files exist on disk
     for img_path in image_paths:
         mask_path = get_mask_path_from_image_path(img_path)
         if not (os.path.exists(img_path) and os.path.exists(mask_path)):
             continue
-        # Optionally: skip if not both files, or log
         paired_image_paths.append(img_path)
         mask_paths.append(mask_path)
     if not paired_image_paths or not mask_paths:
         raise HTTPException(status_code=400, detail="No valid image/mask pairs found.")
 
-    url = f"{BASE_URL}/data/upload_dataset"
-    data = {"dataset_id": str(dataset_id)}
-    files = []
+    url = f"{BASE_URL}/data/upload_file_to_dataset"
+    results = []
+    async with httpx.AsyncClient(timeout=60) as client:
+        for img_path in paired_image_paths:
+            # --- Image upload ---
+            with open(img_path, "rb") as img_file:
+                files = {"file": (os.path.basename(img_path), img_file, "img/octet-stream")}
+                data = {
+                    "dataset_id": str(dataset_id),
+                    "is_image": "1",  # backend expects int-bool
+                    "filename": os.path.basename(img_path)
+                }
+                resp = await client.post(url, data=data, files=files)
+                try:
+                    resp.raise_for_status()
+                except Exception as e:
+                    results.append({"file": img_path, "type": "image", "status": "failed", "error": str(e)})
+                    continue
+                results.append({"file": img_path, "type": "image", "status": "ok"})
 
-    # Open image files
-    for img_path in paired_image_paths:
-        filename = os.path.basename(img_path)
-        files.append(
-            ("images", (filename, open(img_path, "rb"), "application/octet-stream"))
-        )
+        for mask_path in mask_paths:
+            # --- Mask upload ---
+            with open(mask_path, "rb") as mask_file:
+                files = {"file": (os.path.basename(mask_path), mask_file, "application/octet-stream")}
+                data = {
+                    "dataset_id": str(dataset_id),
+                    "is_image": "0",  # backend expects int-bool
+                    "filename": os.path.basename(mask_path)
+                }
+                resp = await client.post(url, data=data, files=files)
+                print(resp.text)
+                try:
+                    resp.raise_for_status()
+                except Exception as e:
+                    results.append({"file": mask_path, "type": "mask", "status": "failed", "error": str(e)})
+                    continue
+                results.append({"file": mask_path, "type": "mask", "status": "ok"})
 
-    # Open mask files
-    for msk_path in mask_paths:
-        filename = os.path.basename(msk_path)
-        files.append(
-            ("masks", (filename, open(msk_path, "rb"), "application/octet-stream"))
-        )
-
-    try:
-        async with httpx.AsyncClient(timeout=300) as client:
-            resp = await client.post(url, data=data, files=files)
-            resp.raise_for_status()
-            return resp.json()
-    finally:
-        # Close all files!
-        for tup in files:
-            _, (_, f, _) = tup
-            if hasattr(f, "close"):
-                f.close()
+    return {
+        "success": all(r["status"] == "ok" for r in results),
+        "num_uploaded_images": len(paired_image_paths),
+        "num_uploaded_masks": len(mask_paths),
+        "results": results,
+    }
 
 
 def get_mask_path_from_image_path(path: str):
