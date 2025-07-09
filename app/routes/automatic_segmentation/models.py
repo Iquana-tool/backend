@@ -1,3 +1,5 @@
+import json
+
 from fastapi import Depends, APIRouter
 from fastapi.responses import JSONResponse
 import httpx
@@ -21,12 +23,11 @@ async def get_available_base_models():
         return JSONResponse(resp.json())
 
 
-@router.get("/trainable_models_for_dataset/{dataset_id}")
-async def get_trainable_models_for_dataset(dataset_id: int, db: Session = Depends(get_session)):
-    base_models_response = await get_available_base_models()  # These are trainable on every dataset
+@router.get("/trained_models_of_dataset")
+async def get_trained_models_of_dataset():
     url = f"{BASE_URL}/models/get_trained_models"  # Gets all already trained models
     async with httpx.AsyncClient() as client:
         resp = await client.get(url)
         resp.raise_for_status()
-    dataset_models = db.query(Models).filter_by(dataset_id=dataset_id).all()
+        return JSONResponse(resp.json())
 
