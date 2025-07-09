@@ -1,5 +1,8 @@
 from logging import getLogger
 from fastapi import APIRouter, Depends
+from jinja2.nodes import Literal
+from sqlalchemy.orm import Session
+
 from app.database import get_session, SessionLocal
 from app.database.models import Models
 
@@ -8,6 +11,32 @@ router = APIRouter(
     prefix="/models",
     tags=["models"],
 )
+
+
+@router.post("/add_model")
+async def add_model(base_model_identifier,
+                    name,
+                    model_type: Literal["prompted", "automatic"],
+                    description: str = None,
+                    version: str = None,
+                    dataset_id: int = None,
+                    db: Session = Depends(get_session)
+                    ):
+    new_model = Models(
+        base_model_identifier=base_model_identifier,
+        name=name,
+        model_type=model_type,
+        description=description,
+        version=version,
+        dataset_id=str(dataset_id),
+    )
+    db.add(new_model)
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Model with id {new_model.id} has been added to db."
+    }
+
 
 
 @router.get("/get_prompted_models")
