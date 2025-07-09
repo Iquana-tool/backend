@@ -1,6 +1,6 @@
 from logging import getLogger
 from fastapi import APIRouter, Depends
-from jinja2.nodes import Literal
+from typing import Literal
 from sqlalchemy.orm import Session
 
 from app.database import get_session, SessionLocal
