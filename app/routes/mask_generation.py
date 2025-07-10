@@ -330,7 +330,7 @@ async def create_masks_and_add_contours_for_images(image_ids: list[int],
         if not mask:
             response = await create_mask(image_id, db)
             mask = db.query(Masks).filter_by(image_id=image_id).first()
-        responses.append(await add_contours(mask.id, mask_responses, None, db))
+        responses.append(await add_contours(mask.id, mask_response.contours, None, db))
     return {
         "success": True,
         "message": f"Created and added masks for {len(image_ids)} images.",
