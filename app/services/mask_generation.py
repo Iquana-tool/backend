@@ -25,14 +25,20 @@ def generate_mask(mask_id):
         image_id = session.query(Masks).filter_by(id=mask_id).first().image_id
         image = session.query(Images).filter_by(id=image_id).first()
         labels = session.query(Labels).filter_by(dataset_id=image.dataset_id).all()
-        label_id_to_value = {label.id: label.value for label in labels}
+        label_id_to_value = {label.id: i + 1 for i, label in enumerate(labels)}
+        print("Label map", label_id_to_value)
         canvas = np.zeros((image.height, image.width), dtype=np.uint8)
-        for contour in build_contour_hierarchy(contours):
+        contour_hierarchy = build_contour_hierarchy(contours)
+        for contour in contour_hierarchy:
+            print(f"Drawing contour {contour.id} with label {contour.label}")
             coords_dict = json.loads(contour.coords)
             x = coords_dict['x']
             y = coords_dict['y']
-            cv_contour = np.expand_dims(np.array(list(zip(x, y)), dtype=np.int32), 1)
-            cv.fillPoly(canvas, cv_contour, color=[label_id_to_value[contour.label]])
+            cv_contour = np.expand_dims(np.array(list(zip(x, y))), 1)
+            cv_contour[..., 0] *= image.width
+            cv_contour[..., 1] *= image.height
+            print(cv_contour)
+            cv.fillPoly(canvas, [cv_contour.astype(np.int32)], color=[label_id_to_value[contour.label]])
         return canvas
 
 
