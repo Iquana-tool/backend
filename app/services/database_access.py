@@ -128,6 +128,9 @@ def save_array_to_disk(array: np.ndarray, dataset_id: int, scan_id: int = None,
             path = join(dataset.folder_path, "masks" if is_mask else "images")
     os.makedirs(path, exist_ok=True)
     file_path = join(path, new_filename if new_filename else "image.png")
+    if is_mask:
+        # Masks must be saved as PNG. Other file formats might be lossy and change the values!
+        file_path = file_path.rsplit(".", 1)[0] + ".png"
     cv.imwrite(file_path, array)
     logger.info(f"Image saved to disk at {file_path}")
     return str(file_path)
