@@ -1,5 +1,4 @@
 import os
-
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 import httpx
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
@@ -118,4 +117,5 @@ async def proxy_upload_dataset(
 def get_mask_path_from_image_path(path: str):
     parts = path.split(os.path.sep)
     parts[-2] = "masks"  # Replace the parent directory
-    return os.path.sep.join(parts)
+    full_path = os.path.sep.join(parts)
+    return full_path.rsplit(".", 1)[0] + ".png"
