@@ -3,6 +3,7 @@ import logging
 import os.path
 
 import cv2
+import numpy as np
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 
@@ -65,7 +66,11 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
     image = db.query(Images).filter_by(id=existing_mask.image_id).first()
     # Generate the mask from contours
     mask_image = generate_mask(mask_id)
-    save_array_to_disk(mask_image, image.dataset_id, image.scan_id, is_mask=True,
+    logging.debug(f"Generated mask with the following labels: {np.unique(mask_image).tolist()}")
+    save_array_to_disk(mask_image,
+                       image.dataset_id,
+                       image.scan_id,
+                       is_mask=True,
                        new_filename=image.file_name)
     # Mark the mask as finished
     existing_mask.finished = True
