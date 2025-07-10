@@ -79,7 +79,7 @@ async def proxy_upload_dataset(
                 data = {
                     "dataset_id": str(dataset_id),
                     "is_image": "1",  # backend expects int-bool
-                    "filename": os.path.basename(img_path)
+                    "filename": os.path.splitext(os.path.basename(img_path))[0]
                 }
                 resp = await client.post(url, data=data, files=files)
                 try:
@@ -96,7 +96,7 @@ async def proxy_upload_dataset(
                 data = {
                     "dataset_id": str(dataset_id),
                     "is_image": "0",  # backend expects int-bool
-                    "filename": os.path.basename(mask_path)
+                    "filename": os.path.splitext(os.path.basename(mask_path))[0]
                 }
                 resp = await client.post(url, data=data, files=files)
                 print(resp.text)

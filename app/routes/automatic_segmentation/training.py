@@ -17,6 +17,7 @@ async def start_training(request: TrainingRequest):
 
 async def send_start_training_request(request: TrainingRequest):
     """ Forwards to Automatic Segmentation Service."""
+    logger.info(f"Start training request: {request}")
     url = f"{BASE_URL}/training/start_training"
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=request.model_dump())

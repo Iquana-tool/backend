@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 
 
 class TrainingRequest(BaseModel):
-    dataset_id: int
+    dataset_id: int = Field(default=1, title="Dataset ID")
     model_identifier: str = Field(default="unet", description="Identifier for the model to be trained. "
                                                       "Should be got by GET /models/get_trainable_models")
     model_id_db: int = Field(description="ID of the model in the database. Must be provided.")
