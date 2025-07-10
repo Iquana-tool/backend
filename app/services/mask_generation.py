@@ -37,7 +37,6 @@ def generate_mask(mask_id):
             cv_contour = np.expand_dims(np.array(list(zip(x, y))), 1)
             cv_contour[..., 0] *= image.width
             cv_contour[..., 1] *= image.height
-            print(cv_contour)
             cv.fillPoly(canvas, [cv_contour.astype(np.int32)], color=[label_id_to_value[contour.label]])
         return canvas
 
