@@ -13,6 +13,7 @@ from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.routes.prompted_segmentation.util import get_masks_responses
 from app.routes.mask_generation import create_masks_and_add_contours_for_images
 from logging import getLogger
+import plotly.express as px
 
 
 logger = getLogger(__name__)
@@ -31,16 +32,17 @@ async def segment_batch_with_backend(model_id: str, image_ids: list[int], db: Se
         response = await send_batch_request(model_id, image_paths)
         zip_bytes = response.content
         # Extract ZIP in-memory
+        masks = []
         with zipfile.ZipFile(BytesIO(zip_bytes)) as z:
             # List mask files
             names = z.namelist()
-            masks = {}
             for name in names:
                 # Read bytes for each image
                 img_bytes = z.read(name)
-                mask_img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
-                masks[name] = mask_img
-        masks = list(masks.values())
+                mask_arr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
+                masks.append(mask_arr)
+        for mask in masks:
+            cv2.imwrite("./test.png", mask * 255 / 3)
         labels = db.query(Labels).filter_by(dataset_id=(dataset_ids[0])[0]).all()
         label_id_to_value = {i + 1: label.id for i, label in enumerate(labels)}
         mask_responses = await get_masks_responses(masks, np.ones(len(image_ids)).tolist(), label_id_to_value)
@@ -66,7 +68,7 @@ async def send_batch_request(model_id: str, image_paths: list[str]) -> dict:
         for p in image_paths
     ]
     data = {"model_id": model_id}
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=5000) as client:
         resp = await client.post(url, data=data, files=files)
         resp.raise_for_status()
         return resp
