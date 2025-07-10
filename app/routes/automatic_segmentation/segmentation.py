@@ -8,7 +8,7 @@ import numpy as np
 from io import BytesIO
 from PIL import Image
 from app.database.images import Images
-from app.database.models import Models
+from app.database.datasets import Labels
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.routes.prompted_segmentation.util import get_masks_responses
 from app.routes.mask_generation import create_masks_and_add_contours_for_images
@@ -24,7 +24,7 @@ async def segment_batch_with_backend(model_id: str, image_ids: list[int], db: Se
     try:
         dataset_ids = db.query(Images.dataset_id).filter(Images.id.in_(image_ids)).distinct().all()
         if len(dataset_ids) > 1:
-            logger.warning("Batch prompted_segmentation is being performed on images from multiple datasets. "
+            logger.error("Batch prompted_segmentation is being performed on images from multiple datasets. "
                            "This may lead to unexpected results.")
         image_paths = list(db.query(Images.file_path).filter(Images.id.in_(image_ids)).all())
         image_paths = [tup[0] for tup in image_paths]
@@ -41,7 +41,9 @@ async def segment_batch_with_backend(model_id: str, image_ids: list[int], db: Se
                 mask_img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
                 masks[name] = mask_img
         masks = list(masks.values())
-        mask_responses = await get_masks_responses(masks, np.ones(len(image_ids)).tolist())
+        labels = db.query(Labels).filter_by(dataset_id=(dataset_ids[0])[0]).all()
+        label_id_to_value = {i + 1: label.id for i, label in enumerate(labels)}
+        mask_responses = await get_masks_responses(masks, np.ones(len(image_ids)).tolist(), label_id_to_value)
         responses = await create_masks_and_add_contours_for_images(image_ids, mask_responses, db)
         failed = len([response["success"] for response in responses["responses"] if not response["success"]])
         success = len(image_ids) - failed

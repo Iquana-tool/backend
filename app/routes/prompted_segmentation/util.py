@@ -4,20 +4,24 @@ from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.schemas.segmentation.segmentations import SegmentationMaskModel
 
 
-async def get_masks_responses(masks, qualities):
+async def get_masks_responses(masks, qualities, label_map: dict = None):
     masks_response = []
     for mask, quality in zip(masks, qualities):
         # Get contours of the postprocessed mask if postprocessing is enabled
         # Postprocessing might improve performance by removing noise
         contours_response = []
         unique_labels = np.unique(mask)
+        print(f"Found unique labels:  {unique_labels}")
         for label in unique_labels:
             if label == 0:
                 continue
             # Extract the mask for the current label
             mask_label = (mask == label).astype(np.uint8)
             contours = get_contours(mask_label)
-            contours_response += get_contour_models(contours, label, mask_label.shape[0], mask_label.shape[1])
+            contours_response += get_contour_models(contours,
+                                                    label if not label_map else label_map[label],
+                                                    mask_label.shape[0],
+                                                    mask_label.shape[1])
         masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
     return masks_response
 
