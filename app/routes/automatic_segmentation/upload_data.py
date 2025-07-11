@@ -42,7 +42,7 @@ async def proxy_upload_file(
         return resp.json()
 
 
-@router.post("/upload_dataset")
+@router.post("/upload_dataset/{dataset_id}")
 async def proxy_upload_dataset(
     dataset_id: int,
     db: Session = Depends(get_session)
