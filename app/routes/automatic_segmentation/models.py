@@ -23,9 +23,9 @@ async def get_available_base_models():
         return JSONResponse(resp.json())
 
 
-@router.get("/trained_models_of_dataset")
-async def get_trained_models_of_dataset():
-    url = f"{BASE_URL}/models/get_trained_models"  # Gets all already trained models
+@router.get("/trained_models_of_dataset/{dataset_id}")
+async def get_trained_models_of_dataset(dataset_id: int):
+    url = f"{BASE_URL}/models/get_trained_models/{dataset_id}"  # Gets all already trained models
     async with httpx.AsyncClient() as client:
         resp = await client.get(url)
         resp.raise_for_status()
