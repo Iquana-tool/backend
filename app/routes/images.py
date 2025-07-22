@@ -105,6 +105,10 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
 async def list_images(dataset_id: int, db: Session = Depends(get_session)):
     """List all uploaded image ids"""
     try:
+        dataset = db.query(Datasets).filter_by(id=dataset_id).first()
+        if dataset.type == "scan":
+            raise HTTPException(status_code=400, detail="This endpoint is not available for scan datasets. "
+                                                        "Use /list_scans instead.")
         images = (
             db.query(Images, Masks.finished, Masks.generated)
             .join(Masks, Images.id == Masks.image_id)
@@ -125,6 +129,47 @@ async def list_images(dataset_id: int, db: Session = Depends(get_session)):
         return {
             "success": True,
             "images": image_response
+        }
+    except Exception as e:
+        logger.error(f"List images error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/list_scans/{dataset_id}")
+async def list_scans(dataset_id: int, db: Session = Depends(get_session)):
+    """ Fetch all uploaded scans in a scan dataset. """
+    try:
+        dataset = db.query(Datasets).filter_by(id=dataset_id).first()
+        if dataset.type == "image":
+            raise HTTPException(status_code=400, detail="This endpoint is not available for image datasets. "
+                                                        "Use /list_images instead.")
+        scans = db.query(Scans).filter_by(dataset_id=dataset_id).all()
+        scan_responses = []
+        for scan in scans:
+            # Get the annotation progress per scan
+            manually_annotated = (db.query(Images.scan_id, Masks.generated, Masks.finished)
+                                  .filter(Images.scan_id == scan.id,
+                                          Masks.finished == True)
+                                  .count())
+            automatically_annotated = (db.query(Images.scan_id, Masks.generated, Masks.finished)
+                                        .filter(Images.scan_id == scan.id,
+                                                Masks.generated == True,
+                                                Masks.finished == False)
+                                        .count())
+            image_ids = (db.query(Images.id)
+                            .filter(Images.scan_id == scan.id)
+                            .sort_by(Images.index_in_scan)
+                            .all())
+            scan_responses.append({
+                **scan.__dict__,
+                "manually_annotated": manually_annotated,
+                "automatically_annotated": automatically_annotated,
+                "image_ids": [img.id for img in image_ids]
+            })
+        db.close()
+        return {
+            "success": True,
+            "scans": scan_responses
         }
     except Exception as e:
         logger.error(f"List images error: {str(e)}")
