@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import os.path
@@ -5,6 +6,7 @@ import os.path
 import cv2
 import numpy as np
 from fastapi import APIRouter, HTTPException, Depends
+from starlette.datastructures import UploadFile
 from sqlalchemy.orm import Session
 
 from app.schemas.segmentation.segmentations import SegmentationMaskModel
@@ -19,6 +21,7 @@ from app.services.mask_generation import (generate_mask, contour_is_enclosed_by_
                                           contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour)
 from app.services.database_access import get_height_width_of_image, save_array_to_disk
 from app.services.labels import get_hierarchical_label_name
+from app.routes.automatic_segmentation.upload_data import proxy_upload_file
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
@@ -67,7 +70,7 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
     # Generate the mask from contours
     mask_image = generate_mask(mask_id)
     logging.debug(f"Generated mask with the following labels: {np.unique(mask_image).tolist()}")
-    save_array_to_disk(mask_image,
+    mask_path = save_array_to_disk(mask_image,
                        image.dataset_id,
                        image.scan_id,
                        is_mask=True,
@@ -75,6 +78,29 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
     # Mark the mask as finished
     existing_mask.finished = True
     db.commit()
+    # Upload the image and mask to the AI external service
+    file_name, extension = image.file_name.rsplit(".", maxsplit=1)  # Get the file name without extension
+    with open(image.file_path, "rb") as img_file:
+        img_upload = UploadFile(file=img_file,
+                                filename=file_name,
+                                headers={"Content-Type": f'image/{extension}'})
+        img_response = await proxy_upload_file(
+            dataset_id=image.dataset_id,
+            is_image=True,
+            file=img_upload,
+            filename=file_name
+        )
+
+    with open(mask_path, "rb") as mask_file:
+        mask_upload = UploadFile(file=mask_file,
+                                 filename=file_name,
+                                 headers={"Content-Type": f'image/{extension}'})
+        mask_response = await proxy_upload_file(
+            dataset_id=image.dataset_id,
+            is_image=False,
+            file=mask_upload,
+            filename=file_name
+        )
     return {
         "success": True,
         "message": "Mask marked as finished successfully.",
