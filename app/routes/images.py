@@ -106,7 +106,7 @@ async def list_images(dataset_id: int, db: Session = Depends(get_session)):
     """List all uploaded image ids"""
     try:
         dataset = db.query(Datasets).filter_by(id=dataset_id).first()
-        if dataset.type == "scan":
+        if dataset.dataset_type == "scan":
             raise HTTPException(status_code=400, detail="This endpoint is not available for scan datasets. "
                                                         "Use /list_scans instead.")
         images = (
@@ -140,7 +140,7 @@ async def list_scans(dataset_id: int, db: Session = Depends(get_session)):
     """ Fetch all uploaded scans in a scan dataset. """
     try:
         dataset = db.query(Datasets).filter_by(id=dataset_id).first()
-        if dataset.type == "image":
+        if dataset.dataset_type == "image":
             raise HTTPException(status_code=400, detail="This endpoint is not available for image datasets. "
                                                         "Use /list_images instead.")
         scans = db.query(Scans).filter_by(dataset_id=dataset_id).all()
