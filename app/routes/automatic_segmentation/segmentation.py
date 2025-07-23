@@ -9,6 +9,7 @@ from io import BytesIO
 from PIL import Image
 from app.database.images import Images
 from app.database.datasets import Labels
+from app.database.mask_generation import Masks, Contours
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.routes.prompted_segmentation.util import get_masks_responses
 from app.routes.mask_generation import create_masks_and_add_contours_for_images
@@ -20,13 +21,19 @@ logger = getLogger(__name__)
 router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
 
 
-@router.post("/segment_batch")
-async def segment_batch_with_backend(model_id: str, image_ids: list[int], db: Session = Depends(get_session)):
+@router.post("/segment_batch/{model_id}")
+async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Session = Depends(get_session)):
     try:
         dataset_ids = db.query(Images.dataset_id).filter(Images.id.in_(image_ids)).distinct().all()
         if len(dataset_ids) > 1:
             logger.error("Batch prompted_segmentation is being performed on images from multiple datasets. "
                            "This may lead to unexpected results.")
+        # Remove all previous contours first.
+        contours = db.query(Contours).join(Masks, Contours.mask_id == Masks.id).filter(Masks.image_id.in_(image_ids)).all()
+        for contour in contours:
+            # Delete contours from database
+            db.delete(contour)
+        db.commit()
         image_paths = list(db.query(Images.file_path).filter(Images.id.in_(image_ids)).all())
         image_paths = [tup[0] for tup in image_paths]
         response = await send_batch_request(model_id, image_paths)
@@ -41,8 +48,6 @@ async def segment_batch_with_backend(model_id: str, image_ids: list[int], db: Se
                 img_bytes = z.read(name)
                 mask_arr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
                 masks.append(mask_arr)
-        for mask in masks:
-            cv2.imwrite("./test.png", mask * 255 / 3)
         labels = db.query(Labels).filter_by(dataset_id=(dataset_ids[0])[0]).all()
         label_id_to_value = {i + 1: label.id for i, label in enumerate(labels)}
         mask_responses = await get_masks_responses(masks, np.ones(len(image_ids)).tolist(), label_id_to_value)
