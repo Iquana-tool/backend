@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 import httpx
 import zipfile
 import numpy as np
+import os
 from io import BytesIO
-from PIL import Image
 from app.database.images import Images
 from app.database.datasets import Labels
 from app.database.mask_generation import Masks, Contours
@@ -14,7 +14,6 @@ from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.routes.prompted_segmentation.util import get_masks_responses
 from app.routes.mask_generation import create_masks_and_add_contours_for_images
 from logging import getLogger
-import plotly.express as px
 
 
 logger = getLogger(__name__)
@@ -26,14 +25,16 @@ async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Se
     try:
         dataset_ids = db.query(Images.dataset_id).filter(Images.id.in_(image_ids)).distinct().all()
         if len(dataset_ids) > 1:
-            logger.error("Batch prompted_segmentation is being performed on images from multiple datasets. "
+            logger.error("Batch segmentation is being performed on images from multiple datasets. "
                            "This may lead to unexpected results.")
         # Remove all previous contours first.
         contours = db.query(Contours).join(Masks, Contours.mask_id == Masks.id).filter(Masks.image_id.in_(image_ids)).all()
-        for contour in contours:
-            # Delete contours from database
-            db.delete(contour)
-        db.commit()
+        if contours:
+            logger.info(f"Deleting {len(contours)} contours from the database before batch segmentation.")
+            for contour in contours:
+                # Delete contours from database
+                db.delete(contour)
+            db.commit()
         image_paths = list(db.query(Images.file_path).filter(Images.id.in_(image_ids)).all())
         image_paths = [tup[0] for tup in image_paths]
         response = await send_batch_request(model_id, image_paths)
@@ -59,21 +60,35 @@ async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Se
             "message": f"Successfully segmented {success} images. Failed to add masks for {failed} images.",
             "responses": responses
         }
-
     except Exception as e:
         logger.error(f"Batch prompted_segmentation failed: {e}")
         raise e
-        return {"success": False, "message": str(e)}
 
 
-async def send_batch_request(model_id: str, image_paths: list[str]) -> dict:
+async def send_batch_request(model_id: int, image_paths: list[str]):
     url = f"{BASE_URL}/segment/segment_batch"
     files = [
-        ("files", (p, open(p, "rb"), "img/octet-stream"))
+        ("files", (os.path.basename(p), open(p, "rb"), f"image/{p.rsplit('.', maxsplit=1)[-1]}"))
         for p in image_paths
     ]
     data = {"model_id": model_id}
-    async with httpx.AsyncClient(timeout=5000) as client:
-        resp = await client.post(url, data=data, files=files)
-        resp.raise_for_status()
-        return resp
+    logger.info(f"Sending request to {url} with {len(files)} files")
+
+    try:
+        async with httpx.AsyncClient(timeout=30000) as client:
+            resp = await client.post(url, data=data, files=files)
+            # Log response details
+            logger.info(f"Response status: {resp.status_code}")
+            logger.info(f"Response headers: {resp.headers}")
+            response_content = await resp.aread()
+            logger.info(f"Response content: {response_content}")
+            resp.raise_for_status()
+            logger.info(f"Request successful. Response status: {resp.status_code}")
+            return resp
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error occurred: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"An error occurred: {e}")
+        raise
+
