@@ -41,6 +41,7 @@ async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Se
         zip_bytes = response.content
         # Extract ZIP in-memory
         masks = []
+        os.makedirs("./temp_masks", exist_ok=True)
         with zipfile.ZipFile(BytesIO(zip_bytes)) as z:
             # List mask files
             names = z.namelist()
@@ -48,6 +49,7 @@ async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Se
                 # Read bytes for each image
                 img_bytes = z.read(name)
                 mask_arr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
+                cv2.imwrite(f"./temp_masks/{name}", mask_arr * (255 // 4))  # Save to temp directory for debugging
                 masks.append(mask_arr)
         labels = db.query(Labels).filter_by(dataset_id=(dataset_ids[0])[0]).all()
         label_id_to_value = {i + 1: label.id for i, label in enumerate(labels)}
@@ -78,12 +80,8 @@ async def send_batch_request(model_id: int, image_paths: list[str]):
         async with httpx.AsyncClient(timeout=30000) as client:
             resp = await client.post(url, data=data, files=files)
             # Log response details
-            logger.info(f"Response status: {resp.status_code}")
-            logger.info(f"Response headers: {resp.headers}")
             response_content = await resp.aread()
-            logger.info(f"Response content: {response_content}")
             resp.raise_for_status()
-            logger.info(f"Request successful. Response status: {resp.status_code}")
             return resp
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error occurred: {e}")

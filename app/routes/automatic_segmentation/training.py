@@ -61,5 +61,7 @@ async def send_start_training_request(request: dict):
     url = f"{BASE_URL}/training/start_training"
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=request)
+        if not resp.is_success:
+            logger.error(f"Training request failed: {resp.text}")
         resp.raise_for_status()
         return resp.json()

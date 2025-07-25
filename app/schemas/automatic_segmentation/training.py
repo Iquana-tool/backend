@@ -5,7 +5,7 @@ from typing import Optional, Tuple, Union
 
 class TrainingRequest(BaseModel):
     dataset_id: int = Field(default=1, title="Dataset ID")
-    model_identifier: Union[int, str] = Field(description="Start training from either a base model, if given a model "
+    model_identifier: Union[str] = Field(description="Start training from either a base model, if given a model "
                                                     "registry key, or from a trained model checkpoint if given "
                                                    "a model identifier number."
                                                           "Important: Numbers must be given as int and not as string!")
