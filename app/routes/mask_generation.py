@@ -226,10 +226,11 @@ async def get_masks_for_image(image_id: int, db: Session = Depends(get_session))
 
 
 @router.post("/edit_contour/{contour_id}")
-async def edit_contour(contour_id, **kwargs):
+async def edit_contour(contour_id, db: Session = Depends(get_session), **kwargs,):
     """
     Edit a contour by updating its coordinates or label.
     :param contour_id: ID of the contour to edit.
+    :param db: Database session.
     :param kwargs: Dictionary containing the fields to update.
     :return: Success message and updated contour ID.
     """
@@ -248,6 +249,18 @@ async def edit_contour(contour_id, **kwargs):
         "message": "Contour edited successfully.",
         "contour_id": existing_contour.id
     }
+
+
+@router.post("/edit_contour_label/{contour_id}&new_label_id={new_label_id}")
+async def edit_contour_label(contour_id: int, new_label_id: int, db: Session = Depends(get_session)):
+    """
+    Edit the label of a contour.
+    :param contour_id: ID of the contour to edit.
+    :param new_label_id: New label ID to set for the contour.
+    :param db: Database session.
+    :return: Success message and updated contour ID.
+    """
+    return await edit_contour(contour_id, label=new_label_id, db=db)
 
 
 @router.post("/add_contour")
