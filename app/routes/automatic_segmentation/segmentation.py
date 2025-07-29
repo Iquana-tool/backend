@@ -49,11 +49,17 @@ async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Se
                 # Read bytes for each image
                 img_bytes = z.read(name)
                 mask_arr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
-                cv2.imwrite(f"./temp_masks/{name}", mask_arr * (255 // 4))  # Save to temp directory for debugging
+                if False:
+                    # For debugging, save the mask to a temporary directory. Set to True to enable.
+                    logger.info(f"Saving mask {name} to temp_masks directory for debugging.")
+                    cv2.imwrite(f"./temp_masks/{name}", mask_arr * (255 // 4))
                 masks.append(mask_arr)
         labels = db.query(Labels).filter_by(dataset_id=(dataset_ids[0])[0]).all()
         label_id_to_value = {i + 1: label.id for i, label in enumerate(labels)}
-        mask_responses = await get_masks_responses(masks, np.ones(len(image_ids)).tolist(), label_id_to_value)
+        mask_responses = await get_masks_responses(masks,
+                                                   np.ones(len(image_ids)).tolist(),
+                                                   label_id_to_value,
+                                                   only_return_one=False)
         responses = await create_masks_and_add_contours_for_images(image_ids, mask_responses, db)
         failed = len([response["success"] for response in responses["responses"] if not response["success"]])
         success = len(image_ids) - failed
