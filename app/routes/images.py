@@ -227,8 +227,6 @@ async def list_images_with_annotation_status(dataset_id: int, status: Literal["f
         else:
             raise HTTPException(status_code=400, detail="Invalid status. Use 'finished', 'generated', or 'missing'.")
         db.close()
-        if not image_ids:
-            raise HTTPException(status_code=404, detail="No images found for this dataset")
         return {
             "success": True,
             "message": f"Found {len(image_ids)} images with status '{status}' in dataset {dataset_id}.",

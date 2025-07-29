@@ -3,6 +3,7 @@ import json
 import cv2 as cv
 import numpy as np
 from app.database import get_context_session
+from app.database.datasets import Labels
 from app.database.mask_generation import Contours, Masks
 from app.services.contours import get_contour_from_coordinates, create_binary_mask_from_contours
 from app.services.database_access import get_height_width_of_image
@@ -26,7 +27,9 @@ def postprocess_binary_mask(mask: np.ndarray):
     return mask
 
 
-def fit_mask_to_already_created_masks(mask_id: int, mask: np.ndarray,
+def fit_mask_to_already_created_masks(mask_id: int,
+                                      mask: np.ndarray,
+                                      label_id: int,
                                       parent_contour_id : int = None) -> np.ndarray:
     """Ensure that the contours of a label are within the bounds of the mask.
        Args:
@@ -43,8 +46,17 @@ def fit_mask_to_already_created_masks(mask_id: int, mask: np.ndarray,
     with get_context_session() as session:
         mask_db = session.query(Masks).filter_by(id=mask_id).first()
         height, width = get_height_width_of_image(mask_db.image_id)
-        contours_on_same_level = session.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_contour_id).all()
+
+        # Get the parent label of the current label
+        parent_label_id = session.query(Labels.parent_id).filter_by(id=label_id).first()
+        # Get all labels that have the same parent label, our new mask cannot overlap with any of them.
+        labels_on_same_level = session.query(Labels.id).filter_by(parent_id=parent_label_id[0]).all()
+        labels_on_same_level = [label[0] for label in labels_on_same_level]  # Extract IDs from tuples
+        contours_on_same_level = session.query(Contours).filter(Contours.mask_id == mask_id,
+                                                                Contours.label.in_(labels_on_same_level)).all()
         parent_contour = session.query(Contours).filter_by(id=parent_contour_id).first() if parent_contour_id else None
+        logger.debug(f"Fitting mask to parent contour {parent_contour_id} and "
+                     f"{len(contours_on_same_level)} contours on the same level.")
     if parent_contour is not None:
         coords = json.loads(parent_contour.coords)
         parent_contour = get_contour_from_coordinates(coords["x"], coords["y"], height, width)
@@ -58,17 +70,15 @@ def fit_mask_to_already_created_masks(mask_id: int, mask: np.ndarray,
 
     # Fit the entire mask to the parent masks. Pixels outside the parent are not allowed.
     on_parent_mask = np.logical_and(positive_mask, mask).astype(np.uint8)
+    if not np.any(on_parent_mask):
+        logger.warning("Predicted mask does not overlap with parent mask! Returning empty mask.")
+        return np.zeros_like(mask, dtype=np.uint8)
 
     contours = []
     for contour in contours_on_same_level:
         coords = json.loads(contour.coords)
         contours.append(get_contour_from_coordinates(coords["x"], coords["y"], height, width))
-
     negative_mask = create_binary_mask_from_contours(width, height, contours)
-
-    if not np.any(on_parent_mask):
-        logger.warning("Predicted mask does not overlap with parent mask! Returning empty mask.")
-        return np.zeros_like(mask, dtype=np.uint8)
 
     # Remove pixels that are already in the negative mask. This means the new mask overlaps with already existing
     # masks, which is not allowed.

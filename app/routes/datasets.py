@@ -71,13 +71,15 @@ async def get_annotation_progress(dataset_id: int, db: Session = Depends(get_ses
     for image in images:
         mask = db.query(Masks).filter_by(image_id=image.id, finished=True).first()
         if mask:
-            if mask.generated:
+            if mask.finished:
+                manually_annotated += 1
+            elif mask.generated:
                 if mask.reviewed:
                     auto_annotated_with_review += 1
                 else:
                     auto_annotated_without_review += 1
             else:
-                manually_annotated += 1
+                missing += 1
 
     return {
         "success": True,

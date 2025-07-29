@@ -17,24 +17,25 @@ router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentati
 
 @router.post("/upload_file_to_dataset")
 async def proxy_upload_file(
-    dataset_id: int = Form(...),
-    is_image: bool = Form(...),
+    dataset_id: int,
+    is_image: bool,
+    filename: str = None,
     file: UploadFile = File(...),
-    filename: str = Form(None)
 ):
     """
     Proxies a single image/mask file upload to the segmentation training backend.
     """
+    logger.debug(f"Uploading file with name {filename} to dataset {dataset_id} as {'image' if is_image else 'mask'}")
     url = f"{BASE_URL}/data/upload_file_to_dataset"
     # httpx needs 'files' and 'data' for multipart forwards
     data = {
         "dataset_id": str(dataset_id),
-        "is_image": str(int(is_image)),  # send as 0/1 for bool
+        "is_image": str(is_image),  # send as 0/1 for bool
     }
     if filename:
         data["filename"] = filename
 
-    files = {"file": (file.filename, await file.read(), file.content_type)}
+    files = {"file": (file.filename if not filename else filename, await file.read(), file.content_type)}
 
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(url, data=data, files=files)
@@ -74,7 +75,7 @@ async def proxy_upload_dataset(
         for img_path in paired_image_paths:
             # --- Image upload ---
             with open(img_path, "rb") as img_file:
-                files = {"file": (os.path.basename(img_path), img_file, "img/octet-stream")}
+                files = {"file": (os.path.basename(img_path), img_file, f"image/{os.path.splitext(img_path)[1]}")}
                 data = {
                     "dataset_id": str(dataset_id),
                     "is_image": "1",  # backend expects int-bool
@@ -91,7 +92,7 @@ async def proxy_upload_dataset(
         for mask_path in mask_paths:
             # --- Mask upload ---
             with open(mask_path, "rb") as mask_file:
-                files = {"file": (os.path.basename(mask_path), mask_file, "application/octet-stream")}
+                files = {"file": (os.path.basename(mask_path), mask_file, f"image/{os.path.splitext(mask_path)[1]}")}
                 data = {
                     "dataset_id": str(dataset_id),
                     "is_image": "0",  # backend expects int-bool

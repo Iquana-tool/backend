@@ -3,7 +3,7 @@ import numpy as np
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
 
 
-def get_contours(mask: np.ndarray) -> np.ndarray:
+def get_contours(mask: np.ndarray, only_return_one=False) -> np.ndarray:
     """ Get the contours of the mask.
         Args:
             mask (np.ndarray): The mask to get the contours of.
@@ -13,10 +13,13 @@ def get_contours(mask: np.ndarray) -> np.ndarray:
     """
     contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:  # check if any contours found
-        biggest = max(contours, key=cv2.contourArea)
+        if only_return_one:
+            biggest = max(contours, key=cv2.contourArea)
+            return np.array([biggest])
+        else:
+            return contours
     else:
-        biggest = None  # No contour found
-    return [biggest]
+        return np.array([])
 
 
 def get_contour_from_coordinates(x_coords: list[float], y_coords: list[float], height=None, width=None) -> np.array:
