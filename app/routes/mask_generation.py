@@ -12,13 +12,14 @@ from sqlalchemy.orm import Session
 from app.schemas.segmentation.segmentations import SegmentationMaskModel
 from paths import Paths
 from app.database import get_session
-from app.database.datasets import Datasets
+from app.database.datasets import Datasets, Labels
 from app.database.images import Images
 from app.database.mask_generation import Masks, Contours
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.services.quantifications import ContourQuantifier
-from app.services.mask_generation import (generate_mask, contour_is_enclosed_by_parent,
-                                          contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour)
+from app.services.mask_generation import (generate_mask, contours_overlap,
+                                          contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour,
+                                          combine_contours, find_parent_contour)
 from app.services.database_access import get_height_width_of_image, save_array_to_disk
 from app.services.labels import get_hierarchical_label_name
 from app.routes.automatic_segmentation.upload_data import proxy_upload_file
@@ -224,6 +225,31 @@ async def get_masks_for_image(image_id: int, db: Session = Depends(get_session))
     return masks
 
 
+@router.post("/edit_contour/{contour_id}")
+async def edit_contour(contour_id, **kwargs):
+    """
+    Edit a contour by updating its coordinates or label.
+    :param contour_id: ID of the contour to edit.
+    :param kwargs: Dictionary containing the fields to update.
+    :return: Success message and updated contour ID.
+    """
+    db = get_session()
+    existing_contour = db.query(Contours).filter_by(id=contour_id).first()
+    if not existing_contour:
+        raise HTTPException(status_code=404, detail="Contour not found.")
+
+    for key, value in kwargs.items():
+        if hasattr(existing_contour, key):
+            setattr(existing_contour, key, value)
+
+    db.commit()
+    return {
+        "success": True,
+        "message": "Contour edited successfully.",
+        "contour_id": existing_contour.id
+    }
+
+
 @router.post("/add_contour")
 async def add_contour(mask_id: int,
                       contour_to_add: ContourModel,
@@ -231,33 +257,39 @@ async def add_contour(mask_id: int,
                       db: Session = Depends(get_session)):
     try:
         existing_mask = db.query(Masks).filter_by(id=mask_id).first()
+        image = db.query(Images).filter_by(id=existing_mask.image_id).first()
         contour = coords_to_cv_contour(contour_to_add.x, contour_to_add.y)
-
-        # Check if contour is enclosed by its parent contour
-        parent_contour = db.query(Contours).filter_by(id=parent_contour_id).first() if parent_contour_id else None
-        if parent_contour:
-            if not contour_is_enclosed_by_parent(contour, coords_to_cv_contour(parent_contour.coords["x"],
-                                                                               parent_contour.coords["y"])):
-                return {
-                    "success": False,
-                    "message": "Contour can not be added, because it is not enclosed by its parent contour. "
-                               "Child contours must be completely inside their parent contours!",
-                    "contour_id": None
-                }
-
-        """# Check if contour overlaps with existing contours on the same level
-        contours_on_same_level = db.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_contour_id).all()
-        if contours_on_same_level:
-            contours_with_potential_overlap = []
-            for c_json in contours_on_same_level:
-                contour = json.loads(c_json.coords)
-                contours_with_potential_overlap.append(coords_to_cv_contour(contour["x"], contour["y"]))
-            if contour_overlaps_with_existing_on_parent_level(contour, contours_with_potential_overlap):
-                return {
-                    "success": False,
-                    "message": "Contour overlaps with existing contours on the same level.",
-                    "contour_id": None
-                }"""
+        parent_label_id = db.query(Labels.parent_id).filter_by(id=contour_to_add.label).first()
+        has_parent = parent_label_id is not None
+        if has_parent:
+            if parent_contour_id is None:
+                logger.warning("Parent contour ID is None, but the label has a parent. Trying to find a fitting parent"
+                               " contour.")
+                parent_contour = find_parent_contour(parent_label_id[0],
+                                                     mask_id,
+                                                     (image.height, image.width),
+                                                     contour,
+                                                     db)
+                if not parent_contour:
+                    logger.error(f"Error adding contour: Could not find a parent contour for label {contour_to_add.label}.")
+                    return {
+                        "success": False,
+                        "message": "Could not find a parent contour for the label.",
+                        "contour_id": None
+                    }
+                logger.debug(f"Found parent contour with ID {parent_contour.id} for label {contour_to_add.label}.")
+            else:
+                parent_contour = db.query(Contours).filter_by(id=parent_contour_id).first()
+                expected_parent = db.query(Labels).filter_by(id=parent_label_id[0]).first()
+                given_parent = db.query(Labels).filter_by(id=parent_contour.label).first()
+                if expected_parent.id != given_parent.id:
+                    logger.error(f"Error adding contour: Parent contour does not match the expected parent label. \n"
+                                 f"Given parent contour: ({given_parent.id}, {given_parent.name}) \t Expected parent: ({expected_parent.id}, {expected_parent.name})")
+                    return {
+                        "success": False,
+                        "message": "Parent contour does not match the expected parent label.",
+                        "contour_id": None
+                    }
 
         # Quantify contour
         height, width = get_height_width_of_image(existing_mask.image_id)
@@ -266,7 +298,7 @@ async def add_contour(mask_id: int,
         quantifier = ContourQuantifier().from_coordinates(rescaled_x, rescaled_y)
         new_contour = Contours(
             mask_id=mask_id,
-            parent_id=parent_contour_id,
+            parent_id=parent_contour.id if has_parent else None,
             coords=json.dumps({"x": contour_to_add.x, "y": contour_to_add.y}),
             label=contour_to_add.label,
             area=quantifier.area,

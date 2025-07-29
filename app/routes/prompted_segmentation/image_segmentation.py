@@ -1,4 +1,6 @@
 from logging import getLogger
+
+from app.database.mask_generation import Masks
 from app.services.labels import label_value_to_label_id
 import numpy as np
 from fastapi import APIRouter, Depends
@@ -8,7 +10,7 @@ from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, 
 from app.services.prompted_segmentation import ModelCache
 from app.services.postprocessing import fit_mask_to_already_created_masks
 from app.routes.prompted_segmentation.util import get_masks_responses
-from app.database import get_session
+from app.database import get_session, get_context_session
 from app.database.images import Images
 from sqlalchemy.orm import Session
 
@@ -44,9 +46,13 @@ async def segment_image(request: PromptedSegmentationRequest):
     masks, quality = model.process_prompted_request(request)
 
     # Postprocess the masks. This fits the mask into the already existing contours.
-    if request.mask_id:
-        masks = [mask * request.label for mask in masks]
-        masks = [fit_mask_to_already_created_masks(request.mask_id, mask, request.parent_contour_id) for mask in masks]
+    with get_context_session() as session:
+        mask_id = session.query(Masks.id).filter_by(image_id=request.image_id).first()
+    if mask_id:
+        masks = [fit_mask_to_already_created_masks(request.mask_id,
+                                                   mask,
+                                                   request.label,
+                                                   request.parent_contour_id) for mask in masks]
     else:
         # If no mask_id is provided, we cannot correct the masks.
         logger.warning("No mask_id provided, skipping mask fitting to existing contours.")
