@@ -16,6 +16,7 @@ router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentati
 
 @router.get("/available_base_models")
 async def get_available_base_models():
+    """Retrieve all available base models for training."""
     url = f"{BASE_URL}/models/get_trainable_base_models"
     async with httpx.AsyncClient() as client:
         resp = await client.get(url)
@@ -25,6 +26,7 @@ async def get_available_base_models():
 
 @router.get("/trained_models_of_dataset/{dataset_id}")
 async def get_trained_models_of_dataset(dataset_id: int):
+    """Retrieve all trained models for a specific dataset."""
     url = f"{BASE_URL}/models/get_trained_models_of_dataset/{dataset_id}"  # Gets all already trained models
     async with httpx.AsyncClient() as client:
         resp = await client.get(url)
@@ -34,12 +36,15 @@ async def get_trained_models_of_dataset(dataset_id: int):
 
 @router.get("/get_training_models")
 async def get_training_models(dataset_id: int):
-    pass
+    """Retrieve all models that are currently being trained."""
+    raise NotImplementedError("This endpoint is not implemented yet. "
+                              "It should return models that are currently being trained.")
 
 
 @router.get("/get_model_metadata/{model_id}")
 async def get_model_metadata(model_id: int):
-    """Retrieve metadata for a specific model."""
+    """Retrieve metadata for a specific model. Metadata includes training status and training info, as well as general
+    model information."""
     logger.debug(f"Fetching metadata for model ID {model_id}.")
     url = f"{BASE_URL}/models/get_model_metadata/{model_id}"  # Gets all already trained models
     async with httpx.AsyncClient() as client:

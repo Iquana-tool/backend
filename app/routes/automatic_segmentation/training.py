@@ -14,19 +14,21 @@ logger = getLogger(__name__)
 router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
 
 
-@router.get("/get_training_status/{job_id}")
-async def get_training_status(job_id: str):
-    url = f"{BASE_URL}/training/get_job_status/{job_id}"
+@router.get("/get_training_status/{model_id}")
+async def get_training_status(model_id: str):
+    """ Get the status of a training job by its ID. """
+    url = f"{BASE_URL}/training/get_job_status/{model_id}"
     async with httpx.AsyncClient() as client:
         resp = await client.get(url)
         resp.raise_for_status()
         return resp.json()
 
 
-@router.get("/cancel_job/{job_id}")
-async def cancel_training_status(job_id: str):
+@router.get("/cancel_training_of_model/{model_id}")
+async def cancel_training_of_model(model_id: str):
+    """ Cancel a training job by its ID."""
     try:
-        url = f"{BASE_URL}/training/cancel_job/{job_id}"
+        url = f"{BASE_URL}/training/cancel_job/{model_id}"
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(url)
             resp.raise_for_status()
@@ -34,12 +36,21 @@ async def cancel_training_status(job_id: str):
     except httpx.HTTPError as e:
         return {
             "success": False,
-            "message": f"Could not cancel job {job_id}, probably due to computational overload."
+            "message": f"Could not cancel job {model_id}, probably due to computational overload."
         }
 
 
 @router.post("/start_training")
 async def start_training(request: TrainingRequest, db: Session = Depends(get_session)):
+    """ Start training a model for automatic segmentation.
+    This endpoint prepares the request with necessary parameters and forwards it to the Automatic Segmentation Service.
+    Args:
+        request (TrainingRequest): The training request containing dataset_id and other parameters.
+        db (Session): The database session for querying labels.
+
+    Returns:
+        JSONResponse: The response from the Automatic Segmentation Service.
+    """
     # Get the request as a dict, to add values to it
     request_dict = request.model_dump()
 
@@ -56,7 +67,7 @@ async def start_training(request: TrainingRequest, db: Session = Depends(get_ses
     return JSONResponse(result)
 
 async def send_start_training_request(request: dict):
-    """ Forwards to Automatic Segmentation Service."""
+    """ Forwards TrainingRequest to Automatic Segmentation Service."""
     logger.info(f"Start training request: {request}")
     url = f"{BASE_URL}/training/start_training"
     async with httpx.AsyncClient() as client:

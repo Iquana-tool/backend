@@ -23,6 +23,16 @@ router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentati
 
 @router.post("/segment_batch/{model_id}")
 async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Session = Depends(get_session)):
+    """ Segment a batch of images using the automatic segmentation backend.
+
+    Args:
+        model_id (int): The ID of the model to use for segmentation.
+        image_ids (list[int]): List of image IDs to segment.
+        db (Session): Database session dependency.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and responses for each image.
+    """
     try:
         dataset_ids = db.query(Images.dataset_id).filter(Images.id.in_(image_ids)).distinct().all()
         if len(dataset_ids) > 1:
@@ -75,6 +85,15 @@ async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Se
 
 
 async def send_batch_request(model_id: int, image_paths: list[str]):
+    """ Send a batch request to the automatic segmentation backend.
+
+    Args:
+        model_id (int): The ID of the model to use for segmentation.
+        image_paths (list[str]): List of image file paths to segment.
+
+    Returns:
+        httpx.Response: The response from the segmentation backend.
+    """
     url = f"{BASE_URL}/segment/segment_batch"
     files = [
         ("files", (os.path.basename(p), open(p, "rb"), f"image/{p.rsplit('.', maxsplit=1)[-1]}"))

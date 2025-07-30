@@ -11,6 +11,7 @@ router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentati
 
 @router.get("/health")
 async def get_health():
+    """Check the health of the automatic segmentation service."""
     url = f"{BASE_URL}/health"
     async with httpx.AsyncClient() as client:
         resp = await client.get(url)
