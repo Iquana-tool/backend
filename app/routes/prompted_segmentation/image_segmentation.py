@@ -70,7 +70,7 @@ async def segment_image(request: PromptedSegmentationRequest):
     masks_response = await get_masks_responses([mask * request.label], [quality])
     return {
         "success": True,
-        "message": "Prompted segmentation completed successfully. " + response.message,
+        "message": "Prompted segmentation completed successfully. " + response["message"],
         "response": SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
     }
 
