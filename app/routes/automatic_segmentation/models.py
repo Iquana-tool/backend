@@ -14,7 +14,7 @@ logger = getLogger(__name__)
 router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
 
 
-@router.get("/available_base_models")
+@router.get("/get_available_base_models")
 async def get_available_base_models():
     """Retrieve all available base models for training."""
     url = f"{BASE_URL}/models/get_trainable_base_models"
@@ -24,7 +24,7 @@ async def get_available_base_models():
         return JSONResponse(resp.json())
 
 
-@router.get("/trained_models_of_dataset/{dataset_id}")
+@router.get("/get_trained_models_of_dataset/{dataset_id}")
 async def get_trained_models_of_dataset(dataset_id: int):
     """Retrieve all trained models for a specific dataset."""
     url = f"{BASE_URL}/models/get_trained_models_of_dataset/{dataset_id}"  # Gets all already trained models
