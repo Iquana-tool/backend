@@ -22,6 +22,20 @@ async def add_model(base_model_identifier,
                     dataset_id: int = None,
                     db: Session = Depends(get_session)
                     ):
+    """Add a new model to the database.
+
+    Args:
+        base_model_identifier (str): Identifier for the base model.
+        name (str): Name of the model.
+        model_type (Literal["prompted", "automatic"]): Type of the model.
+        description (str, optional): Description of the model.
+        version (str, optional): Version of the model.
+        dataset_id (int, optional): ID of the dataset associated with the model.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status and message.
+    """
     new_model = Models(
         base_model_identifier=base_model_identifier,
         name=name,

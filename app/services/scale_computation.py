@@ -29,4 +29,4 @@ def compute_pixel_scale_from_points(p1, p2, known_distance):
     scale_per_pixel = known_distance / pixel_distance
 
     # Return the same scale in both X and Y directions
-    return (scale_per_pixel, scale_per_pixel)
+    return scale_per_pixel, scale_per_pixel

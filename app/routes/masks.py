@@ -1,18 +1,16 @@
 import json
 import logging
-
 import numpy as np
 from fastapi import APIRouter, HTTPException, Depends
 from starlette.datastructures import UploadFile
 from sqlalchemy.orm import Session
-
 from app.routes.contours import delete_contour, add_contours
 from app.database import get_session
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
 from app.schemas.segmentation.segmentations import SegmentationMaskModel
-from app.services.mask_generation import (generate_mask)
+from app.services.mask_generation import generate_mask
 from app.services.database_access import save_array_to_disk
 from app.services.labels import get_hierarchical_label_name
 from app.routes.automatic_segmentation.upload_data import proxy_upload_file
@@ -23,6 +21,7 @@ router = APIRouter(prefix="/masks", tags=["masks"])
 
 @router.put("/create_mask/{image_id}")
 async def create_mask(image_id: int, db: Session = Depends(get_session)):
+    """ Create a new mask for the given image ID. Only one mask can exist per image. """
     try:
         # Check if mask already exists for the image
         existing_mask = db.query(Masks).filter_by(image_id=image_id).first()
@@ -48,6 +47,7 @@ async def create_mask(image_id: int, db: Session = Depends(get_session)):
 
 @router.post("/finish_mask/{mask_id}")
 async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
+    """ Mark a mask as finished, generate it as an image file and upload it to the AI external service. """
     # Check if mask exists
     existing_mask = db.query(Masks).filter_by(id=mask_id).first()
     if not existing_mask:
@@ -104,6 +104,9 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
 
 @router.post("/unfinish_mask/{mask_id}")
 async def unfinish_mask(mask_id: int, db: Session = Depends(get_session)):
+    """ Remove the finished status from a mask, allowing it to be edited again. This will also delete the mask image
+        file and remove it from the AI external service. """
+    # TODO: Implement deletion of mask image file and removal from AI external service.
     # Check if mask exists
     existing_mask = db.query(Masks).filter_by(id=mask_id).first()
     if not existing_mask:
@@ -125,8 +128,13 @@ async def unfinish_mask(mask_id: int, db: Session = Depends(get_session)):
     }
 
 
-@router.get("/get_contours_of_mask/{mask_id}")
+@router.get("/get_contours_of_mask/{mask_id}", deprecated=True)
 async def get_contours_of_mask(mask_id: int, db: Session = Depends(get_session)):
+    """ Get all contours of a mask by its ID.
+
+    > This endpoint is deprecated and will be removed in the future. Please use the contour endpoints instead.
+    """
+    # TODO: Remove this endpoint in the future.
     contours = db.query(Contours).filter_by(mask_id=mask_id).all()
     if not contours:
         raise HTTPException(status_code=404, detail="No contours found for mask.")
@@ -157,6 +165,7 @@ async def get_contours_of_mask(mask_id: int, db: Session = Depends(get_session))
 
 @router.get("/get_mask/{mask_id}")
 async def get_mask(mask_id: int, db: Session = Depends(get_session)):
+    """ Get a mask by its ID. """
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=404, detail="Mask not found.")
@@ -168,6 +177,7 @@ async def get_mask(mask_id: int, db: Session = Depends(get_session)):
 
 @router.get("/get_mask_annotation_status/{mask_id}")
 async def get_mask_annotation_status(mask_id: int, db: Session = Depends(get_session)):
+    """ Check the annotation status of a mask by its ID. """
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=404, detail="Mask not found.")
@@ -177,7 +187,7 @@ async def get_mask_annotation_status(mask_id: int, db: Session = Depends(get_ses
         return {
             "success": True,
             "message": "Mask is finished.",
-            "status": "finished",
+            "status": "manually_annotated",
             "mask_id": mask.id
         }
 
@@ -186,20 +196,21 @@ async def get_mask_annotation_status(mask_id: int, db: Session = Depends(get_ses
         return {
             "success": True,
             "message": "Mask is generated but not finished.",
-            "status": "auto generated",
+            "status": "auto_annotated",
             "mask_id": mask.id
         }
 
     return {
         "success": True,
-        "message": "Mask is not finished or generated.",
-        "status": "not finished nor generated",
+        "message": "Mask is neither finished nor generated.",
+        "status": "missing",
         "mask_id": mask.id
     }
 
 
 @router.delete("/delete_mask/{mask_id}")
 async def delete_mask(mask_id: int, db: Session = Depends(get_session)):
+    """ Delete a mask and all its contours by its ID. """
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=404, detail="Mask not found.")
@@ -211,8 +222,13 @@ async def delete_mask(mask_id: int, db: Session = Depends(get_session)):
     return {"success": True, "message": "Mask deleted successfully."}
 
 
-@router.get("/get_masks_for_image/{image_id}")
+@router.get("/get_masks_for_image/{image_id}", deprecated=True)
 async def get_masks_for_image(image_id: int, db: Session = Depends(get_session)):
+    """ Get all masks for a given image ID.
+
+    > This endpoint is deprecated and will be removed in the future. Images can now only have one mask, so this endpoint
+    will always return a single mask or an error if no mask exists.
+    """
     masks = db.query(Masks).filter_by(image_id=image_id).all()
     if not masks:
         raise HTTPException(status_code=404, detail="No masks found for image.")
@@ -222,6 +238,17 @@ async def get_masks_for_image(image_id: int, db: Session = Depends(get_session))
 async def create_masks_and_add_contours_for_images(image_ids: list[int],
                                                    mask_responses: list[SegmentationMaskModel],
                                                    db: Session = Depends(get_session)):
+    """
+    Create masks for a list of image IDs and add contours to them.
+
+    Args:
+        image_ids (list[int]): List of image IDs for which to create masks.
+        mask_responses (list[SegmentationMaskModel]): List of segmentation mask responses containing contours.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and responses for each image.
+    """
     if len(image_ids) != len(mask_responses):
         raise ValueError(
             f"Number of image_ids does not match number of mask_responses."

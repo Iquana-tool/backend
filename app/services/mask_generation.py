@@ -7,11 +7,12 @@ from app.database.contours import Contours
 from app.database.labels import Labels
 import numpy as np
 import cv2 as cv
-from app.services.contours import build_contour_hierarchy
+
+from app.services.contours import build_depth_first_contour_list
 
 
 def generate_mask(mask_id):
-    """Generate a mask from the saved contours of that mask."""
+    """ Generate a mask from the saved contours of that mask and return an array of the mask."""
     with get_context_session() as session:
         contours = session.query(Contours).filter_by(mask_id=mask_id).all()
         image_id = session.query(Masks).filter_by(id=mask_id).first().image_id
@@ -20,7 +21,7 @@ def generate_mask(mask_id):
         label_id_to_value = {label.id: i + 1 for i, label in enumerate(labels)}
         print("Label map", label_id_to_value)
         canvas = np.zeros((image.height, image.width), dtype=np.uint8)
-        contour_hierarchy = build_contour_hierarchy(contours)
+        contour_hierarchy = build_depth_first_contour_list(contours)
         for contour in contour_hierarchy:
             print(f"Drawing contour {contour.id} with label {contour.label}")
             coords_dict = json.loads(contour.coords)

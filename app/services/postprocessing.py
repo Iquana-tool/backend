@@ -31,15 +31,16 @@ def postprocess_binary_mask(mask: np.ndarray):
 def fit_mask_to_already_created_masks(mask_id: int,
                                       mask: np.ndarray,
                                       label_id: int,
-                                      parent_contour_id : int = None) -> np.ndarray:
-    """Ensure that the contours of a label are within the bounds of the mask.
+                                      parent_contour_id : int = None):
+    """
+    Ensure that the contours of a label are within the bounds of the mask.
        Args:
            mask_id (int): The mask ID to check.
            mask (np.ndarray): The binary mask to check against.
            label_id (int): The label ID to check against.
            parent_contour_id (int, optional): The parent contour ID to check against. Defaults to None.
        Returns:
-
+             dict: A dictionary containing the success status, message, and the final mask.
     """
     if not np.any(mask):
         logger.warning("Input mask is empty! Returning empty mask.")

@@ -1,20 +1,20 @@
 import base64
 import hashlib
 import os
-import cv2 as cv
 from logging import getLogger
 from os import remove
 from os.path import join, exists
 from typing import Union, AnyStr
 
+import cv2 as cv
 import numpy as np
 from fastapi import UploadFile
 
-from paths import Paths
 from app.database import get_context_session
 from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.scans import Scans
+from paths import Paths
 
 logger = getLogger(__name__)
 
@@ -87,6 +87,7 @@ def get_height_width_of_scan(scan_id: int) -> tuple[int, int]:
 
 
 def get_image_id_via_scan_index(scan_id: int, index_in_scan: int, reset_index: bool = False) -> int:
+    """Get the image ID from the database by scan ID and index in scan."""
     with get_context_session() as session:
         scan = session.query(Scans).filter_by(id=scan_id).first()
         if not scan:
@@ -160,7 +161,18 @@ def save_image_to_disk(image: UploadFile, dataset_id: int, scan_id: int = None, 
 
 async def save_image_to_disk_and_db(image: AnyStr, dataset_id: int, scan_id=None, index_in_scan=None,
                                     convert_to: str = None) -> int:
-    """Save an image to disk and to the database and return the new image ID."""
+    """Save an image to disk and to the database and return the new image ID.
+
+    Args:
+        image (AnyStr): The image file to save.
+        dataset_id (int): The ID of the dataset to which the image belongs.
+        scan_id (int, optional): The ID of the scan if applicable.
+        index_in_scan (int, optional): The index of the image in the scan.
+        convert_to (str, optional): Format to convert the image to (e.g., "png", "jpg").
+
+    Returns:
+        int: The ID of the newly saved image in the database, or None if an error occurs.
+    """
     # Generate hash for the image
     hash_code = generate_hash_for_image(image)
 
