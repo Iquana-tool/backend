@@ -3,6 +3,8 @@ from app.database.labels import Labels
 
 
 def get_hierarchical_label_name(label_id):
+    """ Retrieves the hierarchical name of a label by its ID. This will be in the form of
+    Label > SubLabel > SubSubLabel..."""
     with get_context_session() as session:
         label = session.query(Labels).filter_by(id=label_id).first()
         if not label:
