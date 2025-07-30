@@ -28,7 +28,6 @@ async def segment_scan(request: ScanPromptedSegmentationRequest):
     Returns:
         SegmentationResponse: The response object containing the prompted_segmentation results.
     """
-
     model: PromptedSegmentation3DBaseModel = prompted_model_cache.set_and_get_model(request.model)
     height, width = get_height_width_of_scan(request.scan_id)
     object_id_to_label = {object_id: p_requests[0].label for object_id, p_requests in request.prompted_requests.items()}
@@ -47,10 +46,6 @@ async def segment_scan(request: ScanPromptedSegmentationRequest):
             model=request.model
         ))
     return {"success": True, "segmentations": responses}
-
-
-
-
 
 
 def convert_to_multiclass_mask(object_mask_dict, height, width):
