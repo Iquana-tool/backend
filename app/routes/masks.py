@@ -9,7 +9,7 @@ from app.database import get_session
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
-from app.services.mask_generation import (generate_mask)
+from app.services.mask_generation import generate_mask
 from app.services.database_access import save_array_to_disk
 from app.services.labels import get_hierarchical_label_name
 from app.routes.automatic_segmentation.upload_data import proxy_upload_file
