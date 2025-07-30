@@ -4,8 +4,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.datasets import Labels
-from app.database.mask_generation import Contours
-
+from app.database.contours import Contours
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/labels", tags=["labels"])

@@ -7,7 +7,7 @@ from app.database import get_session
 from sqlalchemy.orm import Session
 from app.database.images import Images
 from app.database.datasets import Datasets, Labels
-from app.database.mask_generation import Masks
+from app.database.masks import Masks
 from app.routes.images import delete_image
 from app.routes.labels import delete_label
 

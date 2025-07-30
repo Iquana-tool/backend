@@ -1,228 +1,110 @@
-import io
 import json
-import logging
-import os.path
-
-import cv2
 import numpy as np
-from fastapi import APIRouter, HTTPException, Depends
-from starlette.datastructures import UploadFile
+from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
+from fastapi import APIRouter
+from logging import getLogger
 
-from app.schemas.segmentation.segmentations import SegmentationMaskModel
-from paths import Paths
 from app.database import get_session
-from app.database.datasets import Datasets, Labels
+from app.database.datasets import Labels
 from app.database.images import Images
-from app.database.mask_generation import Masks, Contours
+from app.database.masks import Masks
+from app.database.contours import Contours
+from app.routes.masks import create_mask
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
-from app.services.quantifications import ContourQuantifier
-from app.services.mask_generation import (generate_mask, contours_overlap,
-                                          contour_overlaps_with_existing_on_parent_level, coords_to_cv_contour,
-                                          combine_contours, find_parent_contour)
-from app.services.database_access import get_height_width_of_image, save_array_to_disk
+from app.schemas.segmentation.segmentations import SegmentationMaskModel
+from app.services.database_access import get_height_width_of_image
 from app.services.labels import get_hierarchical_label_name
-from app.routes.automatic_segmentation.upload_data import proxy_upload_file
+from app.services.contours import find_parent_contour, coords_to_cv_contour
+from app.services.quantifications import ContourQuantifier
 
-logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/masks", tags=["masks"])
-
-
-@router.put("/create_mask/{image_id}")
-async def create_mask(image_id: int, db: Session = Depends(get_session)):
-    try:
-        # Check if mask already exists for the image
-        existing_mask = db.query(Masks).filter_by(image_id=image_id).first()
-        if existing_mask:
-            return {
-                "success": False,
-                "message": "Mask already exists for this image.",
-                "mask_id": existing_mask.id
-            }
-        # Create a new mask
-        new_mask = Masks(image_id=image_id)
-        db.add(new_mask)
-        db.commit()
-        return {
-            "success": True,
-            "message": "Mask created successfully.",
-            "mask_id": new_mask.id
-        }
-    except Exception as e:
-        logger.error(f"Error creating mask: {e}")
-        raise HTTPException(status_code=500, detail="Error creating mask.")
+router = APIRouter(prefix="/contours", tags=["contours"])
+logger = getLogger(__name__)
 
 
-@router.post("/finish_mask/{mask_id}")
-async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
-    # Check if mask exists
-    existing_mask = db.query(Masks).filter_by(id=mask_id).first()
-    if not existing_mask:
-        raise HTTPException(status_code=404, detail="Mask not found.")
-    print(f"Finishing this mask: {existing_mask}")
-    # Check if the mask is already finished
-    if bool(existing_mask.finished):
-        return {
-            "success": True,
-            "message": "Mask is already marked as finished.",
-            "mask_id": existing_mask.id
-        }
-    image = db.query(Images).filter_by(id=existing_mask.image_id).first()
-    # Generate the mask from contours
-    mask_image = generate_mask(mask_id)
-    logging.debug(f"Generated mask with the following labels: {np.unique(mask_image).tolist()}")
-    mask_path = save_array_to_disk(mask_image,
-                       image.dataset_id,
-                       image.scan_id,
-                       is_mask=True,
-                       new_filename=image.file_name)
-    # Mark the mask as finished
-    existing_mask.finished = True
-    db.commit()
-    # Upload the image and mask to the AI external service
-    file_name, extension = image.file_name.rsplit(".", maxsplit=1)  # Get the file name without extension
-    with open(image.file_path, "rb") as img_file:
-        img_upload = UploadFile(file=img_file,
-                                filename=file_name,
-                                headers={"Content-Type": f'image/{extension}'})
-        img_response = await proxy_upload_file(
-            dataset_id=image.dataset_id,
-            is_image=True,
-            file=img_upload,
-            filename=file_name
-        )
+def build_hierarchical_json(mask_id, filter_labels_ids, db: Session, parent_id=None):
+    """ Build a hierarchical JSON structure of contours for a given mask_id.
 
-    with open(mask_path, "rb") as mask_file:
-        mask_upload = UploadFile(file=mask_file,
-                                 filename=file_name,
-                                 headers={"Content-Type": f'image/{extension}'})
-        mask_response = await proxy_upload_file(
-            dataset_id=image.dataset_id,
-            is_image=False,
-            file=mask_upload,
-            filename=file_name
-        )
-    return {
-        "success": True,
-        "message": "Mask marked as finished successfully.",
-        "mask_id": existing_mask.id
-    }
+    Args:
+        mask_id (int): The ID of the mask to filter contours.
+        filter_labels_ids (list[int]): Optional list of label IDs to filter contours.
+        db (Session): The database session.
+        parent_id (int): Optional parent contour ID to filter contours.
 
+    Returns:
+        list: A list of contours in hierarchical JSON format."""
+    query = db.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_id)
+    if filter_labels_ids:
+        query = query.filter(Contours.label.in_(filter_labels_ids))
+    contours = query.all()
 
-@router.post("/unfinish_mask/{mask_id}")
-async def unfinish_mask(mask_id: int, db: Session = Depends(get_session)):
-    # Check if mask exists
-    existing_mask = db.query(Masks).filter_by(id=mask_id).first()
-    if not existing_mask:
-        raise HTTPException(status_code=404, detail="Mask not found.")
-    # Check if the mask is already unfinished
-    if not existing_mask.finished:
-        return {
-            "success": True,
-            "message": "Mask is not marked as finished.",
-            "mask_id": existing_mask.id
-        }
-    # Mark the mask as unfinished
-    existing_mask.finished = False
-    db.commit()
-    return {
-        "success": True,
-        "message": "Mask marked as unfinished successfully.",
-        "mask_id": existing_mask.id
-    }
-
-
-@router.get("/get_contours_of_mask/{mask_id}")
-async def get_contours_of_mask(mask_id: int, db: Session = Depends(get_session)):
-    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
-    if not contours:
-        raise HTTPException(status_code=404, detail="No contours found for mask.")
-    formatted_contours = []
+    result = []
     for contour in contours:
-        coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
-        diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
         label_name = get_hierarchical_label_name(contour.label)
-        formatted_contours.append({
+        child_contours = build_hierarchical_json(mask_id, filter_labels_ids, db, contour.id)
+        diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
+        coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
+        result.append({
             "id": contour.id,
-            "x": coords["x"],
-            "y": coords["y"],
             "label": contour.label,
             "label_name": label_name,
+            "parent_id": parent_id,
             "area": contour.area,
             "perimeter": contour.perimeter,
             "circularity": contour.circularity,
-            "diameters": diameters
+            "diameters": diameters,
+            "diameter_avg": np.average(diameters) if diameters else None,
+            "coords": coords,
+            "center_x": np.mean(coords["x"]) if coords and "x" in coords else None,
+            "center_y": np.mean(coords["y"]) if coords and "y" in coords else None,
+            "children": child_contours
         })
-
-    return {
-        "success": True,
-        "mask_id": mask_id,
-        "contours": formatted_contours
-    }
+    return result
 
 
-@router.get("/get_mask/{mask_id}")
-async def get_mask(mask_id: int, db: Session = Depends(get_session)):
-    mask = db.query(Masks).filter_by(id=mask_id).first()
-    if mask is None:
-        raise HTTPException(status_code=404, detail="Mask not found.")
-    return {
-        "success": True,
-        "mask": mask
-    }
+def flatten_hierarchical_dict(hierarchical_dict, parent_id=None):
+    """ Flatten a hierarchical dictionary into a list of dictionaries.
 
+    Args:
+        hierarchical_dict (list): The hierarchical dictionary to flatten.
+        parent_id (int): The parent ID for the current level.
 
-@router.get("/get_mask_annotation_status/{mask_id}")
-async def get_mask_annotation_status(mask_id: int, db: Session = Depends(get_session)):
-    mask = db.query(Masks).filter_by(id=mask_id).first()
-    if mask is None:
-        raise HTTPException(status_code=404, detail="Mask not found.")
-
-    # Check if the mask is finished
-    if mask.finished:
-        return {
-            "success": True,
-            "message": "Mask is finished.",
-            "status": "finished",
-            "mask_id": mask.id
+    Returns:
+        list: A flattened list of dictionaries."""
+    flat_list = []
+    for item in hierarchical_dict:
+        flat_item = {
+            k: v for k, v in item.items() if k != "children"
         }
+        flat_list.append(flat_item)
+        if item.get("children"):
+            flat_list.extend(flatten_hierarchical_dict(item["children"], item["id"]))
+    return flat_list
 
-    # Check if the mask is generated
-    if mask.generated:
-        return {
-            "success": True,
-            "message": "Mask is generated but not finished.",
-            "status": "auto generated",
-            "mask_id": mask.id
-        }
 
+@router.get("/get_contours_of_mask/mask={mask_id}&flattened={flattened}")
+async def get_contours_of_mask(mask_id: int, flattened: bool = True, db: Session = Depends(get_session)):
+    """ Export quantification data for the given mask_id and labels.
+
+    Args:
+        mask_id (int): The ID of the mask to export contours for.
+        flattened (bool): Whether to flatten the hierarchical JSON structure. Defaults to True. If False, the
+            hierarchical structure will be preserved, i.e. children contours will be nested under their
+            parent contour.
+        db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
+
+    Returns:
+        dict: A dictionary containing the success status and message if error, or a hierarchical JSON structure of
+        contours for the given mask_id.
+    """
+    quantification = build_hierarchical_json(mask_id, [], db)
+    if flattened:
+        quantification = flatten_hierarchical_dict(quantification)
     return {
         "success": True,
-        "message": "Mask is not finished or generated.",
-        "status": "not finished nor generated",
-        "mask_id": mask.id
+        "message": f"Quantification data for mask {mask_id} exported successfully.",
+        "quantification": quantification
     }
-
-
-@router.delete("/delete_mask/{mask_id}")
-async def delete_mask(mask_id: int, db: Session = Depends(get_session)):
-    mask = db.query(Masks).filter_by(id=mask_id).first()
-    if mask is None:
-        raise HTTPException(status_code=404, detail="Mask not found.")
-    root_contours = db.query(Contours).filter_by(mask_id=mask_id, parent_id=None).all()
-    for contour in root_contours:
-        await delete_contour(contour.id, db)
-    db.delete(mask)
-    db.commit()
-    return {"success": True, "message": "Mask deleted successfully."}
-
-
-@router.get("/get_masks_for_image/{image_id}")
-async def get_masks_for_image(image_id: int, db: Session = Depends(get_session)):
-    masks = db.query(Masks).filter_by(image_id=image_id).all()
-    if not masks:
-        raise HTTPException(status_code=404, detail="No masks found for image.")
-    return masks
 
 
 @router.post("/edit_contour/{contour_id}")
@@ -414,6 +296,3 @@ async def create_masks_and_add_contours_for_images(image_ids: list[int],
         "message": f"Created and added masks for {len(image_ids)} images.",
         "responses": responses
     }
-
-
-

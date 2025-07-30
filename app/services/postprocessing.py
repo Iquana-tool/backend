@@ -4,7 +4,8 @@ import cv2 as cv
 import numpy as np
 from app.database import get_context_session
 from app.database.datasets import Labels
-from app.database.mask_generation import Contours, Masks
+from app.database.masks import Masks
+from app.database.contours import Contours
 from app.services.contours import get_contour_from_coordinates, create_binary_mask_from_contours
 from app.services.database_access import get_height_width_of_image
 from logging import getLogger

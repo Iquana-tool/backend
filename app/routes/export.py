@@ -7,7 +7,8 @@ from io import StringIO
 
 from app.database import get_session
 from sqlalchemy.orm import Session
-from app.database.mask_generation import Masks, Contours
+from app.database.masks import Masks
+from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
 from app.routes.contours import flatten_hierarchical_dict, get_contours_of_mask

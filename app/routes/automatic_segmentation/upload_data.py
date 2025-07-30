@@ -7,7 +7,7 @@ from app.database import get_session
 from sqlalchemy.orm import Session
 from logging import getLogger
 from app.database.images import Images
-from app.database.mask_generation import Masks
+from app.database.masks import Masks
 
 
 logger = getLogger(__name__)

@@ -9,10 +9,11 @@ import os
 from io import BytesIO
 from app.database.images import Images
 from app.database.datasets import Labels
-from app.database.mask_generation import Masks, Contours
+from app.database.masks import Masks
+from app.database.contours import Contours
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.routes.prompted_segmentation.util import get_masks_responses
-from app.routes.mask_generation import create_masks_and_add_contours_for_images
+from app.routes.contours import create_masks_and_add_contours_for_images
 from logging import getLogger
 
 

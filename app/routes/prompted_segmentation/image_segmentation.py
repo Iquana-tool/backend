@@ -1,6 +1,6 @@
 from logging import getLogger
 
-from app.database.mask_generation import Masks
+from app.database.masks import Masks
 from app.services.labels import label_value_to_label_id
 import numpy as np
 from fastapi import APIRouter, Depends
