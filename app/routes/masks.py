@@ -6,11 +6,12 @@ from fastapi import APIRouter, HTTPException, Depends
 from starlette.datastructures import UploadFile
 from sqlalchemy.orm import Session
 
-from app.routes.contours import delete_contour
+from app.routes.contours import delete_contour, add_contours
 from app.database import get_session
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
+from app.schemas.segmentation.segmentations import SegmentationMaskModel
 from app.services.mask_generation import (generate_mask)
 from app.services.database_access import save_array_to_disk
 from app.services.labels import get_hierarchical_label_name
@@ -216,3 +217,26 @@ async def get_masks_for_image(image_id: int, db: Session = Depends(get_session))
     if not masks:
         raise HTTPException(status_code=404, detail="No masks found for image.")
     return masks
+
+
+async def create_masks_and_add_contours_for_images(image_ids: list[int],
+                                                   mask_responses: list[SegmentationMaskModel],
+                                                   db: Session = Depends(get_session)):
+    if len(image_ids) != len(mask_responses):
+        raise ValueError(
+            f"Number of image_ids does not match number of mask_responses."
+        )
+    responses = []
+    for image_id, mask_response in zip(image_ids, mask_responses):
+        mask = db.query(Masks).filter_by(image_id=image_id).first()
+        if not mask:
+            response = await create_mask(image_id, db)
+            mask = db.query(Masks).filter_by(image_id=image_id).first()
+        responses.append(await add_contours(mask.id, mask_response.contours, None, db))
+        mask.generated = True
+        db.commit()
+    return {
+        "success": True,
+        "message": f"Created and added masks for {len(image_ids)} images.",
+        "responses": responses
+    }

@@ -13,7 +13,7 @@ from app.database.masks import Masks
 from app.database.contours import Contours
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.routes.prompted_segmentation.util import get_masks_responses
-from app.routes.contours import create_masks_and_add_contours_for_images
+from app.routes.masks import create_masks_and_add_contours_for_images
 from logging import getLogger
 
 

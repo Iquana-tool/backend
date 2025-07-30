@@ -15,6 +15,7 @@ from app.routes.automatic_segmentation.upload_data import router as automatic_up
 
 from app.routes.images import router as image_router
 from app.routes.masks import router as mask_router
+from app.routes.contours import router as contour_router
 from app.routes.labels import router as label_router
 from app.routes.export import router as export_router
 from app.routes.datasets import router as dataset_router
@@ -84,6 +85,7 @@ def create_app():
     app.include_router(automatic_upload_router)
     app.include_router(scan_segmentation_router)
     app.include_router(mask_router)
+    app.include_router(contour_router)
     app.include_router(label_router)
     app.include_router(export_router)
     app.include_router(model_router)

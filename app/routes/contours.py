@@ -10,9 +10,7 @@ from app.database.datasets import Labels
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
-from app.routes.masks import create_mask
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
-from app.schemas.segmentation.segmentations import SegmentationMaskModel
 from app.services.database_access import get_height_width_of_image
 from app.services.labels import get_hierarchical_label_name
 from app.services.contours import find_parent_contour, coords_to_cv_contour
@@ -273,26 +271,3 @@ async def add_contours(mask_id: int,
             "added_ids": added_ids,
             "failed": []
         }
-
-
-async def create_masks_and_add_contours_for_images(image_ids: list[int],
-                                                   mask_responses: list[SegmentationMaskModel],
-                                                   db: Session = Depends(get_session)):
-    if len(image_ids) != len(mask_responses):
-        raise ValueError(
-            f"Number of image_ids does not match number of mask_responses."
-        )
-    responses = []
-    for image_id, mask_response in zip(image_ids, mask_responses):
-        mask = db.query(Masks).filter_by(image_id=image_id).first()
-        if not mask:
-            response = await create_mask(image_id, db)
-            mask = db.query(Masks).filter_by(image_id=image_id).first()
-        responses.append(await add_contours(mask.id, mask_response.contours, None, db))
-        mask.generated = True
-        db.commit()
-    return {
-        "success": True,
-        "message": f"Created and added masks for {len(image_ids)} images.",
-        "responses": responses
-    }
