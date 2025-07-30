@@ -3,6 +3,7 @@ from . import database
 
 
 class Masks(database):
+    """ Represents a mask in the database. A mask holds all added contours."""
     __tablename__ = 'masks'
     id = Column(Integer, primary_key=True, autoincrement=True)
     image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'),

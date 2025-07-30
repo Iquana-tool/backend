@@ -1,8 +1,10 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Float, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, Float
 from . import database
 
 
 class Images(database):
+    """ Represents an image in the database. An image is part of a dataset and can be associated with masks and
+        contours."""
     __tablename__ = 'images'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -26,31 +28,3 @@ class Images(database):
                 f"scale_x='{self.scale_x}', "
                 f"scale_y='{self.scale_y}', "
                 f"unit='{self.unit}')>")
-
-
-class ImageEmbeddings(database):
-    __tablename__ = 'image_embeddings'
-    id = Column(Integer, primary_key=True, autoincrement=True)  # Unique ID for the embedding
-    image_id = Column(Integer,
-                      # Foreign key to the images table, cascade on delete to remove embeddings when image is deleted
-                      ForeignKey('images.id', ondelete='CASCADE'),
-                      nullable=False)  # Image ID is the primary key
-    model = Column(String(50), nullable=False)  # The model used to generate the embedding
-    embed_dimensions = Column(String(50), nullable=False)  # The dimensions of the embedding
-
-    def __repr__(self):
-        return (f"<ImageEmbedding(image_id='{self.image_id}', "
-                f"model='{self.model}', "
-                f"dimension='{self.embed_dimensions}'>")
-
-
-class Scans(database):
-    __tablename__ = 'scans'
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False)  # Foreign key to the datasets table
-    name = Column(String, nullable=False)  # Name of the scan
-    folder_path = Column(String, nullable=False)  # Path to the folder containing the scan images
-    type = Column(String)  # Type of scan (e.g., 'CT', 'MRI')
-    description = Column(String)  # Description of the scan
-    number_of_slices = Column(Integer, nullable=False)  # Number of slices in the scan
-    meta_data = Column(JSON)  # Save any additional metadata about the scan

@@ -1,5 +1,5 @@
 from app.database import get_context_session
-from app.database.datasets import Labels
+from app.database.labels import Labels
 
 
 def get_hierarchical_label_name(label_id):

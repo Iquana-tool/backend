@@ -3,6 +3,7 @@ from app.database import database
 
 
 class Contours(database):
+    """Contours table to store contour information for masks."""
     __tablename__ = 'contours'
     id = Column(Integer, primary_key=True, autoincrement=True)
     mask_id = Column(Integer, ForeignKey('masks.id', ondelete='CASCADE'),

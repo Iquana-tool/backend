@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from logging import getLogger
 
 from app.database import get_session
-from app.database.datasets import Labels
+from app.database.labels import Labels
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours

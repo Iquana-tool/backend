@@ -1,7 +1,7 @@
 from fastapi.params import Depends
 from sqlalchemy.orm import Session
 from app.database import get_session
-from app.database.datasets import Labels
+from app.database.labels import Labels
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.schemas.automatic_segmentation.training import TrainingRequest
 import httpx

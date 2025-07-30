@@ -13,7 +13,8 @@ from fastapi import UploadFile
 from paths import Paths
 from app.database import get_context_session
 from app.database.datasets import Datasets
-from app.database.images import Images, Scans
+from app.database.images import Images
+from app.database.scans import Scans
 
 logger = getLogger(__name__)
 

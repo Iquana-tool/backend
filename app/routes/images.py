@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from typing import Literal
 from app.routes.masks import delete_mask, create_mask
 from app.database import get_session
-from app.database.images import Images, Scans
+from app.database.images import Images
+from app.database.scans import Scans
 from app.database.datasets import Datasets
 from app.database.masks import Masks
 from app.services.database_access import parse_log_file, get_height_width_of_image, save_as_low_res_image_to_disk

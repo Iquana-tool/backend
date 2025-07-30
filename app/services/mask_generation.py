@@ -4,7 +4,7 @@ from app.database import get_context_session
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
-from app.database.datasets import Labels
+from app.database.labels import Labels
 import numpy as np
 import cv2 as cv
 from app.services.contours import build_contour_hierarchy

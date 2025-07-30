@@ -3,7 +3,7 @@ import json
 import cv2 as cv
 import numpy as np
 from app.database import get_context_session
-from app.database.datasets import Labels
+from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.contours import Contours
 from app.services.contours import get_contour_from_coordinates, create_binary_mask_from_contours

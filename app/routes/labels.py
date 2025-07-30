@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import Field
 from sqlalchemy.orm import Session
 from app.database import get_session
-from app.database.datasets import Labels
+from app.database.labels import Labels
 from app.database.contours import Contours
 
 logger = logging.getLogger(__name__)

@@ -8,7 +8,7 @@ import numpy as np
 import os
 from io import BytesIO
 from app.database.images import Images
-from app.database.datasets import Labels
+from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.contours import Contours
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
