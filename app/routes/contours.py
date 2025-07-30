@@ -109,10 +109,14 @@ async def get_contours_of_mask(mask_id: int, flattened: bool = True, db: Session
 async def edit_contour(contour_id, db: Session = Depends(get_session), **kwargs,):
     """
     Edit a contour by updating its coordinates or label.
-    :param contour_id: ID of the contour to edit.
-    :param db: Database session.
-    :param kwargs: Dictionary containing the fields to update.
-    :return: Success message and updated contour ID.
+
+    Args:
+        contour_id (int): The ID of the contour to edit.
+        db (Session): The database session.
+        **kwargs: Arbitrary keyword arguments to update the contour attributes.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
     db = get_session()
     existing_contour = db.query(Contours).filter_by(id=contour_id).first()
@@ -135,10 +139,14 @@ async def edit_contour(contour_id, db: Session = Depends(get_session), **kwargs,
 async def edit_contour_label(contour_id: int, new_label_id: int, db: Session = Depends(get_session)):
     """
     Edit the label of a contour.
-    :param contour_id: ID of the contour to edit.
-    :param new_label_id: New label ID to set for the contour.
-    :param db: Database session.
-    :return: Success message and updated contour ID.
+
+    Args:
+        contour_id (int): The ID of the contour to edit.
+        new_label_id (int): The new label ID to set for the contour.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
     return await edit_contour(contour_id, label=new_label_id, db=db)
 
@@ -148,6 +156,18 @@ async def add_contour(mask_id: int,
                       contour_to_add: ContourModel,
                       parent_contour_id: int = None,
                       db: Session = Depends(get_session)):
+    """
+    Add a contour to a mask in the database.
+
+    Args:
+        mask_id (int): The ID of the mask to which the contour will be added.
+        contour_to_add (ContourModel): The contour data to add.
+        parent_contour_id (int, optional): The ID of the parent contour. Defaults to None.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and the ID of the added contour.
+    """
     try:
         existing_mask = db.query(Masks).filter_by(id=mask_id).first()
         image = db.query(Images).filter_by(id=existing_mask.image_id).first()
@@ -218,6 +238,16 @@ async def add_contour(mask_id: int,
 
 @router.delete("/delete_contour/{contour_id}")
 async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
+    """
+    Delete a contour and its child contours from the database.
+
+    Args:
+        contour_id (int): The ID of the contour to delete.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status and message.
+    """
     try:
         # Check if contour exists
         existing_contour = db.query(Contours).filter_by(id=contour_id).first()
@@ -245,6 +275,18 @@ async def add_contours(mask_id: int,
                        contours_to_add: list[ContourModel],
                        parent_contour_id: int = None,
                        db: Session = Depends(get_session)):
+    """
+    Add multiple contours to a mask in the database. Internally calls `add_contour` for each contour.
+
+    Args:
+        mask_id (int): The ID of the mask to which the contours will be added.
+        contours_to_add (list[ContourModel]): A list of contour data to add.
+        parent_contour_id (int, optional): The ID of the parent contour. Defaults to None.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and lists of added and failed contour IDs.
+    """
     failed = []
     added_ids = []
     for contour_to_add in contours_to_add:
