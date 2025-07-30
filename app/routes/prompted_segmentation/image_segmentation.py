@@ -27,6 +27,9 @@ async def segment_image(request: PromptedSegmentationRequest):
     """Perform prompted_segmentation with optional prompts, using data validation.
     This function handles the prompted_segmentation of images based on the provided request.
     It validates the request, retrieves the appropriate model, and processes the image.
+    The predicted contour will be fit to existing contours if a mask_id is provided in the request.
+    This means that a contour is always contained in its parent contour and has no overlap with other contours on
+    the same level.
 
     Args:
         request (PromptedSegmentationRequest): The request object containing image data and parameters. When using cropping,
@@ -45,8 +48,8 @@ async def segment_image(request: PromptedSegmentationRequest):
     masks, quality = model.process_prompted_request(request)
     if len(masks) > 1:
         logger.warning("This should only return one mask, but got multiple masks. Dropping all but the first mask.")
-    mask = masks[0] if masks else None
-    quality = quality[0] if quality else None
+    mask = masks[0]
+    quality = quality[0]
 
     # Postprocess the masks. This fits the mask into the already existing contours.
     with get_context_session() as session:
