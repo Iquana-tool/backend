@@ -1,10 +1,12 @@
+from logging import getLogger
 import numpy as np
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 import pandas as pd
 import json
+import os
+import zipfile
 from io import StringIO
-
 from app.database import get_session
 from sqlalchemy.orm import Session
 from app.database.masks import Masks
@@ -13,23 +15,14 @@ from app.database.datasets import Datasets
 from app.database.images import Images
 from app.routes.contours import flatten_hierarchical_dict, get_contours_of_mask
 from app.services.labels import get_hierarchical_label_name
+from app.services.util import get_mask_path_from_image_path
 
 router = APIRouter(prefix="/export", tags=["export"])
+logger = getLogger(__name__)
 
 
-def query_to_streaming_response(query, filename: str):
-    """ Convert a SQLAlchemy query to a StreamingResponse. """
-    df = pd.read_sql(query.statement, query.session.bind)
-    # Send the dataframe as a CSV file without saving locally
-    stream = StringIO()
-    df.to_csv(stream, index=False)  # Write to the StringIO stream
-    response = FileResponse(stream.getvalue(), media_type="text/csv")
-    response.headers["Content-Disposition"] = f"attachment; filename={filename}"
-    return response
-
-
-@router.get("/download_quantification_csv/{mask_id}")
-async def download_quantification_csv(mask_id: int, db: Session = Depends(get_session)):
+@router.get("/get_mask_csv/{mask_id}")
+async def get_mask_csv(mask_id: int, db: Session = Depends(get_session)):
     """ Download quantification data for the given mask_id as a CSV file. """
     image_name = db.query(Images.file_name).join(Masks, Images.id == Masks.image_id).filter(Masks.id == mask_id).first()
     response = await get_contours_of_mask(mask_id, db)
@@ -41,8 +34,8 @@ async def download_quantification_csv(mask_id: int, db: Session = Depends(get_se
     return response
 
 
-@router.post("/download_dataset/{dataset_id}")
-async def download_dataset(dataset_id: int,
+@router.get("/get_dataset_csv/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}")
+async def get_dataset_csv(dataset_id: int,
                            label_ids: list[int] = None,
                            include_manual: bool = True,
                            include_auto: bool = True,
@@ -114,3 +107,99 @@ async def download_dataset(dataset_id: int,
         response.headers["Content-Disposition"] = f'attachment; filename="{dataset_name.replace(' ', '_')}_dataset.csv"'
         return response
 
+
+@router.get("/get_segmentation_mask_file/{mask_id}")
+async def get_segmentation_mask_file(
+    mask_id: int,
+    db: Session = Depends(get_session)
+):
+    """Download the segmentation mask file for the given mask_id."""
+    mask = db.query(Masks).filter_by(id=mask_id).first()
+    if not mask:
+        return {
+            "success": False,
+            "message": "Mask not found."
+        }
+    elif not mask.finished:
+        return {
+            "success": False,
+            "message": "Cannot download mask that is not finished."
+        }
+
+    image = db.query(Images).filter_by(id=mask.image_id).first()
+    file_path = get_mask_path_from_image_path(image.file_path) if image else None
+
+    if not file_path or not os.path.exists(file_path):
+        logger.error(f"Mask is finished but mask file not found at {file_path}.")
+        raise HTTPException(status_code=404, detail="Mask file not found.")
+
+    return FileResponse(
+        file_path, media_type="image/png", filename=os.path.basename(file_path)
+    )
+
+
+@router.get("/get_segmentation_dataset/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}")
+async def get_segmentation_dataset(
+    dataset_id: int,
+    include_manual: bool = True,
+    include_auto: bool = True,
+    db: Session = Depends(get_session)
+):
+    """Download all images and masks as a ZIP file for the given dataset_id.
+
+    Args:
+        dataset_id (int): The ID of the dataset to export.
+        include_manual (bool, optional): Whether to include manual masks. Defaults to True.
+        include_auto (bool, optional): Whether to include auto-generated masks. Defaults to True.
+        db (Session, optional): The database session. Defaults to Depends(get_session).
+
+    Returns:
+        StreamingResponse: A ZIP file containing the images and masks for the dataset.
+    """
+    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
+    if not dataset:
+        return {
+            "success": False,
+            "message": "Dataset not found."
+        }
+
+    masks = db.query(Images.file_path).join(Masks).filter(Images.dataset_id == dataset_id)
+    if include_manual and include_auto:
+        masks = masks.filter(Masks.finished == True, Masks.generated == True).all()
+    else:
+        if include_manual:
+            masks = masks.filter(Masks.finished == True, Masks.generated == False).all()
+        elif include_auto:
+            masks = masks.filter(Masks.finished == False, Masks.generated == True).all()
+        else:
+            return {
+                "success": False,
+                "message": "At least one of include_manual or include_auto must be True."
+            }
+    if not masks:
+        return {
+            "success": False,
+            "message": "No finished masks found for this dataset."
+        }
+
+    zip_filename = f"{dataset.name.replace(' ', '_')}.zip"
+    zip_path = os.path.join("/tmp", zip_filename)
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for mask in masks:
+            image = db.query(Images).filter_by(id=mask.image_id).first()
+            if not image:
+                continue
+
+            mask_file_path = get_mask_path_from_image_path(image.file_path)
+            if not os.path.exists(mask_file_path):
+                logger.error(f"Mask file not found at {mask_file_path}.")
+                continue
+
+            zipf.write(mask_file_path, os.path.basename(mask_file_path))
+            zipf.write(image.file_path, os.path.basename(image.file_path))
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=zip_filename,
+        headers={"Content-Disposition": f'attachment; filename="{zip_filename}"'}
+    )
