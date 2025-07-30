@@ -118,7 +118,6 @@ async def edit_contour(contour_id, db: Session = Depends(get_session), **kwargs,
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
-    db = get_session()
     existing_contour = db.query(Contours).filter_by(id=contour_id).first()
     if not existing_contour:
         raise HTTPException(status_code=404, detail="Contour not found.")
