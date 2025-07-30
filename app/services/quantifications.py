@@ -46,13 +46,15 @@ class ContourQuantifier:
 
     @property
     def x_coords(self):
-        """ Get the x-coordinates of the contour.
+        """
+        Get the x-coordinates of the contour.
         """
         return self.contour[..., 1]
 
     @property
     def y_coords(self):
-        """ Get the y-coordinates of the contour.
+        """
+        Get the y-coordinates of the contour.
         """
         return self.contour[..., 0]
 
