@@ -6,11 +6,9 @@ from app.database.images import Images
 from app.services.scale_computation import compute_pixel_scale_from_points
 from logging import getLogger
 
-# Set up logging
-logger = getLogger(__name__)
 
-# Create a router for pixel scale-related routes
-router = APIRouter()
+router = APIRouter("/scale", tags=["scale"])
+logger = getLogger(__name__)
 
 
 @router.get('/get_pixel_scale/{image_id}')
@@ -35,6 +33,16 @@ async def get_pixel_scale(image_id: int, db: Session = Depends(get_session)):
 async def set_pixel_scale(scale_x: float, scale_y: float, unit: str, image_id: int, db: Session = Depends(get_session)):
     """
     Set the pixel scale for an image.
+
+    Args:
+        scale_x (float): The pixel scale in the x direction.
+        scale_y (float): The pixel scale in the y direction.
+        unit (str): The unit of measurement (e.g., mm).
+        image_id (int): The ID of the image to set the scale for.
+        db (Session): The database session.
+
+    Returns:
+        dict: A success message with the scale information.
     """
     # Fetch the image from the database
     image = db.query(Images).filter_by(id=image_id).first()
@@ -67,8 +75,14 @@ async def set_pixel_scale(scale_x: float, scale_y: float, unit: str, image_id: i
 async def set_pixel_scale_via_drawn_line(scale_input: ScaleInput, db: Session = Depends(get_session)):
     """
     Set the pixel scale based on a known distance between two points drawn on the image.
-    """
 
+    Args:
+        scale_input (ScaleInput): Input containing the coordinates of the two points and the known distance.
+        db (Session): The database session.
+
+    Returns:
+        dict: A success message with the computed scale information.
+    """
     # Compute the scale in both directions
     scale_x, scale_y = compute_pixel_scale_from_points(
         (scale_input.x1, scale_input.y1),
