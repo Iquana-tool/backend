@@ -18,7 +18,7 @@ from app.services.contours import build_depth_first_contour_list
 
 
 def generate_mask(mask_id):
-    """Generate a mask from the saved contours of that mask."""
+    """ Generate a mask from the saved contours of that mask and return an array of the mask."""
     with get_context_session() as session:
         contours = session.query(Contours).filter_by(mask_id=mask_id).all()
         image_id = session.query(Masks).filter_by(id=mask_id).first().image_id
@@ -43,7 +43,17 @@ def generate_mask(mask_id):
 async def create_masks_and_add_contours_for_images(image_ids: list[int],
                                                    mask_responses: list[SegmentationMaskModel],
                                                    db: Session = Depends(get_session)):
-    """ Create masks for a list of image IDs and add contours to them. """
+    """
+    Create masks for a list of image IDs and add contours to them.
+
+    Args:
+        image_ids (list[int]): List of image IDs for which to create masks.
+        mask_responses (list[SegmentationMaskModel]): List of segmentation mask responses containing contours.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and responses for each image.
+    """
     if len(image_ids) != len(mask_responses):
         raise ValueError(
             f"Number of image_ids does not match number of mask_responses."
