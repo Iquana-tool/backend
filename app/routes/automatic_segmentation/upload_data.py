@@ -1,14 +1,14 @@
 import os
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 import httpx
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
-from . import router, logger
+from . import logger
 from app.database import get_session
 from sqlalchemy.orm import Session
 from logging import getLogger
 from app.database.images import Images
 from app.database.masks import Masks
-
+from ...services.util import get_mask_path_from_image_path
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
@@ -113,11 +113,3 @@ async def proxy_upload_dataset(
         "num_uploaded_masks": len(mask_paths),
         "results": results,
     }
-
-
-def get_mask_path_from_image_path(path: str):
-    """ Given an image path, returns the corresponding mask path. """
-    parts = path.split(os.path.sep)
-    parts[-2] = "masks"  # Replace the parent directory
-    full_path = os.path.sep.join(parts)
-    return full_path.rsplit(".", 1)[0] + ".png"

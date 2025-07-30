@@ -21,7 +21,17 @@ async def create_dataset(name: str,
                          description: str,
                          dataset_type: Literal["image", "scan", "DICOM"],
                          db: Session = Depends(get_session)):
-    """Create a new dataset."""
+    """Create a new dataset.
+
+    Args:
+        name (str): The name of the dataset.
+        description (str): A brief description of the dataset.
+        dataset_type (Literal["image", "scan", "DICOM"]): The type of dataset.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status and message, or error details.
+    """
     try:
         dataset_path = os.path.join(Paths.datasets_dir, name)
         os.makedirs(dataset_path)
@@ -61,6 +71,22 @@ async def get_number_of_images(dataset_id: int, db: Session = Depends(get_sessio
 
 @router.get("/get_annotation_progress/{dataset_id}")
 async def get_annotation_progress(dataset_id: int, db: Session = Depends(get_session)):
+    """Get the annotation progress of a dataset.
+
+    Args:
+        dataset_id (int): The ID of the dataset to check.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the annotation progress details. The dict contains:
+            - success (bool): Indicates if the operation was successful.
+            - message (str): A message indicating the result of the operation.
+            - manually_annotated (int): Number of images manually annotated.
+            - auto_annotated_reviewed (int): Number of images auto-annotated with review.
+            - auto_annotated_without_review (int): Number of images auto-annotated without review.
+            - missing (int): Number of images missing annotations.
+            - total_images (int): Total number of images in the dataset.
+    """
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
         return {"success": False, "message": "Dataset not found."}
