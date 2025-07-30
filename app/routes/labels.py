@@ -12,6 +12,7 @@ router = APIRouter(prefix="/labels", tags=["labels"])
 
 @router.get("/get_labels/{dataset_id}")
 async def get_labels(dataset_id: int, db: Session = Depends(get_session)):
+    """Retrieve all labels for a given dataset."""
     classes = db.query(Labels).filter_by(dataset_id=dataset_id).all()
     return classes
 
@@ -22,6 +23,18 @@ async def create_label(label_name: str,
                        parent_label_id: int = None,
                        label_value: int = None,
                        db: Session = Depends(get_session)):
+    """Create a new label for a dataset.
+
+    Args:
+        label_name (str): The name of the label to create.
+        dataset_id (int): The ID of the dataset to which the label belongs.
+        parent_label_id (int, optional): The ID of the parent label if this is a child label. Defaults to None.
+        label_value (int, optional): The value of the label. If not provided, it will be set to the next available value.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and class ID if created successfully.
+    """
     try:
         # Check if class already exists
         existing_class = db.query(Labels).filter_by(dataset_id=dataset_id, name=label_name).first()
@@ -53,6 +66,16 @@ async def create_label(label_name: str,
 
 @router.delete("/delete_label/label={label_id}")
 async def delete_label(label_id: int, db: Session = Depends(get_session)):
+    """
+    Delete a label, its children and all associated contours.
+
+    Args:
+        label_id (int): The ID of the label to delete.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status and message.
+    """
     try:
         # Check if class exists
         existing_label = db.query(Labels).filter_by(id=label_id).first()
