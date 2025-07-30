@@ -171,7 +171,7 @@ async def add_contour(mask_id: int,
                         "contour_id": None
                     }
                 logger.debug(f"Found parent contour with ID {parent_contour.id} for label {contour_to_add.label}.")
-                parent_contour_id = parent_contour.id[0]
+                parent_contour_id = parent_contour.id
             else:
                 parent_contour = db.query(Contours).filter_by(id=parent_contour_id).first()
                 expected_parent = db.query(Labels).filter_by(id=parent_label_id).first()
