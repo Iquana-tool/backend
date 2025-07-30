@@ -171,6 +171,7 @@ async def add_contour(mask_id: int,
                         "contour_id": None
                     }
                 logger.debug(f"Found parent contour with ID {parent_contour.id} for label {contour_to_add.label}.")
+                parent_contour_id = parent_contour.id[0]
             else:
                 parent_contour = db.query(Contours).filter_by(id=parent_contour_id).first()
                 expected_parent = db.query(Labels).filter_by(id=parent_label_id).first()
@@ -191,7 +192,7 @@ async def add_contour(mask_id: int,
         quantifier = ContourQuantifier().from_coordinates(rescaled_x, rescaled_y)
         new_contour = Contours(
             mask_id=mask_id,
-            parent_id=parent_contour.id if has_parent else None,
+            parent_id=parent_contour_id,
             coords=json.dumps({"x": contour_to_add.x, "y": contour_to_add.y}),
             label=contour_to_add.label,
             area=quantifier.area,
