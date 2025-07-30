@@ -5,7 +5,8 @@ from app.services.labels import label_value_to_label_id
 import numpy as np
 from fastapi import APIRouter, Depends
 
-from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationMaskModel, SegmentationResponse, \
+from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationMaskModel, \
+    SegmentationResponse, \
     AutomaticSegmentationRequest
 from app.services.prompted_segmentation import ModelCache
 from app.services.postprocessing import fit_mask_to_already_created_masks
@@ -14,10 +15,8 @@ from app.database import get_session, get_context_session
 from app.database.images import Images
 from sqlalchemy.orm import Session
 
-
 logger = getLogger(__name__)
 router = APIRouter(prefix="/prompted_segmentation", tags=["prompted_segmentation"])
-
 
 prompted_model_cache = ModelCache()
 automatic_model_cache = ModelCache()
@@ -44,20 +43,33 @@ async def segment_image(request: PromptedSegmentationRequest):
     # This method should handle the image preprocessing and prompted_segmentation
     # All model specific logic should be encapsulated in the model class
     masks, quality = model.process_prompted_request(request)
+    if len(masks) > 1:
+        logger.warning("This should only return one mask, but got multiple masks. Dropping all but the first mask.")
+    mask = masks[0] if masks else None
+    quality = quality[0] if quality else None
 
     # Postprocess the masks. This fits the mask into the already existing contours.
     with get_context_session() as session:
         mask_id = session.query(Masks.id).filter_by(image_id=request.image_id).first()
     if mask_id:
-        masks = [fit_mask_to_already_created_masks(request.mask_id,
-                                                   mask,
-                                                   request.label,
-                                                   request.parent_contour_id) for mask in masks]
+        response = fit_mask_to_already_created_masks(request.mask_id,
+                                                 mask,
+                                                 request.label,
+                                                 request.parent_contour_id)
+        if not response["success"]:
+            return response
+        else:
+            masks = [response["mask"]]
     else:
         # If no mask_id is provided, we cannot correct the masks.
         logger.warning("No mask_id provided, skipping mask fitting to existing contours.")
-    masks_response = await get_masks_responses([mask * request.label for mask in masks], quality)
-    return SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
+        response = {"success": True, "message": "No existing contours to fit the mask to."}
+    masks_response = await get_masks_responses([mask * request.label], [quality])
+    return {
+        "success": True,
+        "message": "Prompted segmentation completed successfully. " + response.message,
+        "response": SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
+    }
 
 
 @router.post('/generate_mask')

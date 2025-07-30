@@ -36,13 +36,17 @@ def fit_mask_to_already_created_masks(mask_id: int,
        Args:
            mask_id (int): The mask ID to check.
            mask (np.ndarray): The binary mask to check against.
+           label_id (int): The label ID to check against.
            parent_contour_id (int, optional): The parent contour ID to check against. Defaults to None.
        Returns:
-           list[np.ndarray]: The filtered list of contours that are within the bounds of the mask.
+
     """
     if not np.any(mask):
         logger.warning("Input mask is empty! Returning empty mask.")
-        return np.zeros_like(mask, dtype=np.uint8)
+        return {
+            "success": False,
+            "message": "Input mask is empty, cannot fit mask to existing contours."
+        }
 
     with get_context_session() as session:
         mask_db = session.query(Masks).filter_by(id=mask_id).first()
@@ -67,13 +71,20 @@ def fit_mask_to_already_created_masks(mask_id: int,
 
     if not np.any(positive_mask):
         logger.warning("No positive mask found! Returning empty mask.")
-        return np.zeros_like(mask, dtype=np.uint8)
+        return {
+            "success": False,
+            "message": "Parent contour is empty, cannot fit mask to existing contours."
+        }
 
     # Fit the entire mask to the parent masks. Pixels outside the parent are not allowed.
     on_parent_mask = np.logical_and(positive_mask, mask).astype(np.uint8)
     if not np.any(on_parent_mask):
         logger.warning("Predicted mask does not overlap with parent mask! Returning empty mask.")
-        return np.zeros_like(mask, dtype=np.uint8)
+        return {
+            "success": False,
+            "message": "Predicted mask does not overlap with parent mask. Maybe you selected "
+                       "the wrong parent contour?"
+        }
 
     contours = []
     for contour in contours_on_same_level:
@@ -87,4 +98,21 @@ def fit_mask_to_already_created_masks(mask_id: int,
 
     if not np.any(final_mask):
         logger.warning("Predicted mask overlaps completely with existing masks! Returning empty mask.")
-    return final_mask
+        return {
+            "success": False,
+            "message": "Predicted mask overlaps completely with existing masks on the same level. "
+                       "Maybe you already annotated this object?"
+        }
+    if np.all(mask == final_mask):
+        logger.info("Predicted mask is identical to the final mask, no changes made.")
+        return {
+            "success": True,
+            "message": "Added mask completely.",
+            "mask": final_mask
+        }
+    else:
+        return {
+            "success": True,
+            "message": "Mask was fitted to existing contours successfully.",
+            "mask": final_mask
+        }
