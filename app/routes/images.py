@@ -30,7 +30,16 @@ router = APIRouter(prefix="/images", tags=["images"])
 
 @router.post("/upload_image")
 async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Session = Depends(get_session)):
-    """Upload an image file"""
+    """Upload an image file.
+
+    Args:
+        dataset_id: ID of the dataset to which the image belongs.
+        file: The image file to upload.
+        db: Database session dependency.
+
+    Returns:
+        A dictionary containing the success status, image ID, and a message.
+    """
     try:
         image_id = await save_image_to_disk_and_db(file, dataset_id)
         if image_id is None:
@@ -49,7 +58,16 @@ async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Sessio
 
 @router.post("/upload_images")
 async def upload_images(dataset_id: int, files: list[UploadFile] = File(...), db: Session = Depends(get_session)):
-    """Upload multiple image files"""
+    """Upload multiple image files.
+
+    Args:
+        dataset_id: ID of the dataset to which the images belong.
+        files: List of image files to upload.
+        db: Database session dependency.
+
+    Returns:
+        A dictionary containing the success status, list of image IDs, and a message.
+    """
     image_ids = []
     failed_files = []
     for file in files:
@@ -81,6 +99,15 @@ async def upload_images(dataset_id: int, files: list[UploadFile] = File(...), db
 
 @router.delete("/delete_image/{image_id}")
 async def delete_image(image_id: int, db: Session = Depends(get_session)):
+    """Delete an image and its associated masks.
+
+    Args:
+        image_id: ID of the image to delete.
+        db: Database session dependency.
+
+    Returns:
+        A dictionary indicating success and a message.
+    """
     try:
         image = db.query(Images).filter_by(id=image_id).first()
         if not image:
@@ -104,7 +131,7 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
 
 @router.get("/list_images/{dataset_id}")
 async def list_images(dataset_id: int, db: Session = Depends(get_session)):
-    """List all uploaded image ids"""
+    """List all uploaded image ids in an image dataset."""
     try:
         dataset = db.query(Datasets).filter_by(id=dataset_id).first()
         if dataset.dataset_type == "scan":
@@ -138,7 +165,7 @@ async def list_images(dataset_id: int, db: Session = Depends(get_session)):
 
 @router.get("/list_scans/{dataset_id}")
 async def list_scans(dataset_id: int, db: Session = Depends(get_session)):
-    """ Fetch all uploaded scans in a scan dataset. """
+    """ List all uploaded scans in a scan dataset. """
     try:
         dataset = db.query(Datasets).filter_by(id=dataset_id).first()
         if dataset.dataset_type == "image":
@@ -180,7 +207,7 @@ async def list_scans(dataset_id: int, db: Session = Depends(get_session)):
 @router.get("/list_images_with_annotation_status/{dataset_id}&status={status}")
 async def list_images_with_annotation_status(dataset_id: int, status: Literal["finished", "generated", "missing"],
                                           db: Session = Depends(get_session)):
-    """List all images with finished masks for a given image ID.
+    """List all images with masks of certain status for a given image ID.
 
     Args:
         dataset_id: Dataset ID to retrieve images from.
@@ -243,7 +270,9 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
     """Get images via ids.
 
     Args:
-        image_id: Image ID to retrieve.
+        image_id (int): Image ID to retrieve.
+        low_res (bool): Whether to return low resolution images (thumbnails). Defaults to False.
+        db (Session): Database session dependency.
 
     Returns:
         A dict mapping from image ID to base64 encoded image.
@@ -269,6 +298,16 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
 
 @router.post("/get_images")
 async def get_images(image_ids: str, low_res: bool = False, db: Session = Depends(get_session)):
+    """Get images via a list of image IDs. This gets the images in batches to avoid sending too many requests at once.
+
+    Args:
+        image_ids (str): JSON string containing a list of image IDs to retrieve.
+        low_res (bool): Whether to return low resolution images (thumbnails). Defaults to False.
+        db (Session): Database session dependency.
+
+    Returns:
+        A dictionary mapping from image ID to base64 encoded image.
+    """
     try:
         # Parse image_ids from JSON string
         image_ids = json.loads(image_ids)
@@ -304,6 +343,7 @@ async def get_images_of_dataset(dataset_id: int, low_res: bool = False, limit: i
         dataset_id: ID of the dataset to retrieve images from.
         low_res: Whether to return low resolution images (thumbnails).
         limit: Optional limit on the number of images to return. If not provided, all images will be returned.
+        db: Database session dependency.
 
     Returns:
         A dict mapping from image ID to base64 encoded image.
@@ -342,6 +382,8 @@ async def upload_scan(dataset_id: int,
     """Upload a scan file.
     This endpoint allows uploading multiple image files that belong to a scan.
     It creates a new scan entry in the database and associates the images with it.
+    > Warning: This is still in development and might not work!
+
     Args:
         dataset_id: ID of the dataset to which the scan belongs.
         files: List of image files to upload. The filenames must include the slice index or number. This number must
@@ -351,9 +393,10 @@ async def upload_scan(dataset_id: int,
         scan_type: Type of scan (e.g., "CT", "MRI"). Optional.
         description: Description of the scan. Optional.
         meta_data: Additional metadata about the scan. Optional.
+
     Returns:
         A success message with the IDs of the uploaded images.
-        """
+    """
     # First create a new scan entry in the database
     # Then save each image file to disk and the database
     # and associate them with the scan entry
@@ -406,7 +449,6 @@ async def upload_scan(dataset_id: int,
         }
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
-        raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -419,7 +461,22 @@ async def upload_scan_with_log_file(
         description: str = "Scan description",
         db: Session = Depends(get_session)
 ):
-    """Upload a scan file with logging."""
+    """
+    Upload a scan file with logging. This endpoint allows uploading multiple image files that belong to a scan,
+    along with a log file that contains metadata about the scan.
+    > Warning: This is still in development and might not work!
+
+    Args:
+        dataset_id: ID of the dataset to which the scan belongs.
+        files: List of image files to upload. The filenames must include the slice index or number.
+        log_file: Log file containing metadata about the scan.
+        scan_type: Type of scan (e.g., "CT", "MRI"). Optional.
+        description: Description of the scan. Optional.
+        db: Database session dependency.
+
+    Returns:
+        A success message with the IDs of the uploaded images.
+    """
     # First create a new scan entry in the database
     # Then save each image file to disk and the database
     # and associate them with the scan entry
@@ -443,14 +500,18 @@ async def upload_scan_from_zip(
         description: str = "Scan description",
         db: Session = Depends(get_session)
 ):
-    """ Upload a scan from a zip file.
-    This endpoint extracts images from a zip file and uploads them as a scan.
+    """
+    Upload a scan from a zip file. This endpoint extracts images from a zip file and uploads them as a scan.
+    > Warning: This is still in development and might not work!
+
     Args:
         dataset_id: ID of the dataset to which the scan belongs.
         zip_file: The zip file containing the scan images. The zip file should contain nothing but the slices and
         optionally a log file.
         scan_type: Type of scan (e.g., "CT", "MRI"). Optional.
         description: Description of the scan. Optional.
+        db: Database session dependency.
+
     Returns:
         A success message with the IDs of the uploaded images.
     """
@@ -534,5 +595,4 @@ async def delete_scan(scan_id: int, db: Session = Depends(get_session)):
         return {"success": True, "message": f"Deleted scan {scan_id} and its associated images."}
     except Exception as e:
         logger.error(f"Delete scan error: {str(e)}")
-        raise e
         raise HTTPException(status_code=500, detail=str(e))
