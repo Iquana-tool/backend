@@ -73,9 +73,3 @@ async def segment_image(request: PromptedSegmentationRequest):
         "message": "Prompted segmentation completed successfully. " + response["message"],
         "response": SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
     }
-
-
-@router.post('/generate_mask')
-async def generate_mask(request: AutomaticSegmentationRequest, db: Session = Depends(get_session)):
-    """ Generate prompted_segmentation masks for an image using automatic semantic prompted_segmentation. """
-    pass
