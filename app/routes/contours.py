@@ -80,7 +80,7 @@ def flatten_hierarchical_dict(hierarchical_dict, parent_id=None):
     return flat_list
 
 
-@router.get("/get_contours_of_mask/mask={mask_id}&flattened={flattened}")
+@router.get("/get_contours_of_mask/{mask_id}&flattened={flattened}")
 async def get_contours_of_mask(mask_id: int, flattened: bool = True, db: Session = Depends(get_session)):
     """ Export quantification data for the given mask_id and labels.
 
@@ -152,13 +152,13 @@ async def add_contour(mask_id: int,
         existing_mask = db.query(Masks).filter_by(id=mask_id).first()
         image = db.query(Images).filter_by(id=existing_mask.image_id).first()
         contour = coords_to_cv_contour(contour_to_add.x, contour_to_add.y)
-        parent_label_id = db.query(Labels.parent_id).filter_by(id=contour_to_add.label).first()
+        parent_label_id = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label).first())[0]
         has_parent = parent_label_id is not None
         if has_parent:
             if parent_contour_id is None:
-                logger.warning("Parent contour ID is None, but the label has a parent. Trying to find a fitting parent"
+                logger.warning(f"Parent contour ID is None, but the label has parent ({parent_label_id}). Trying to find a fitting parent"
                                " contour.")
-                parent_contour = find_parent_contour(parent_label_id[0],
+                parent_contour = find_parent_contour(parent_label_id,
                                                      mask_id,
                                                      (image.height, image.width),
                                                      contour,
@@ -173,7 +173,7 @@ async def add_contour(mask_id: int,
                 logger.debug(f"Found parent contour with ID {parent_contour.id} for label {contour_to_add.label}.")
             else:
                 parent_contour = db.query(Contours).filter_by(id=parent_contour_id).first()
-                expected_parent = db.query(Labels).filter_by(id=parent_label_id[0]).first()
+                expected_parent = db.query(Labels).filter_by(id=parent_label_id).first()
                 given_parent = db.query(Labels).filter_by(id=parent_contour.label).first()
                 if expected_parent.id != given_parent.id:
                     logger.error(f"Error adding contour: Parent contour does not match the expected parent label. \n"
