@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-AUTOMATIC_SEGMENTATION_BACKEND_URL = os.environ.get("AUTOMATIC_SEGMENTATION_BACKEND_URL", "http://coral-automatic-segmentation-cpu/7000")
+AUTOMATIC_SEGMENTATION_BACKEND_URL = os.environ.get("AUTOMATIC_SEGMENTATION_BACKEND_URL", "http://coral-automatic-segmentation-cpu:7000")
 
 
 class Paths:
