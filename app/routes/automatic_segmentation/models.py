@@ -18,6 +18,7 @@ router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentati
 async def get_available_base_models():
     """Retrieve all available base models for training."""
     url = f"{BASE_URL}/models/get_trainable_base_models"
+    logger.info(url)
     async with httpx.AsyncClient() as client:
         resp = await client.get(url)
         resp.raise_for_status()
@@ -28,6 +29,7 @@ async def get_available_base_models():
 async def get_trained_models_of_dataset(dataset_id: int):
     """Retrieve all trained models for a specific dataset."""
     url = f"{BASE_URL}/models/get_trained_models_of_dataset/{dataset_id}"  # Gets all already trained models
+    logger.info(url)
     async with httpx.AsyncClient() as client:
         resp = await client.get(url)
         resp.raise_for_status()
