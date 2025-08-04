@@ -20,4 +20,4 @@ services:
 
 networks:
   coral-network:
-    driver: bridge
+    external: true
