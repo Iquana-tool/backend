@@ -13,5 +13,11 @@ services:
     environment:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://coral.ni.dfki.de,http://localhost:3000,http://localhost:7000}
       - AUTOMATIC_SEGMENTATION_BACKEND="http://localhost:7000"
+    networks:
+      - coral-network
     restart: unless-stopped
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+
+networks:
+  coral-network:
+    driver: bridge
