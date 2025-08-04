@@ -11,7 +11,7 @@ services:
       - ./data:/data
       - ./app/services/prompted_segmentation/weights:/app/services/prompted_segmentation/weights
     environment:
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://coral.ni.dfki.de,http://localhost:3000}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://coral.ni.dfki.de,http://localhost:3000,http://localhost:7000}
       - AUTOMATIC_SEGMENTATION_BACKEND="http://localhost:7000"
     restart: unless-stopped
     command: uvicorn main:app --host 0.0.0.0 --port 8000 
