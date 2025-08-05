@@ -92,6 +92,8 @@ async def get_dataset_csv(dataset_id: int,
         df_data.setdefault("diameter_avg", []).append(np.average(diameters) if diameters else None)
         df_data.setdefault("coords_x", []).append(coords["x"] if coords and "x" in coords else None)
         df_data.setdefault("coords_y", []).append(coords["y"] if coords and "y" in coords else None)
+        df_data.setdefault("centroid_x", []).append(np.mean(coords["x"]))
+        df_data.setdefault("centroid_x", []).append(np.mean(coords["y"]))
         df_data.setdefault("finished", []).append(finished)
         df_data.setdefault("generated", []).append(generated)
     df = pd.DataFrame(df_data)
