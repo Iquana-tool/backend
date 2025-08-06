@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from fastapi import APIRouter
 from logging import getLogger
 
+from starlette.background import BackgroundTask
+
 from app.database import get_session
 from app.database.labels import Labels
 from app.database.images import Images
@@ -289,6 +291,7 @@ async def add_contours(mask_id: int,
     failed = []
     added_ids = []
     for contour_to_add in contours_to_add:
+        logger.info(f"Added {len(added_ids)} / {len(contours_to_add)} contours. Failed {len(failed)}")
         result = await add_contour(mask_id, contour_to_add, parent_contour_id, db)
         if not result["success"]:
             failed.append({
@@ -313,3 +316,21 @@ async def add_contours(mask_id: int,
             "added_ids": added_ids,
             "failed": []
         }
+
+
+@router.delete("/delete_all_contours_of_mask/{mask_id}")
+async def delete_all_contours_of_mask(mask_id: int, db: Session = Depends(get_session)):
+    """ Deletes all contours of a mask. """
+    try:
+        contours = db.query(Contours).filter_by(mask_id=mask_id).delete()
+        mask = db.query(Masks).filter_by(id=mask_id).first()
+        mask.generated = False
+        mask.finished = False
+        db.commit()
+        return {
+            "success": True,
+            "message": f"Deleted all contours of mask {mask_id}"
+        }
+    except Exception as e:
+        logger.error(e)
+        raise HTTPException(500, e)

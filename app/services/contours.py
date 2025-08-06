@@ -4,9 +4,12 @@ import cv2
 import cv2 as cv
 import numpy as np
 from sqlalchemy.orm import Session
-
+from logging import getLogger
 from app.database.contours import Contours
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
+
+
+logger = getLogger(__name__)
 
 
 def get_contours(mask: np.ndarray, only_return_biggest=False) -> np.ndarray:
@@ -18,12 +21,17 @@ def get_contours(mask: np.ndarray, only_return_biggest=False) -> np.ndarray:
         Returns:
             np.ndarray: The contours of the mask.
     """
+    logger.debug("Computing contours for mask.")
     contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:  # check if any contours found
         if only_return_biggest:
             biggest = max(contours, key=cv2.contourArea)
             return np.array([biggest])
         else:
+            contours = sorted(contours, key=cv2.contourArea)
+            if len(contours) > 100:
+                logger.warning("Detected over 100 objects. Only returning the biggest 500 objects.")
+                contours = contours[:100]
             return contours
     else:
         return np.array([])
