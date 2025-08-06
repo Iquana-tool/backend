@@ -53,3 +53,13 @@ async def get_model_metadata(model_id: int):
         resp = await client.get(url)
         resp.raise_for_status()
         return JSONResponse(resp.json())
+
+@router.delete("/delete_model/{model_id}")
+async def delete_model(model_id: int):
+    """ Delete a model based on its id. """
+    logger.debug(f"Deleting model with id: {model_id}")
+    url = f"{BASE_URL}/models/delete_model/{model_id}"
+    async with httpx.AsyncClient() as client:
+        resp = await client.delete(url)
+        resp.raise_for_status()
+        return JSONResponse(resp.json())

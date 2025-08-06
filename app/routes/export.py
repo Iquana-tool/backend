@@ -6,6 +6,7 @@ import pandas as pd
 import json
 import os
 import zipfile
+import io
 from io import StringIO
 from app.database import get_session
 from sqlalchemy.orm import Session
@@ -147,48 +148,33 @@ async def get_segmentation_dataset(
     include_auto: bool = True,
     db: Session = Depends(get_session)
 ):
-    """Download all images and masks as a ZIP file for the given dataset_id.
-
-    Args:
-        dataset_id (int): The ID of the dataset to export.
-        include_manual (bool, optional): Whether to include manual masks. Defaults to True.
-        include_auto (bool, optional): Whether to include auto-generated masks. Defaults to True.
-        db (Session, optional): The database session. Defaults to Depends(get_session).
-
-    Returns:
-        StreamingResponse: A ZIP file containing the images and masks for the dataset.
-    """
+    """Download all images and masks as a ZIP file for the given dataset_id."""
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
-        return {
-            "success": False,
-            "message": "Dataset not found."
-        }
+        raise HTTPException(status_code=404, detail="Dataset not found.")
 
-    masks = db.query(Images.file_path).join(Masks).filter(Images.dataset_id == dataset_id)
+    masks_query = db.query(Images.file_path).join(Masks).filter(Images.dataset_id == dataset_id)
+
     if include_manual and include_auto:
-        masks = masks.filter(Masks.finished == True, Masks.generated == True).all()
+        masks = masks_query.filter(Masks.finished == True, Masks.generated == True).all()
     else:
         if include_manual:
-            masks = masks.filter(Masks.finished == True, Masks.generated == False).all()
+            masks = masks_query.filter(Masks.finished == True, Masks.generated == False).all()
         elif include_auto:
-            masks = masks.filter(Masks.finished == False, Masks.generated == True).all()
+            masks = masks_query.filter(Masks.finished == False, Masks.generated == True).all()
         else:
-            return {
-                "success": False,
-                "message": "At least one of include_manual or include_auto must be True."
-            }
+            raise HTTPException(status_code=400, detail="At least one of include_manual or include_auto must be True.")
+
     if not masks:
-        return {
-            "success": False,
-            "message": "No finished masks found for this dataset."
-        }
+        raise HTTPException(status_code=404, detail="No finished masks found for this dataset.")
 
     zip_filename = f"{dataset.name.replace(' ', '_')}.zip"
-    zip_path = os.path.join("/tmp", zip_filename)
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+
+    # Create a streaming response with a ZIP file
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for mask in masks:
-            image = db.query(Images).filter_by(id=mask.image_id).first()
+            image = db.query(Images).filter_by(file_path=mask.file_path).first()
             if not image:
                 continue
 
@@ -197,11 +183,15 @@ async def get_segmentation_dataset(
                 logger.error(f"Mask file not found at {mask_file_path}.")
                 continue
 
-            zipf.write(mask_file_path, os.path.basename(mask_file_path))
-            zipf.write(image.file_path, os.path.basename(image.file_path))
-    return FileResponse(
-        zip_path,
+            zipf.write(mask_file_path, os.path.join("masks", os.path.basename(mask_file_path)))
+            zipf.write(image.file_path, os.path.join("images", os.path.basename(image.file_path)))
+
+    # Seek to the start of the buffer
+    buffer.seek(0)
+
+    # Create a streaming response
+    return StreamingResponse(
+        buffer,
         media_type="application/zip",
-        filename=zip_filename,
-        headers={"Content-Disposition": f'attachment; filename="{zip_filename}"'}
+        headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
     )
