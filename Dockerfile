@@ -20,8 +20,6 @@ RUN apt-get update --allow-unauthenticated && \
 # Copy the rest of the application code
 COPY . .
 
-RUN uv sync
-
 # Create necessary directories for data and database
 RUN chmod -R 777 data
 
@@ -29,4 +27,4 @@ RUN chmod -R 777 data
 EXPOSE 8000
 
 # Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
