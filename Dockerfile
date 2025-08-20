@@ -9,6 +9,8 @@ ENV PYTHONUNBUFFERED=1
 # Install uv
 RUN pip install uv
 
+RUN uv init .
+
 # Copy only the requirements file first
 COPY requirements.txt .
 
