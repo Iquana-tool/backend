@@ -121,7 +121,6 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
             os.remove(os.path.join(Paths.thumbnails_dir, f"{image_id}.png"))  # Remove the thumbnail
         db.delete(image)
         db.commit()
-        db.close()
         return {"success": True,
                 "message": f"Deleted image {image_id}."}
     except Exception as e:
@@ -153,7 +152,6 @@ async def list_images(dataset_id: int, db: Session = Depends(get_session)):
                 "finished": finished,
                 "generated": generated
             })
-        db.close()
         return {
             "success": True,
             "images": image_response
@@ -194,7 +192,6 @@ async def list_scans(dataset_id: int, db: Session = Depends(get_session)):
                 "automatically_annotated": automatically_annotated,
                 "image_ids": [img.id for img in image_ids]
             })
-        db.close()
         return {
             "success": True,
             "scans": scan_responses
@@ -254,7 +251,6 @@ async def list_images_with_annotation_status(dataset_id: int, status: Literal["f
             )
         else:
             raise HTTPException(status_code=400, detail="Invalid status. Use 'finished', 'generated', or 'missing'.")
-        db.close()
         return {
             "success": True,
             "message": f"Found {len(image_ids)} images with status '{status}' in dataset {dataset_id}.",
@@ -280,7 +276,6 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
     try:
         response = {}
         image = db.query(Images).filter_by(id=image_id).first()
-        db.close()
         file_path = image.file_path if not low_res else os.path.join(Paths.thumbnails_dir, f"{image_id}.png")
         if not os.path.exists(file_path) and low_res:
             # The thumbnail has not been created yet, so create it
@@ -316,7 +311,6 @@ async def get_images(image_ids: str, low_res: bool = False, db: Session = Depend
             
         response = {}
         file_paths = db.query(Images.file_path, Images.id).filter(Images.id.in_(image_ids)).all()
-        db.close()
         for (fp, id) in file_paths:
             file_path = fp if not low_res else os.path.join(Paths.thumbnails_dir, f"{id}.png")
             if not os.path.exists(file_path) and low_res:
@@ -351,7 +345,6 @@ async def get_images_of_dataset(dataset_id: int, low_res: bool = False, limit: i
     try:
         response = {}
         images = db.query(Images).filter_by(dataset_id=dataset_id).limit(limit).all()
-        db.close()
         if not images:
             raise HTTPException(status_code=404, detail="No images found for this dataset")
         for image in images:

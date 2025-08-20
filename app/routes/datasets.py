@@ -1,4 +1,6 @@
 import shutil
+from logging import getLogger
+
 from paths import Paths
 from fastapi import APIRouter, Depends
 import os
@@ -14,7 +16,7 @@ from app.routes.labels import delete_label
 
 # Create a router for the export functionality
 router = APIRouter(prefix="/datasets", tags=["datasets"])
-
+logger = getLogger(__name__)
 
 @router.post("/create_dataset")
 async def create_dataset(name: str,
@@ -147,4 +149,6 @@ async def delete_dataset(dataset_id: int, db: Session = Depends(get_session)):
         db.commit()
         return {"success": True, "message": "Dataset deleted successfully."}
     except Exception as e:
+        logger.error(e)
+        raise e
         return {"success": False, "message": "Error deleting dataset.", "error": str(e)}
