@@ -20,6 +20,8 @@ RUN apt-get update --allow-unauthenticated && \
 # Copy the rest of the application code
 COPY . .
 
+RUN uv sync
+
 # Create necessary directories for data and database
 RUN chmod -R 777 data
 
