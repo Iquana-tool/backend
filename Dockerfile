@@ -7,7 +7,7 @@ FROM python:3.13-slim AS builder
 ENV PYTHONUNBUFFERED=1
 
 # Install uv
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+RUN pip install uv
 
 RUN uv init
 
@@ -21,7 +21,7 @@ RUN uv add -r requirements.txt
 FROM python:3.13-slim
 
 # Install uv in the final image
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+RUN pip install uv
 
 # Copy the virtual environment from the builder stage
 COPY --from=builder /opt/venv /opt/venv
