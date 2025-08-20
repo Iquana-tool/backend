@@ -1,22 +1,7 @@
-# Stage 1: Build stage
-
-# Use an official Python runtime as the base image
-FROM python:3.13-slim AS builder
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
-
-# Install uv
-RUN pip install uv
-
-# Stage 2: Final stage
 FROM python:3.13-slim
 
 # Install uv in the final image
 RUN pip install uv
-
-# Copy the virtual environment from the builder stage
-COPY --from=builder /opt/venv /opt/venv
 
 # Set up the environment to use the virtual environment
 ENV PATH="/opt/venv/bin:$PATH"
