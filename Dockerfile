@@ -7,9 +7,9 @@ FROM python:3.13-slim AS builder
 ENV PYTHONUNBUFFERED=1
 
 # Install uv
-RUN pip install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-RUN uv init coral_back
+RUN uv init
 
 # Copy only the requirements file first
 COPY requirements.txt .
@@ -21,7 +21,7 @@ RUN uv add -r requirements.txt
 FROM python:3.13-slim
 
 # Install uv in the final image
-RUN pip install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Copy the virtual environment from the builder stage
 COPY --from=builder /opt/venv /opt/venv
