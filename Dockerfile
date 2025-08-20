@@ -9,14 +9,6 @@ ENV PYTHONUNBUFFERED=1
 # Install uv
 RUN pip install uv
 
-RUN uv init
-
-# Copy only the requirements file first
-COPY requirements.txt .
-
-# Install dependencies using uv
-RUN uv add -r requirements.txt
-
 # Stage 2: Final stage
 FROM python:3.13-slim
 
@@ -40,10 +32,10 @@ RUN apt-get update --allow-unauthenticated && \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-RUN uv sync
-
 # Copy the rest of the application code
 COPY . .
+
+RUN uv sync
 
 # Create necessary directories for data and database
 RUN chmod -R 777 data
