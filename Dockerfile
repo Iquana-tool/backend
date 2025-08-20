@@ -15,7 +15,7 @@ RUN uv init
 COPY requirements.txt .
 
 # Install dependencies using uv
-RUN uv pip install -r requirements.txt
+RUN uv add -r requirements.txt
 
 # Stage 2: Final stage
 FROM python:3.13-slim
@@ -39,6 +39,8 @@ RUN apt-get update --allow-unauthenticated && \
     libglib2.0-0 \
     wget \
     && rm -rf /var/lib/apt/lists/*
+
+RUN uv sync
 
 # Copy the rest of the application code
 COPY . .
