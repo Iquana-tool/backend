@@ -17,7 +17,7 @@ services:
     networks:
       - coral-network
     restart: unless-stopped
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
 
 networks:
   coral-network:
