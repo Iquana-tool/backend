@@ -6,18 +6,20 @@ FROM python:3.13-slim AS builder
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Create and activate a virtual environment
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Install uv
+RUN pip install uv
 
 # Copy only the requirements file first
 COPY requirements.txt .
 
-# Install dependencies
-RUN pip install -r requirements.txt
+# Install dependencies using uv
+RUN uv pip install -r requirements.txt
 
 # Stage 2: Final stage
 FROM python:3.13-slim
+
+# Install uv in the final image
+RUN pip install uv
 
 # Copy the virtual environment from the builder stage
 COPY --from=builder /opt/venv /opt/venv
@@ -45,5 +47,5 @@ RUN chmod -R 777 data
 # Expose the port the app runs on
 EXPOSE 8000
 
-# Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Command to run the application using uv
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
