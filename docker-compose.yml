@@ -10,6 +10,7 @@ services:
     volumes:
       - ./data:/data
       - ./app/services/prompted_segmentation/weights:/app/services/prompted_segmentation/weights
+      - ./logs:/app/logs
     environment:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://coral.ni.dfki.de,http://localhost:3000,http://localhost:7000}
       - AUTOMATIC_SEGMENTATION_BACKEND=http://coral-automatic-segmentation-cpu:7000

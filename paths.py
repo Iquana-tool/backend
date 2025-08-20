@@ -23,6 +23,7 @@ class Paths:
     base_dir = os.path.dirname(os.path.realpath(__file__))
 
     data_dir = os.path.join(base_dir, 'data')
+    logs_dir = os.path.join(base_dir, "logs")
     database = "sqlite:///" + os.path.join(data_dir, 'database.db')
     datasets_dir = os.path.join(data_dir, 'datasets')
     thumbnails_dir = os.path.join(data_dir, 'thumbnails')

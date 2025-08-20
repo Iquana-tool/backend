@@ -1,10 +1,11 @@
 import logging
 import hydra
 from app import create_app
+from paths import Paths
 
 # Set up logging
 logging.basicConfig(
-    filename="./logs.txt",
+    filename=Paths.logs_dir + "/logs.txt",
     filemode='a',
     format='%(asctime)s,%(msecs)03d %(name)s %(levelname)s %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
