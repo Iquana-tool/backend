@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
 
 
-@router.post("/upload_image?dataset_id={dataset_id}")
+@router.post("/upload_image")
 async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Session = Depends(get_session)):
     """Upload an image file.
 
