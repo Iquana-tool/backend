@@ -53,6 +53,7 @@ async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Sessio
         }
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
+        raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 
