@@ -44,7 +44,7 @@ async def health_check():
         }
 
 
-@router.post('/segment_image')
+@router.post('/segment_image', deprecated=True)
 async def segment_image(request: PromptedSegmentationRequest):
     """Perform prompted_segmentation with optional prompts, using data validation.
     This function handles the prompted_segmentation of images based on the provided request.
