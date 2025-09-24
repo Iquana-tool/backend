@@ -41,6 +41,18 @@ def check_model(model_id: Union[int, str], model_type: Literal["prompted", "auto
     return model_id
 
 
+class Prompts(BaseModel):
+    """ Model for validating a prompted segmentation request. One request represents one object to be segmented."""
+    point_prompts: list[PointPrompt] | None = Field(default=None,
+                                             description="A list of point prompts. Each point prompt must have x, y, and label.")
+    box_prompt: BoxPrompt | None = Field(default=None,
+                                         description="A bounding box prompt. Must have min_x, min_y, max_x, and max_y.")
+    circle_prompt: CirclePrompt | None = Field(default=None,
+                                               description="A circle prompt. Must have center_x, center_y, and radius.")
+    polygon_prompt: PolygonPrompt | None = Field(default=None,
+                                                 description="A polygon prompt. Must have a list of vertices.")
+
+
 class PromptedSegmentationRequest(BaseModel):
     """ Model for validating the prompted_segmentation request. """
     apply_post_processing: bool = True
@@ -48,19 +60,9 @@ class PromptedSegmentationRequest(BaseModel):
     mask_id: int = None
     parent_contour_id: int = None
     previous_contours: List[ContourModel] = None
-    model: Union[int, str] = "SAM2Tiny"
-    point_prompts: List[PointPrompt] = Field(default_factory=list,
-                                             description="List of point prompts supplied by the user.")
-    box_prompt: BoxPrompt = None
-    polygon_prompt: PolygonPrompt = None
-    circle_prompt: CirclePrompt = None
+    model: Union[int, str] = "sam2_tiny"
+    prompts: Prompts
     label: Annotated[int, "Label of the mask."] = 0
-
-    # Deprecated fields, kept for backwards compatibility
-    min_x: float = 0
-    min_y: float = 0
-    max_x: float = 1
-    max_y: float = 1
 
     @field_validator('image_id')
     def validate_image_id(cls, value):
@@ -70,20 +72,6 @@ class PromptedSegmentationRequest(BaseModel):
             elif session.query(Images).filter_by(id=value).first() is None:
                 raise ValueError("image_id does not exist in the database.")
             return value
-
-    @field_validator("model")
-    def validate_model(cls, value):
-        with get_context_session() as session:
-            value = check_model(value, "prompted")
-        return value
-
-    @field_validator('min_x', 'min_y', 'max_x', 'max_y')
-    def validate_coordinates(cls, value):
-        logger.warning("The min_x, min_y, max_x, max_y fields are deprecated and will be removed in a future version. "
-                       "Instead, pass the parent contour id.")
-        if not (0 <= value <= 1):
-            raise ValueError("Coordinates must be between 0 and 1.")
-        return value
 
 
 class AutomaticSegmentationRequest(BaseModel):
@@ -199,4 +187,4 @@ class SegmentationResponse(BaseModel):
     """ Model for the prompted_segmentation response. """
     masks: List[SegmentationMaskModel]
     image_id: int = 0
-    model: int
+    model: str

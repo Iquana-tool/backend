@@ -1,5 +1,9 @@
+import json
 from logging import getLogger
 
+import cv2
+
+from app.database.contours import Contours
 from app.database.masks import Masks
 from app.services.labels import label_value_to_label_id
 import numpy as np
@@ -14,12 +18,30 @@ from app.routes.prompted_segmentation.util import get_masks_responses
 from app.database import get_session, get_context_session
 from app.database.images import Images
 from sqlalchemy.orm import Session
+import app.services.ai_services.prompted_segmentation as prompted_service
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/prompted_segmentation", tags=["prompted_segmentation"])
 
 prompted_model_cache = ModelCache()
 automatic_model_cache = ModelCache()
+
+
+@router.get("/health")
+async def health_check():
+    """Health check endpoint to verify if the prompted segmentation backend is reachable."""
+    if await prompted_service.check_backend():
+        return {
+            "success": True,
+            "message": "Prompted segmentation backend is reachable.",
+            "response": None
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Prompted segmentation backend is not reachable. Please make sure it is running.",
+            "response": None
+        }
 
 
 @router.post('/segment_image')
@@ -39,37 +61,55 @@ async def segment_image(request: PromptedSegmentationRequest):
         SegmentationResponse: The response object containing the prompted_segmentation results. When using cropping,
         the contours will be remapped to the original image size.
     """
-    # Get the model based on the identifier
-    model = prompted_model_cache.set_and_get_model(request.model)
+    # Check if the backend is running
+    if not await prompted_service.check_backend():
+        return {
+            "success": False,
+            "message": "Prompted segmentation backend is not reachable. Please make sure it is running.",
+            "response": None
+        }
+    logger.debug("Prompted segmentation backend is reachable.")
 
-    # Process the request with the model
-    # This method should handle the image preprocessing and prompted_segmentation
-    # All model specific logic should be encapsulated in the model class
-    masks, quality = model.process_prompted_request(request)
-    if len(masks) > 1:
-        logger.warning("This should only return one mask, but got multiple masks. Dropping all but the first mask.")
-    mask = masks[0]
-    quality = quality[0]
+    # First set the image in the model cache
+    await prompted_service.upload_image("test", request.image_id)
+    logger.debug(f"Image {request.image_id} uploaded to prompted segmentation backend.")
 
-    # Postprocess the masks. This fits the mask into the already existing contours.
-    with get_context_session() as session:
-        mask_id = session.query(Masks.id).filter_by(image_id=request.image_id).first()
-    if mask_id:
-        response = fit_mask_to_already_created_masks(request.mask_id,
-                                                 mask,
-                                                 request.label,
-                                                 request.parent_contour_id)
-        if not response["success"]:
-            return response
-        else:
-            masks = [response["mask"]]
+    # Then, if a crop is provided, focus the model on the crop
+    use_crop = request.parent_contour_id is not None
+    if use_crop:
+        with get_context_session() as session:
+            contour = session.query(Contours).filter_by(id=request.parent_contour_id).first()
+            coords = json.loads(contour.coords)
+            min_x = min(coords.x)
+            min_y = min(coords.y)
+            max_x = max(coords.x)
+            max_y = max(coords.y)
+            await prompted_service.focus_crop("test",
+                                                min_x,
+                                                min_y,
+                                                max_x,
+                                                max_y)
+        logger.debug(f"Image cropped to contour {request.parent_contour_id} for prompted segmentation.")
     else:
-        # If no mask_id is provided, we cannot correct the masks.
-        logger.warning("No mask_id provided, skipping mask fitting to existing contours.")
-        response = {"success": True, "message": "No existing contours to fit the mask to."}
-    masks_response = await get_masks_responses([mask * request.label], [quality])
+        await prompted_service.unfocus_crop("test")
+        logger.debug("Image uncropped for prompted segmentation.")
+
+    # Now segment the image
+    response = await prompted_service.segment_image_with_prompts(
+        "test",
+        request.model,
+        request.prompts,
+    )
+    logger.debug("Prompted segmentation successful.")
+
+    mask = response["mask"]
+    score = response["score"]
+
+    cv2.imwrite("debug_mask.png", mask * 255)
+    # Convert to response object
+    masks_response = await get_masks_responses([mask * request.label], [score])
     return {
         "success": True,
-        "message": "Prompted segmentation completed successfully. " + response["message"],
+        "message": "Prompted segmentation completed successfully.",
         "response": SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
     }
