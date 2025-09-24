@@ -6,7 +6,6 @@ import httpx
 from logging import getLogger
 from sqlalchemy.orm import Session
 from app.database import get_session
-from app.database.models import Models
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 

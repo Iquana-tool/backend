@@ -8,37 +8,10 @@ from app.database.images import Images
 from app.database.scans import Scans
 from app.schemas.segmentation.contours_and_quantifications import ContourModel
 from app.schemas.segmentation.prompts import PointPrompt, BoxPrompt, PolygonPrompt, CirclePrompt
-from app.database.models import Models
 from logging import getLogger
 
 
 logger = getLogger(__name__)
-
-
-def check_model(model_id: Union[int, str], model_type: Literal["prompted", "automatic", "prompted_3d", "automatic_3d"]) \
-        -> int:
-    """Check if the model exists in the database and return it."""
-    with get_context_session() as session:
-        if isinstance(model_id, str):
-            try:
-                model_id = int(model_id)
-            except ValueError:
-                model = session.query(Models).filter_by(name=model_id, model_type=model_type).first()
-                if not model:
-                    raise ValueError(f"Model with identifier '{model_id}' does not exist in the database. Please "
-                                     f"make sure you ran the scripts/add_models_to_db.py script to add the models "
-                                     f"to the database.")
-                model_id = model.id
-        model = session.query(Models).filter_by(id=model_id).first()
-        if not model:
-            raise ValueError(f"Model with id {model_id} does not exist in the database. Please make sure you ran the "
-                             f"scripts/add_models_to_db.py script to add the models to the database.")
-        if model.model_type not in model_type:
-            raise ValueError(f"Model with id {model_id} is not an prompted prompted_segmentation model.")
-        if not (os.path.exists(model.weights) and os.path.exists(model.config)):
-            raise ValueError(f"Model with id {model_id} has invalid paths for weights or config. Please make sure "
-                             f"they are correctly added.")
-    return model_id
 
 
 class Prompts(BaseModel):

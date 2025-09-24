@@ -19,13 +19,9 @@ from app.routes.contours import router as contour_router
 from app.routes.labels import router as label_router
 from app.routes.export import router as export_router
 from app.routes.datasets import router as dataset_router
-from app.routes.models import router as model_router
 from app.routes.prompted_segmentation.scan_segmentation import router as scan_segmentation_router
 from app.database import init_db
-import scripts.add_models_to_db as add_models_to_db
 from logging import getLogger
-from hydra import initialize_config_dir
-from hydra.core.global_hydra import GlobalHydra
 
 
 logger = getLogger(__name__)
@@ -46,8 +42,6 @@ def create_app():
         logger.debug(f"Created directory {getattr(paths.Paths, directory)}")
 
     init_db()
-    GlobalHydra.instance().clear()
-    initialize_config_dir(config_dir=paths.Paths.services_dir + "/prompted_segmentation/configs/")
 
     app = FastAPI(
         title="Coral Segmentation API",
@@ -88,8 +82,5 @@ def create_app():
     app.include_router(contour_router)
     app.include_router(label_router)
     app.include_router(export_router)
-    app.include_router(model_router)
-
-    add_models_to_db.add_models_to_db()
 
     return app
