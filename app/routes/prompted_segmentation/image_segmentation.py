@@ -2,29 +2,16 @@ import json
 from logging import getLogger
 
 import cv2
+from fastapi import APIRouter
 
-from app.database.contours import Contours
-from app.database.masks import Masks
-from app.services.labels import label_value_to_label_id
-import numpy as np
-from fastapi import APIRouter, Depends
-
-from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationMaskModel, \
-    SegmentationResponse, \
-    AutomaticSegmentationRequest
-from app.services.prompted_segmentation import ModelCache
-from app.services.postprocessing import fit_mask_to_already_created_masks
-from app.routes.prompted_segmentation.util import get_masks_responses
-from app.database import get_session, get_context_session
-from app.database.images import Images
-from sqlalchemy.orm import Session
 import app.services.ai_services.prompted_segmentation as prompted_service
+from app.database import get_context_session
+from app.database.contours import Contours
+from app.routes.prompted_segmentation.util import get_masks_responses
+from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationResponse
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/prompted_segmentation", tags=["prompted_segmentation"])
-
-prompted_model_cache = ModelCache()
-automatic_model_cache = ModelCache()
 
 
 @router.get("/health")
