@@ -1,13 +1,17 @@
 from typing import List, Annotated
-
-from pydantic import BaseModel, field_validator, Field
+from app.database import get_context_session
+from app.database.contours import Contours
+from app.database.masks import Masks
+from pydantic import BaseModel, field_validator, Field, ValidationError
 
 
 class ContourModel(BaseModel):
-    """ Model for the contour. """
+    """ Model for a contour to be added. """
     x: List[float] = Field(default_factory=list, description="X-coordinates of the contour.")
     y: List[float] = Field(default_factory=list, description="Y-coordinates of the contour.")
-    label: Annotated[int, "Label of the mask."] = Field(default=0, description="Label of the mask.")
+    label: int = Field(default=0, description="ID of the label of the mask.")
+    parent_contour_id: int | None = Field(default=None, description="ID of the parent contour. None if the contour has "
+                                                                    "no parent")
 
     @field_validator('x', 'y')
     def validate_coordinates(cls, value):
