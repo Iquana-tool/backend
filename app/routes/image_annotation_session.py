@@ -76,7 +76,7 @@ async def on_startup(image_id, user_uid: str) -> ServerMessage:
 
 
 
-@router.websocket("/ws/open_session/user={user_id}&image={image_id}")
+@router.websocket("/ws/annotation_session/user={user_id}&image={image_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: str):
     """WebSocket endpoint to handle real-time image annotation sessions. The image annotation session takes multiple
         messages from the user as input to start tasks in the background.
@@ -113,33 +113,33 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: str):
             # Here we handle different types of messages based on their "type" field
             match client_msg.type:
                 case ClientMessageType.FOCUS_IMAGE:
-                    pass
+                    handleFocusImage(client_msg)
                 case ClientMessageType.UNFOCUS_IMAGE:
-                    pass
+                    handleUnfocusImage(client_msg)
                 case ClientMessageType.OBJECT_ADD:
-                    pass
+                    handleObjectAdd(client_msg)
                 case ClientMessageType.OBJECT_DELETE:
-                    pass
+                    handleObjectRemove(client_msg)
                 case ClientMessageType.OBJECT_MODIFY:
-                    pass
+                    handleObjectModify(client_msg)
                 case ClientMessageType.AUTOMATIC_SELECT_MODEL:
-                    pass
+                    handleAutomaticSelectModel(client_msg)
                 case ClientMessageType.AUTOMATIC_SEGMENTATION:
-                    pass
+                    handleAutomaticSegmentation(client_msg)
                 case ClientMessageType.PROMPTED_SELECT_MODEL:
-                    pass
+                    handlePromptedSelectModel(client_msg)
                 case ClientMessageType.PROMPTED_SEGMENTATION:
-                    pass
+                    handlePromptedSegmentation(client_msg)
                 case ClientMessageType.COMPLETION_SELECT_MODEL:
-                    pass
+                    handleCompletionSelectModel(client_msg)
                 case ClientMessageType.COMPLETION_ENABLE:
-                    pass
+                    handleCompletionEnable(client_msg)
                 case ClientMessageType.COMPLETION_DISABLE:
-                    pass
+                    handleCompletionDisable(client_msg)
                 case ClientMessageType.FINISH_ANNOTATION:
-                    pass
+                    handleFinishAnnotation(client_msg)
                 case ClientMessageType.OBJECT_CONFLICT_RESOLUTION:
-                    pass
+                    handleObjectConflictResolve(client_msg)
                 case _:
                     # Ignore erroneous messages from the client
                     pass
@@ -147,3 +147,74 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: str):
         logger.error(f"WebSocket connection error for user {user_id} and image {image_id}: {e}")
     finally:
         await websocket.close()
+
+
+
+def handleFocusImage(data):
+    """ Handle the client sending a focus image request"""
+    pass
+
+
+def handleUnfocusImage(data):
+    """ Handle the client unfocussing."""
+    pass
+
+
+def handleObjectAdd(data):
+    """ Handle adding an object to the mask."""
+    pass
+
+
+def handleObjectRemove(data):
+    """ Handle removing an object from the mask. """
+    pass
+
+
+def handleObjectModify(data):
+    """ Handle Modifying an object. """
+    pass
+
+
+def handleAutomaticSelectModel(data):
+    """ Handle the selection of an automatic model. """
+    pass
+
+
+def handleAutomaticSegmentation(data):
+    """ Handle segmentation using an automatic model. """
+    pass
+
+
+def handlePromptedSelectModel(data):
+    """ Handle the selection of a prompted model. """
+    pass
+
+
+def handlePromptedSegmentation(data):
+    """ Handle segmentation using a prompted model. """
+    pass
+
+
+def handleCompletionSelectModel(data):
+    """ Handle the selection of a completion model. """
+    pass
+
+
+def handleCompletionEnable(data):
+    """ Handle enabling of completion model. Leads to a state change. """
+    pass
+
+
+def handleCompletionDisable(data):
+    """ Handle disabling of completion model. Leads to a state change. """
+    pass
+
+
+def handleFinishAnnotation(data):
+    """ Handle marking a mask as finished. """
+    pass
+
+
+def handleObjectConflictResolve(data):
+    """ Handle how an object conflict should be resolved. """
+    pass
