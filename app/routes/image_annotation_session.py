@@ -113,33 +113,33 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: str):
             # Here we handle different types of messages based on their "type" field
             match client_msg.type:
                 case ClientMessageType.FOCUS_IMAGE:
-                    handleFocusImage(client_msg)
+                    handle_focus_image(client_msg)
                 case ClientMessageType.UNFOCUS_IMAGE:
-                    handleUnfocusImage(client_msg)
+                    handle_unfocus_image(client_msg)
                 case ClientMessageType.OBJECT_ADD:
-                    handleObjectAdd(client_msg)
+                    handle_object_add(client_msg)
                 case ClientMessageType.OBJECT_DELETE:
-                    handleObjectRemove(client_msg)
+                    handle_object_delete(client_msg)
                 case ClientMessageType.OBJECT_MODIFY:
-                    handleObjectModify(client_msg)
+                    handle_object_modify(client_msg)
                 case ClientMessageType.AUTOMATIC_SELECT_MODEL:
-                    handleAutomaticSelectModel(client_msg)
+                    handle_automatic_select_model(client_msg)
                 case ClientMessageType.AUTOMATIC_SEGMENTATION:
-                    handleAutomaticSegmentation(client_msg)
+                    handle_automatic_segmentation(client_msg)
                 case ClientMessageType.PROMPTED_SELECT_MODEL:
-                    handlePromptedSelectModel(client_msg)
+                    handle_prompted_select_model(client_msg)
                 case ClientMessageType.PROMPTED_SEGMENTATION:
-                    handlePromptedSegmentation(client_msg)
+                    handle_prompted_segmentation(client_msg)
                 case ClientMessageType.COMPLETION_SELECT_MODEL:
-                    handleCompletionSelectModel(client_msg)
+                    handle_completion_select_model(client_msg)
                 case ClientMessageType.COMPLETION_ENABLE:
-                    handleCompletionEnable(client_msg)
+                    handle_completion_enable(client_msg)
                 case ClientMessageType.COMPLETION_DISABLE:
-                    handleCompletionDisable(client_msg)
+                    handle_completion_disable(client_msg)
                 case ClientMessageType.FINISH_ANNOTATION:
-                    handleFinishAnnotation(client_msg)
+                    handle_finish_annotation(client_msg)
                 case ClientMessageType.OBJECT_CONFLICT_RESOLUTION:
-                    handleObjectConflictResolve(client_msg)
+                    handle_object_conflict_resolve(client_msg)
                 case _:
                     # Ignore erroneous messages from the client
                     pass
@@ -150,71 +150,71 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: str):
 
 
 
-def handleFocusImage(data):
+def handle_focus_image(websocket, data):
     """ Handle the client sending a focus image request"""
     pass
 
 
-def handleUnfocusImage(data):
+def handle_unfocus_image(websocket, data):
     """ Handle the client unfocussing."""
     pass
 
 
-def handleObjectAdd(data):
+def handle_object_add(websocket, data):
     """ Handle adding an object to the mask."""
     pass
 
 
-def handleObjectRemove(data):
+def handle_object_delete(websocket, data):
     """ Handle removing an object from the mask. """
     pass
 
 
-def handleObjectModify(data):
+def handle_object_modify(websocket, data):
     """ Handle Modifying an object. """
     pass
 
 
-def handleAutomaticSelectModel(data):
+def handle_automatic_select_model(websocket, data):
     """ Handle the selection of an automatic model. """
     pass
 
 
-def handleAutomaticSegmentation(data):
+def handle_automatic_segmentation(websocket, data):
     """ Handle segmentation using an automatic model. """
     pass
 
 
-def handlePromptedSelectModel(data):
+def handle_prompted_select_model(websocket, data):
     """ Handle the selection of a prompted model. """
     pass
 
 
-def handlePromptedSegmentation(data):
+def handle_prompted_segmentation(websocket, data):
     """ Handle segmentation using a prompted model. """
     pass
 
 
-def handleCompletionSelectModel(data):
+def handle_completion_select_model(websocket, data):
     """ Handle the selection of a completion model. """
     pass
 
 
-def handleCompletionEnable(data):
+def handle_completion_enable(websocket, data):
     """ Handle enabling of completion model. Leads to a state change. """
     pass
 
 
-def handleCompletionDisable(data):
+def handle_completion_disable(websocket, data):
     """ Handle disabling of completion model. Leads to a state change. """
     pass
 
 
-def handleFinishAnnotation(data):
+def handle_finish_annotation(websocket, data):
     """ Handle marking a mask as finished. """
     pass
 
 
-def handleObjectConflictResolve(data):
+def handle_object_conflict_resolve(websocket, data):
     """ Handle how an object conflict should be resolved. """
     pass
