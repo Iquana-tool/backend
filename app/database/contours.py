@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, ForeignKey, Float, JSON
+from sqlalchemy import Column, Integer, ForeignKey, Float, JSON, Boolean
 from app.database import database
 
 
@@ -9,6 +9,7 @@ class Contours(database):
     mask_id = Column(Integer, ForeignKey('masks.id', ondelete='CASCADE'),
                      nullable=False)
     parent_id = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'))
+    temporary = Column(Boolean, nullable=False, default=False)  # Whether a contour is temporary or not.
     label = Column(Integer, ForeignKey('labels.id', ondelete='CASCADE'), nullable=False)
     area = Column(Float, nullable=False)
     perimeter = Column(Float, nullable=False)

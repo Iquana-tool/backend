@@ -1,12 +1,11 @@
-import os.path
-from typing import List, Annotated, Union, Literal, Dict
+from typing import List, Annotated, Union, Dict
 
 import numpy as np
-from pydantic import BaseModel, Field, field_validator, Extra, validator
+from pydantic import BaseModel, Field, field_validator
 from app.database import get_context_session
 from app.database.images import Images
 from app.database.scans import Scans
-from app.schemas.segmentation.contours_and_quantifications import ContourModel
+from app.schemas.contours import ContourModel
 from app.schemas.segmentation.prompts import PointPrompt, BoxPrompt, PolygonPrompt, CirclePrompt
 from logging import getLogger
 

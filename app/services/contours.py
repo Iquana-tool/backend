@@ -6,7 +6,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 from logging import getLogger
 from app.database.contours import Contours
-from app.schemas.segmentation.contours_and_quantifications import ContourModel
+from app.schemas.contours import ContourModel
 
 
 logger = getLogger(__name__)

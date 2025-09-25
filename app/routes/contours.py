@@ -5,14 +5,12 @@ from sqlalchemy.orm import Session
 from fastapi import APIRouter
 from logging import getLogger
 
-from starlette.background import BackgroundTask
-
 from app.database import get_session
 from app.database.labels import Labels
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
-from app.schemas.segmentation.contours_and_quantifications import ContourModel
+from app.schemas.contours import ContourModel
 from app.services.database_access import get_height_width_of_image
 from app.services.labels import get_hierarchical_label_name
 from app.services.contours import find_parent_contour, coords_to_cv_contour

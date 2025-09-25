@@ -1,7 +1,7 @@
 import numpy as np
 from app.services.contours import get_contours
 from app.services.postprocessing import postprocess_binary_mask
-from app.schemas.segmentation.contours_and_quantifications import ContourModel
+from app.schemas.contours import ContourModel
 from app.schemas.segmentation.segmentations import SegmentationMaskModel
 
 
