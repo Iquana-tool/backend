@@ -34,11 +34,6 @@ class ServerMessageType(StrEnum):
     ERROR = "error"  # An error occurred, gives info about the error
 
 
-# Precompute set of possible strings to speed up validation
-possible_client_msg_types = {e.value for e in ClientMessageType}
-possible_server_msg_types = {e.value for e in ServerMessageType}
-
-
 class Message(BaseModel):
     id: str = Field(..., description="Unique message ID to correlate messages.")
     type: str = Field(..., description="Identifier for what this message should trigger or what is being delivered.")
