@@ -11,12 +11,12 @@ from pydantic_core import ValidationError
 from app.database import get_context_session
 from app.database.images import Images
 from app.database.masks import Masks
-from app.routes.contours import add_contour
+from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour
 from app.routes.masks import create_mask
 from app.services.ai_services import prompted_segmentation as prompted_service
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from app.schemas.contours import ContourModel
-
+from app.services.contours import get_contours
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
@@ -172,8 +172,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
                     await handle_focus_image(websocket, client_msg, state)
                 case ClientMessageType.UNFOCUS_IMAGE:
                     await handle_unfocus_image(websocket, client_msg, state)
-                case ClientMessageType.OBJECT_ADD:
+                case ClientMessageType.OBJECT_ADD_MANUAL:
                     await handle_object_add(websocket, client_msg, state)
+                case ClientMessageType.OBJECT_FINALISE:
+                    await handle_object_finalise(websocket, client_msg, state)
                 case ClientMessageType.OBJECT_DELETE:
                     await handle_object_delete(websocket, client_msg, state)
                 case ClientMessageType.OBJECT_MODIFY:
@@ -218,13 +220,57 @@ async def handle_unfocus_image(websocket: WebSocket, client_msg: ClientMessage, 
 
 async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle adding an object to the mask."""
-    contour = ContourModel.model_validate_json(data)
-    await add_contour()
+    contour = ContourModel.model_validate_json(client_msg.data)
+    response = await add_contour(state.mask_id, contour, f"User {state.user_id}")
+    if not response["success"]:
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.ERROR,
+            message=response["message"],
+            success=False,
+            data=None,
+        ))
+    else:
+        updated_objects = await get_contours_of_mask(state.mask_id)
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.OBJECT_ADDED,
+            message=response["message"],
+            success=True,
+            data=updated_objects
+        ))
+
+
+async def handle_object_finalize(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+    contour_id = client_msg.data.get("contour_id")
+    response = await finalise(contour_id)
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
+        message=response["message"],
+        success=response["success"],
+        data={
+            "contour_id": contour_id,
+            "data": {
+                "temporary": False
+            } if response["success"] else None,
+        }
+    ))
 
 
 async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle removing an object from the mask. """
-    pass
+    contour_id = client_msg.data.get("contour_id")
+    response = await delete_contour(contour_id)
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.OBJECT_REMOVED if response["success"] else ServerMessageType.ERROR,
+        success=response["success"],
+        message=response["message"],
+        data={
+            "contour_id": contour_id,
+        } if response["success"] else None,
+    ))
 
 
 async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
