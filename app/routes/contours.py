@@ -150,10 +150,23 @@ async def edit_contour_label(contour_id: int, new_label_id: int, db: Session = D
     return await edit_contour(contour_id, label=new_label_id, db=db)
 
 
+@router.get("/finalise/{contour_id}")
+async def finalise(contour_id: int, db: Session = Depends(get_session)):
+    """ Mark a temporary contour as not temporary."""
+    contour = db.query(Contours).filter_by(id=contour_id).first()
+    contour.temporary = False
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Contour {contour_id} finalised successfully.",
+    }
+
+
 @router.post("/add_contour")
 async def add_contour(mask_id: int,
                       contour_to_add: ContourModel,
-                      parent_contour_id: int = None,
+                      added_by: str,
+                      temporary: bool = False,
                       db: Session = Depends(get_session)):
     """
     Add a contour to a mask in the database.
@@ -161,7 +174,8 @@ async def add_contour(mask_id: int,
     Args:
         mask_id (int): The ID of the mask to which the contour will be added.
         contour_to_add (ContourModel): The contour data to add.
-        parent_contour_id (int, optional): The ID of the parent contour. Defaults to None.
+        temporary (bool, optional): Whether the contour should be added as temporary. Temporary contours are such ones,
+            that are added by an AI model, but not verified by the user.
         db (Session): The database session.
 
     Returns:
@@ -169,40 +183,36 @@ async def add_contour(mask_id: int,
     """
     try:
         existing_mask = db.query(Masks).filter_by(id=mask_id).first()
-        image = db.query(Images).filter_by(id=existing_mask.image_id).first()
-        contour = coords_to_cv_contour(contour_to_add.x, contour_to_add.y)
-        parent_label_id = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label).first())[0]
-        has_parent = parent_label_id is not None
-        if has_parent:
-            if parent_contour_id is None:
-                logger.warning(f"Parent contour ID is None, but the label has parent ({parent_label_id}). Trying to find a fitting parent"
-                               " contour.")
-                parent_contour = find_parent_contour(parent_label_id,
-                                                     mask_id,
-                                                     (image.height, image.width),
-                                                     contour,
-                                                     db)
-                if not parent_contour:
-                    logger.error(f"Error adding contour: Could not find a parent contour for label {contour_to_add.label}.")
-                    return {
-                        "success": False,
-                        "message": "Could not find a parent contour for the label.",
-                        "contour_id": None
-                    }
-                logger.debug(f"Found parent contour with ID {parent_contour.id} for label {contour_to_add.label}.")
-                parent_contour_id = parent_contour.id
-            else:
-                parent_contour = db.query(Contours).filter_by(id=parent_contour_id).first()
-                expected_parent = db.query(Labels).filter_by(id=parent_label_id).first()
-                given_parent = db.query(Labels).filter_by(id=parent_contour.label).first()
-                if expected_parent.id != given_parent.id:
-                    logger.error(f"Error adding contour: Parent contour does not match the expected parent label. \n"
-                                 f"Given parent contour: ({given_parent.id}, {given_parent.name}) \t Expected parent: ({expected_parent.id}, {expected_parent.name})")
-                    return {
-                        "success": False,
-                        "message": "Parent contour does not match the expected parent label.",
-                        "contour_id": None
-                    }
+        parent_contour_id = contour_to_add.parent_contour_id
+        expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label).first())[0]
+        should_have_parent = expected_parent_label is not None
+        if should_have_parent and parent_contour_id is None:
+            # Contour should have a parent but none was given.
+            logger.error(f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).")
+            return {
+                "success": False,
+                "message": f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).",
+                "contour_id": None
+            }
+        elif should_have_parent and parent_contour_id is not None:
+            # Contour should have a parent and one is given one
+            parent_contour_label = db.query(Contours.label).filter_by(id=parent_contour_id).first()
+            if expected_parent_label != parent_contour_label:
+                logger.error(f"Error adding contour: Parent contour does not match the expected parent label."
+                             f"\nGiven label of parent contour: ({parent_contour_label})"
+                             f"\tExpected label of parent contour: ({expected_parent_label})")
+                return {
+                    "success": False,
+                    "message": "Parent contour does not match the expected parent label.",
+                    "contour_id": None
+                }
+        else:
+            logger.error("Contour with label should not have a parent but has a parent contour id given.")
+            return {
+                "success": False,
+                "message": "Contour with label should not have a parent but has a parent contour id given.",
+                "contour_id": None
+            }
 
         # Quantify contour
         height, width = get_height_width_of_image(existing_mask.image_id)
@@ -213,6 +223,8 @@ async def add_contour(mask_id: int,
             mask_id=mask_id,
             parent_id=parent_contour_id,
             coords=json.dumps({"x": contour_to_add.x, "y": contour_to_add.y}),
+            added_by=added_by,  # The user or model who added this contour
+            temporary=temporary,  # Whether the contour is temporary, eg. if a model added it
             label=contour_to_add.label,
             area=quantifier.area,
             perimeter=quantifier.perimeter,
@@ -231,7 +243,6 @@ async def add_contour(mask_id: int,
         }
     except Exception as e:
         logger.error(f"Error adding contour: {e}")
-        raise e
         raise HTTPException(status_code=500, detail="Error adding contour.")
 
 
@@ -272,7 +283,8 @@ async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
 @router.post("/add_contours")
 async def add_contours(mask_id: int,
                        contours_to_add: list[ContourModel],
-                       parent_contour_id: int = None,
+                       added_by: str,
+                       temporary_list: list[bool],
                        db: Session = Depends(get_session)):
     """
     Add multiple contours to a mask in the database. Internally calls `add_contour` for each contour.
@@ -288,9 +300,9 @@ async def add_contours(mask_id: int,
     """
     failed = []
     added_ids = []
-    for contour_to_add in contours_to_add:
+    for contour_to_add, temporary in zip(contours_to_add, temporary_list):
         logger.info(f"Added {len(added_ids)} / {len(contours_to_add)} contours. Failed {len(failed)}")
-        result = await add_contour(mask_id, contour_to_add, parent_contour_id, db)
+        result = await add_contour(mask_id, contour_to_add, added_by, temporary, db)
         if not result["success"]:
             failed.append({
                 "contour": contour_to_add,
