@@ -13,7 +13,8 @@ class ClientMessageType(StrEnum):
     COMPLETION_SELECT_MODEL = "completion_select_model"  # Select a model for mask completion
     COMPLETION_ENABLE = "completion_enable"  # Enable mask completion
     COMPLETION_DISABLE = "completion_disable"  # Disable mask completion
-    OBJECT_ADD = "object_add"  # Add a new object to the annotation session
+    OBJECT_ADD_MANUAL = "object_add_manual"  # Add a new object to the annotation session, if it was manually created
+    OBJECT_FINALISE = "object_finalise"  # Mark a temporary object as not temporary anymore.
     OBJECT_DELETE = "object_delete"  # Delete an object from the annotation session
     OBJECT_MODIFY = "object_modify"  # Modify an existing object
     # These are too ambitious for now. Needs state management
@@ -26,12 +27,19 @@ class ClientMessageType(StrEnum):
 
 class ServerMessageType(StrEnum):
     SESSION_INITIALIZED = "session_initialized"  # Session has been initialized, gives info about running backends
-    OBJECTS_UPDATED = "objects_updated"  # The list of objects has been updated
+    OBJECT_ADDED = "object_added"  # Send a newly added object
+    OBJECT_REMOVED = "object_removed" # Tell which object has been deleted
+    OBJECT_MODIFIED = "object_modified" # Tell which object has been modified and what has been modified.
     PROMPTED_SEGMENTATION_RESULT = "prompted_segmentation_result"  # Result
     AUTOMATIC_SEGMENTATION_RESULT = "automatic_segmentation_result"  # Result
     COMPLETION_RESULT = "completion_result"  # Result
     OBJECT_CONFLICT_PROMPT = "object_conflict_prompt"  # Prompt the user on how to resolve an object conflict.
     ERROR = "error"  # An error occurred, gives info about the error
+
+
+# Precompute set of possible strings to speed up validation
+possible_client_msg_types = {e.value for e in ClientMessageType}
+possible_server_msg_types = {e.value for e in ServerMessageType}
 
 
 class Message(BaseModel):
