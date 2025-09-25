@@ -2,14 +2,48 @@ import json
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
 from logging import getLogger
+
+from pydantic_core import ValidationError
+
 from app.services.ai_services import prompted_segmentation as prompted_service
+from uuid import UUID
+from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
 
 
-async def on_startup(image_id, user_uid: str):
+async def receive_msg(websocket: WebSocket) -> ClientMessage:
+    msg = await websocket.receive_json()
+    try:
+        msg = ClientMessage.model_validate_json(msg)
+        logger.info(f"Received message: {msg}")
+        return msg
+    except ValidationError as e:
+        # Client message couldn't be validated, send an error message
+        logger.error(f"Client message couldn't be validated, sent an error message. \n{str(e)}")
+        await send_msg(websocket,
+                       ServerMessage(
+                           id="0",
+                           type=ServerMessageType.ERROR,
+                           message=f"Client message could not be validated. See error here:\n{str(e)}",
+                           data=None,
+                           success=False
+                       ))
+        return ClientMessage(
+            id="0",
+            type=ClientMessageType.ERROR,
+            success=False,
+        )
+
+
+async def send_msg(websocket: WebSocket, message: ServerMessage):
+    logger.info(f"Sending message: {message}")
+    await websocket.send_json(message.model_dump_json())
+
+
+async def on_startup(image_id, user_uid: str) -> ServerMessage:
     """Function to be called at the start of an annotation session. Any initialization code can be placed here.
     """
     # Check for running backends
@@ -26,49 +60,89 @@ async def on_startup(image_id, user_uid: str):
         logger.error(f"Failed to upload image {image_id} for user {user_uid} to prompted segmentation backend.")
         failed_initializations.append("prompted_segmentation")
 
-
     logger.info("Annotation session initialized.")
-    return {
-        "message": f"Annotation session initialized."
-                   f"\nRunning backends: {running}"
-                   f"\nFailed backend initializations: {failed_initializations}",
-        "running_backends": running,
-        "failed_initializations": failed_initializations
-    }
+    return ServerMessage(
+        id="test",
+        type=ServerMessageType.SESSION_INITIALIZED,
+        success=len(failed_initializations) == 0,
+        message=f"Annotation session initialized."
+                f"\nRunning backends: {running}"
+                f"\n{f'Failed initializations: {failed_initializations}' if failed_initializations else ''}",
+        data={
+            "running": running,
+            "failed": failed_initializations,
+        }
+    )
 
 
 
 @router.websocket("/ws/open_session/user={user_id}&image={image_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: str):
     """WebSocket endpoint to handle real-time image annotation sessions. The image annotation session takes multiple
-        messages from the user as input to start tasks in the background. The messages can be for different tasks:
-        - "prompted_segmentation": for prompted segmentation requests with optional prompts.
-        - "automatic_segmentation": for automatic segmentation requests without prompts.
-        - "contours": For editing, deleting or adding contours.
+        messages from the user as input to start tasks in the background.
+        Client sent messages should be structured as JSON and should look like this: \n
+        { \n
+        "type": "prompted_segmentation" | "automatic_segmentation" | "image", \n
+        "data": { ... }  # Data specific to the message type \n
+        } \n
+        For info on the message types and their data structure, see the respective documentation.
+
+        Server responses will also be structured as JSON and will contain the results of the requested tasks: \n
+        { \n
+        "type": "response_type",  # Type of the response, e.g., "prompted_segmentation_result" \n
+        "success": True | False,  # Indicates if the task was successful \n
+        "message": "Informational message about the response", \n
+        "data": { ... }  # Data specific to the response type \n
+        } \n
+        The server may also send status updates or error messages as needed. The response types and their data structure
+        will depend on the tasks performed and the results obtained.
+
+        :param websocket: The WebSocket connection.
+        :param user_id: Unique identifier for the user.
+        :param image_id: Unique identifier for the image to be annotated.
+        :raises WebsocketException: If the WebSocket connection fails.
     """
     await websocket.accept()
     try:
         # Call some functions on startup
         response = await on_startup(image_id, user_id)
-        await websocket.send_json(response)
+        # Send a message about startup
+        await send_msg(websocket, response)
         while True:
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            # Here you can handle different types of messages based on their "type" field
-            match message["type"]:
-                case "prompted_segmentation":
-                    # Handle prompted segmentation message
+            client_msg = await receive_msg(websocket)
+            # Here we handle different types of messages based on their "type" field
+            match client_msg.type:
+                case ClientMessageType.FOCUS_IMAGE:
                     pass
-                case "automatic_segmentation":
-                    # Handle automatic segmentation message
+                case ClientMessageType.UNFOCUS_IMAGE:
                     pass
-                case "image":
-                    # Handle annotation completion message
+                case ClientMessageType.OBJECT_ADD:
+                    pass
+                case ClientMessageType.OBJECT_DELETE:
+                    pass
+                case ClientMessageType.OBJECT_MODIFY:
+                    pass
+                case ClientMessageType.AUTOMATIC_SELECT_MODEL:
+                    pass
+                case ClientMessageType.AUTOMATIC_SEGMENTATION:
+                    pass
+                case ClientMessageType.PROMPTED_SELECT_MODEL:
+                    pass
+                case ClientMessageType.PROMPTED_SEGMENTATION:
+                    pass
+                case ClientMessageType.COMPLETION_SELECT_MODEL:
+                    pass
+                case ClientMessageType.COMPLETION_ENABLE:
+                    pass
+                case ClientMessageType.COMPLETION_DISABLE:
+                    pass
+                case ClientMessageType.FINISH_ANNOTATION:
+                    pass
+                case ClientMessageType.OBJECT_CONFLICT_RESOLUTION:
                     pass
                 case _:
-                    logger.warning(f"Unknown message type received: {message['type']}")
-            logger.info(f"Received data from user {user_id} for image {image_id}: {data}")
-            await websocket.send_text(f"Echo: {data}")
+                    # Ignore erroneous messages from the client
+                    pass
     except Exception as e:
         logger.error(f"WebSocket connection error for user {user_id} and image {image_id}: {e}")
     finally:
