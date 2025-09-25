@@ -169,33 +169,33 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
             # Here we handle different types of messages based on their "type" field
             match client_msg.type:
                 case ClientMessageType.FOCUS_IMAGE:
-                    handle_focus_image(websocket, client_msg, state)
+                    await handle_focus_image(websocket, client_msg, state)
                 case ClientMessageType.UNFOCUS_IMAGE:
-                    handle_unfocus_image(websocket, client_msg, state)
+                    await handle_unfocus_image(websocket, client_msg, state)
                 case ClientMessageType.OBJECT_ADD:
-                    handle_object_add(websocket, client_msg, state)
+                    await handle_object_add(websocket, client_msg, state)
                 case ClientMessageType.OBJECT_DELETE:
-                    handle_object_delete(websocket, client_msg, state)
+                    await handle_object_delete(websocket, client_msg, state)
                 case ClientMessageType.OBJECT_MODIFY:
-                    handle_object_modify(websocket, client_msg, state)
+                    await handle_object_modify(websocket, client_msg, state)
                 case ClientMessageType.AUTOMATIC_SELECT_MODEL:
-                    handle_automatic_select_model(websocket, client_msg, state)
+                    await handle_automatic_select_model(websocket, client_msg, state)
                 case ClientMessageType.AUTOMATIC_SEGMENTATION:
-                    handle_automatic_segmentation(websocket, client_msg, state)
+                    await handle_automatic_segmentation(websocket, client_msg, state)
                 case ClientMessageType.PROMPTED_SELECT_MODEL:
-                    handle_prompted_select_model(websocket, client_msg, state)
+                    await handle_prompted_select_model(websocket, client_msg, state)
                 case ClientMessageType.PROMPTED_SEGMENTATION:
-                    handle_prompted_segmentation(websocket, client_msg, state)
+                    await handle_prompted_segmentation(websocket, client_msg, state)
                 case ClientMessageType.COMPLETION_SELECT_MODEL:
-                    handle_completion_select_model(websocket, client_msg, state)
+                    await handle_completion_select_model(websocket, client_msg, state)
                 case ClientMessageType.COMPLETION_ENABLE:
-                    handle_completion_enable(websocket, client_msg, state)
+                    await handle_completion_enable(websocket, client_msg, state)
                 case ClientMessageType.COMPLETION_DISABLE:
-                    handle_completion_disable(websocket, client_msg, state)
+                    await handle_completion_disable(websocket, client_msg, state)
                 case ClientMessageType.FINISH_ANNOTATION:
-                    handle_finish_annotation(websocket, client_msg, state)
+                    await handle_finish_annotation(websocket, client_msg, state)
                 case ClientMessageType.OBJECT_CONFLICT_RESOLUTION:
-                    handle_object_conflict_resolve(websocket, client_msg, state)
+                    await handle_object_conflict_resolve(websocket, client_msg, state)
                 case _:
                     # Ignore erroneous messages from the client
                     pass
@@ -206,72 +206,72 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
 
 
 
-def handle_focus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_focus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the client sending a focus image request"""
     pass
 
 
-def handle_unfocus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_unfocus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the client unfocussing."""
     pass
 
 
-def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle adding an object to the mask."""
     contour = ContourModel.model_validate_json(data)
     await add_contour()
 
 
-def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle removing an object from the mask. """
     pass
 
 
-def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle Modifying an object. """
     pass
 
 
-def handle_automatic_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_automatic_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of an automatic model. """
     pass
 
 
-def handle_automatic_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_automatic_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle segmentation using an automatic model. """
     pass
 
 
-def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of a prompted model. """
     pass
 
 
-def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle segmentation using a prompted model. """
     pass
 
 
-def handle_completion_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_completion_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of a completion model. """
     pass
 
 
-def handle_completion_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_completion_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle enabling of completion model. Leads to a state change. """
     pass
 
 
-def handle_completion_disable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle disabling of completion model. Leads to a state change. """
     pass
 
 
-def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle marking a mask as finished. """
     pass
 
 
-def handle_object_conflict_resolve(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_object_conflict_resolve(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle how an object conflict should be resolved. """
     pass
