@@ -65,7 +65,7 @@ def create_binary_mask_from_contours(width, height, contours: list[np.ndarray]):
         Args:
             width (int): The width of the mask.
             height (int): The height of the mask.
-            contours (list[ContourModel]): The contours to create the mask from.
+            contours (list[np.ndarray]): The contours to create the mask from.
 
         Returns:
             np.ndarray: The mask created from the contours.
