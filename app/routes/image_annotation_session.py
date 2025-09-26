@@ -17,7 +17,8 @@ from app.schemas.segmentation.segmentations import Prompts
 from app.services.ai_services import prompted_segmentation as prompted_service
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from app.schemas.contours import ContourModel
-from app.services.ai_services.prompted_segmentation import select_model, segment_image_with_prompts
+from app.services.ai_services.prompted_segmentation import select_model, segment_image_with_prompts, focus_contour, \
+    unfocus_crop
 from app.services.contours import get_contours_from_binary_mask
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
@@ -215,13 +216,29 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
 
 async def handle_focus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the client sending a focus image request"""
-    pass
+    focussed_contour_id = client_msg.data.get("focussed_contour_id")
+    state.focussed_contour_id = focussed_contour_id
+    response = await focus_contour(state.user_id, focussed_contour_id)
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
+        success=response["success"],
+        message=response["message"],
+        data=None
+    ))
 
 
 async def handle_unfocus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the client unfocussing."""
-    pass
-
+    state.focussed_contour_id = None
+    response = await unfocus_crop(state.user_id)
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
+        success=response["success"],
+        message=response["message"],
+        data=None
+    ))
 
 async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle adding an object to the mask."""
@@ -247,6 +264,9 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
 
 
 async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+    """ Turn a temporary object into a non temporary one. For example: Temporary objects are added by AI models, if you
+        make them non temporary, they will be added to the mask and can be used for training.
+    """
     contour_id = client_msg.data.get("contour_id")
     response = await finalise(contour_id)
     await send_msg(websocket, ServerMessage(

@@ -1,6 +1,9 @@
+import json
+
 import httpx
 import numpy as np
 
+from app.database.contours import Contours
 from app.database.images import Images
 from app.schemas.segmentation.segmentations import Prompts
 from paths import PROMPTED_SEGMENTATION_BACKEND_URL as BASE_URL
@@ -65,6 +68,20 @@ async def get_models():
         response = await client.get(url)
         response.raise_for_status()
     return response.json()
+
+
+async def focus_contour(user_id, contour_id):
+    """Crop the uploaded image to a contour. """
+    with get_context_session() as session:
+        contour = session.query(Contours.coords).filter_by(id=contour_id).first()
+        coords = json.loads(contour.coords)
+        x = coords["x"]
+        y = coords["y"]
+        min_x = min(x)
+        max_x = max(x)
+        min_y = min(y)
+        max_y = max(y)
+        return await focus_crop(user_id, min_x, min_y, max_x, max_y)
 
 
 async def focus_crop(user_id: int, min_x: float, min_y: float, max_x: float, max_y: float):
