@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, ForeignKey, Float, JSON, Boolean, String
+from sqlalchemy.orm import relationship
 from app.database import database
 
 
@@ -17,3 +18,5 @@ class Contours(database):
     circularity = Column(Float, nullable=False)
     diameters = Column(JSON, nullable=False)
     coords = Column(JSON, nullable=False)
+    # Easy access to children, this makes accessing children much faster
+    children = relationship("Contours", backref="parent", remote_side=[id], single_parent=True)
