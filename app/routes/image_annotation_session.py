@@ -11,11 +11,13 @@ from pydantic_core import ValidationError
 from app.database import get_context_session
 from app.database.images import Images
 from app.database.masks import Masks
-from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour
+from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour, modify_contour
 from app.routes.masks import create_mask
+from app.schemas.segmentation.segmentations import Prompts
 from app.services.ai_services import prompted_segmentation as prompted_service
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from app.schemas.contours import ContourModel
+from app.services.ai_services.prompted_segmentation import select_model, segment_image_with_prompts
 from app.services.contours import get_contours
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
@@ -241,7 +243,7 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
         ))
 
 
-async def handle_object_finalize(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     contour_id = client_msg.data.get("contour_id")
     response = await finalise(contour_id)
     await send_msg(websocket, ServerMessage(
@@ -251,7 +253,7 @@ async def handle_object_finalize(websocket: WebSocket, client_msg: ClientMessage
         success=response["success"],
         data={
             "contour_id": contour_id,
-            "data": {
+            "fields_to_be_updated": {
                 "temporary": False
             } if response["success"] else None,
         }
@@ -268,14 +270,37 @@ async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, 
         success=response["success"],
         message=response["message"],
         data={
-            "contour_id": contour_id,
+            "deleted_contours": response["deleted_contours"],
         } if response["success"] else None,
     ))
 
 
 async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle Modifying an object. """
-    pass
+    contour_id = client_msg.data.get("contour_id")
+    fields_to_be_updated = client_msg.data.get("fields_to_be_updated")
+    if "label" in fields_to_be_updated:
+        fields_to_be_updated.pop("label")
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.WARNING,
+            message=f"You are trying to update the label of an object, this is not supported yet."
+                    f"{'\nUpdating remaining fields.' if fields_to_be_updated else 'Nothing else to update.'}",
+            success=False,
+            data=None
+        ))
+    if fields_to_be_updated:
+        response = await modify_contour(contour_id, **fields_to_be_updated)
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
+            message=response["message"],
+            success=response["success"],
+            data={
+                "contour_id": contour_id,
+                "fields_to_be_updated": fields_to_be_updated,
+            } if response["success"] else None,
+        ))
 
 
 async def handle_automatic_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -290,12 +315,28 @@ async def handle_automatic_segmentation(websocket: WebSocket, client_msg: Client
 
 async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of a prompted model. """
-    pass
+    selected_model = client_msg.data.get("selected_model")
+    response = await select_model(state.user_id, selected_model)
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
+        success=response["success"],
+        message=response["message"],
+        data=None
+    ))
 
 
 async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle segmentation using a prompted model. """
-    pass
+    model_identifier = client_msg.data.get("model_identifier")
+    prompts_data = client_msg.data.get("prompts")
+    prompts_model = Prompts.model_value(prompts_data)
+    response = await segment_image_with_prompts(state.user_id, model_identifier, prompts_model)
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
+    ))
+
 
 
 async def handle_completion_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
