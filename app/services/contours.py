@@ -12,7 +12,7 @@ from app.schemas.contours import ContourModel
 logger = getLogger(__name__)
 
 
-def get_contours(mask: np.ndarray, only_return_biggest=False, limit=200) -> np.ndarray:
+def get_contours_from_binary_mask(mask: np.ndarray, only_return_biggest=False, limit=200) -> np.ndarray:
     """ Get the contours of the mask.
         Args:
             mask (np.ndarray): The mask to get the contours of.
