@@ -1,5 +1,5 @@
 import numpy as np
-from app.services.contours import get_contours
+from app.services.contours import get_contours_from_binary_mask
 from app.services.postprocessing import postprocess_binary_mask
 from app.schemas.contours import ContourModel
 from app.schemas.segmentation.segmentations import SegmentationMaskModel
@@ -30,7 +30,7 @@ async def get_masks_responses(masks, qualities, label_map: dict = None, only_ret
                 continue
             # Extract the mask for the current label
             mask_label = postprocess_binary_mask((mask == label).astype(np.uint8))
-            contours = get_contours(mask_label, only_return_biggest=only_return_one)
+            contours = get_contours_from_binary_mask(mask_label, only_return_biggest=only_return_one)
             contours_response += get_contour_models(contours,
                                                     label if not label_map else label_map[label],
                                                     mask_label.shape[0],
