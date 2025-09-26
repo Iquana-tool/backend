@@ -117,7 +117,7 @@ async def segment_image_with_prompts(user_id: int, model_identifier: str, prompt
         model_identifier (str): Identifier for the segmentation model.
         prompts_request (dict): Dictionary containing point and box prompts.
     Returns:
-        bytes: The segmentation mask as raw bytes.
+        dict: A response dict
     """
 
      # Send the request to the backend
