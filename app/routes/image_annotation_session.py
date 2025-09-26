@@ -12,7 +12,7 @@ from app.database import get_context_session
 from app.database.images import Images
 from app.database.masks import Masks
 from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour, modify_contour
-from app.routes.masks import create_mask
+from app.routes.masks import create_mask, finish_mask
 from app.schemas.segmentation.segmentations import Prompts
 from app.services.ai_services import prompted_segmentation as prompted_service
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
@@ -365,17 +365,38 @@ async def handle_completion_select_model(websocket: WebSocket, client_msg: Clien
 
 async def handle_completion_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle enabling of completion model. Leads to a state change. """
-    pass
+    state.annotation_completion_enabled = True
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.SUCCESS,
+        success=True,
+        message="Enabled annotation completion",
+        data=None
+    ))
 
 
 async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle disabling of completion model. Leads to a state change. """
-    pass
+    state.annotation_completion_enabled = False
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.SUCCESS,
+        success=True,
+        message="Disabled annotation completion",
+        data=None
+    ))
 
 
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle marking a mask as finished. """
-    pass
+    response = await finish_mask(state.mask_id)
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
+        success=response["success"],
+        message=response["message"],
+        data=None
+    ))
 
 
 async def handle_object_conflict_resolve(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
