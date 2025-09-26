@@ -1,7 +1,7 @@
 import json
 import numpy as np
 from fastapi import Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from fastapi import APIRouter
 from logging import getLogger
 
@@ -105,8 +105,8 @@ async def get_contours_of_mask(mask_id: int, flattened: bool = True, db: Session
     }
 
 
-@router.post("/edit_contour/{contour_id}")
-async def edit_contour(contour_id, db: Session = Depends(get_session), **kwargs,):
+@router.post("/modify_contour/{contour_id}")
+async def modify_contour(contour_id, db: Session = Depends(get_session), **kwargs):
     """
     Edit a contour by updating its coordinates or label.
 
@@ -118,24 +118,33 @@ async def edit_contour(contour_id, db: Session = Depends(get_session), **kwargs,
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
-    existing_contour = db.query(Contours).filter_by(id=contour_id).first()
-    if not existing_contour:
-        raise HTTPException(status_code=404, detail="Contour not found.")
+    try:
+        existing_contour = db.query(Contours).filter_by(id=contour_id).first()
+        if not existing_contour:
+            raise HTTPException(status_code=404, detail="Contour not found.")
 
-    for key, value in kwargs.items():
-        if hasattr(existing_contour, key):
-            setattr(existing_contour, key, value)
+        for key, value in kwargs.items():
+            if hasattr(existing_contour, key):
+                if key == "label":
+                    # The user wants to change the label of a contour. Here we need to check its children and its parents,
+                    # whether that change is possible.
+                    pass
+                setattr(existing_contour, key, value)
 
-    db.commit()
-    return {
-        "success": True,
-        "message": "Contour edited successfully.",
-        "contour_id": existing_contour.id
-    }
+        db.commit()
+        return {
+            "success": True,
+            "message": "Contour edited successfully.",
+            "contour_id": existing_contour.id
+        }
+    except Exception as e:
+        logger.error(f"Error modifying contour: {e}")
+        db.rollback()
+        raise e
 
 
-@router.post("/edit_contour_label/{contour_id}&new_label_id={new_label_id}")
-async def edit_contour_label(contour_id: int, new_label_id: int, db: Session = Depends(get_session)):
+@router.post("/change_contour_label/{contour_id}&new_label_id={new_label_id}")
+async def change_contour_label(contour_id: int, new_label_id: int, db: Session = Depends(get_session)):
     """
     Edit the label of a contour.
 
@@ -147,7 +156,7 @@ async def edit_contour_label(contour_id: int, new_label_id: int, db: Session = D
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
-    return await edit_contour(contour_id, label=new_label_id, db=db)
+    return await modify_contour(contour_id, label=new_label_id, db=db)
 
 
 @router.get("/finalise/{contour_id}")
@@ -174,6 +183,7 @@ async def add_contour(mask_id: int,
     Args:
         mask_id (int): The ID of the mask to which the contour will be added.
         contour_to_add (ContourModel): The contour data to add.
+        added_by (str): The name of the user or model who added the contour.
         temporary (bool, optional): Whether the contour should be added as temporary. Temporary contours are such ones,
             that are added by an AI model, but not verified by the user.
         db (Session): The database session.
@@ -249,34 +259,40 @@ async def add_contour(mask_id: int,
 @router.delete("/delete_contour/{contour_id}")
 async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
     """
-    Delete a contour and its child contours from the database.
-
-    Args:
-        contour_id (int): The ID of the contour to delete.
-        db (Session): The database session.
-
-    Returns:
-        dict: A dictionary containing the success status and message.
+    Delete a contour and all its descendants (via CASCADE).
+    Returns the list of deleted contour IDs.
     """
     try:
-        # Check if contour exists
-        existing_contour = db.query(Contours).filter_by(id=contour_id).first()
-        if not existing_contour:
+        # Fetch the contour and all descendants in one query
+        contour = (
+            db.query(Contours)
+            .options(joinedload(Contours.children))
+            .filter_by(id=contour_id)
+            .first()
+        )
+        if not contour:
             raise HTTPException(status_code=404, detail="Contour not found.")
-        # Check if the contour has child contours
-        child_contours = db.query(Contours).filter_by(parent_id=contour_id).all()
-        for child_contour in child_contours:
-            # Recursively delete child contours
-            await delete_contour(child_contour.id, db)
-        # Delete the contour
-        db.delete(existing_contour)
+
+        # Collect all descendant IDs (including the root)
+        deleted_ids = []
+        stack = [contour]
+        while stack:
+            current = stack.pop()
+            deleted_ids.append(current.id)
+            stack.extend(current.children)  # Add children to the stack
+
+        # Delete the root contour (CASCADE will handle the rest)
+        db.delete(contour)
         db.commit()
+
         return {
             "success": True,
-            "message": "Contour deleted successfully."
+            "message": "Contour and descendants deleted successfully.",
+            "deleted_contours": deleted_ids,
         }
     except Exception as e:
         logger.error(f"Error deleting contour: {e}")
+        db.rollback()
         raise HTTPException(status_code=500, detail="Error deleting contour.")
 
 
