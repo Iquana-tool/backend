@@ -18,7 +18,7 @@ from app.services.ai_services import prompted_segmentation as prompted_service
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from app.schemas.contours import ContourModel
 from app.services.ai_services.prompted_segmentation import select_model, segment_image_with_prompts
-from app.services.contours import get_contours
+from app.services.contours import get_contours_from_binary_mask
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
@@ -47,6 +47,9 @@ class AnnotationSessionState(BaseModel):
                                             description="A dict mapping from object ids to a list of "
                                                     "object ids that are conflicting with it. This means"
                                                     " that the object for example overlaps with another.")
+    focussed_contour_id: int | None = Field(default=None,
+                                            description="The id of the focussed contour.")
+
 
     @field_validator("image_id", mode="before")
     def validate_image_id(cls, value, values):
@@ -331,10 +334,24 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
     model_identifier = client_msg.data.get("model_identifier")
     prompts_data = client_msg.data.get("prompts")
     prompts_model = Prompts.model_value(prompts_data)
-    response = await segment_image_with_prompts(state.user_id, model_identifier, prompts_model)
+    response_seg = await segment_image_with_prompts(state.user_id, model_identifier, prompts_model)
+    contour = get_contours_from_binary_mask(response_seg["mask"], only_return_biggest=True)
+    contour_model = ContourModel(x=contour[..., 1].tolist(),
+                                 y=contour[..., 0].tolist(),
+                                 label=None,
+                                 parent_contour_id=state.focussed_contour_id)
+    response = await add_contour(
+        state.mask_id,
+        contour_to_add=contour_model,
+        added_by=model_identifier,
+        temporary=True,
+    )
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
+        success=response["success"],
+        message=response["message"],
+        data=None
     ))
 
 
