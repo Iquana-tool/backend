@@ -30,11 +30,10 @@ class ServerMessageType(StrEnum):
     OBJECT_ADDED = "object_added"  # Send a newly added object
     OBJECT_REMOVED = "object_removed" # Tell which object has been deleted
     OBJECT_MODIFIED = "object_modified" # Tell which object has been modified and what has been modified.
-    PROMPTED_SEGMENTATION_RESULT = "prompted_segmentation_result"  # Result
-    AUTOMATIC_SEGMENTATION_RESULT = "automatic_segmentation_result"  # Result
-    COMPLETION_RESULT = "completion_result"  # Result
     OBJECT_CONFLICT_PROMPT = "object_conflict_prompt"  # Prompt the user on how to resolve an object conflict.
     ERROR = "error"  # An error occurred, gives info about the error
+    WARNING = "warning"  # User requested something unsafe.
+    SUCCESS = "success"  # General success message for methods that do not change anything.
 
 
 # Precompute set of possible strings to speed up validation
