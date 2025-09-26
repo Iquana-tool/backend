@@ -174,8 +174,6 @@ async def finalise(contour_id: int, db: Session = Depends(get_session)):
 @router.post("/add_contour")
 async def add_contour(mask_id: int,
                       contour_to_add: ContourModel,
-                      added_by: str,
-                      temporary: bool = False,
                       db: Session = Depends(get_session)):
     """
     Add a contour to a mask in the database.
@@ -183,9 +181,6 @@ async def add_contour(mask_id: int,
     Args:
         mask_id (int): The ID of the mask to which the contour will be added.
         contour_to_add (ContourModel): The contour data to add.
-        added_by (str): The name of the user or model who added the contour.
-        temporary (bool, optional): Whether the contour should be added as temporary. Temporary contours are such ones,
-            that are added by an AI model, but not verified by the user.
         db (Session): The database session.
 
     Returns:
@@ -229,17 +224,21 @@ async def add_contour(mask_id: int,
         rescaled_x = [int(x * width) for x in contour_to_add.x]
         rescaled_y = [int(y * height) for y in contour_to_add.y]
         quantifier = ContourQuantifier().from_coordinates(rescaled_x, rescaled_y)
+        contour_to_add.area = quantifier.area
+        contour_to_add.perimeter = quantifier.perimeter
+        contour_to_add.circularity = quantifier.circularity
+        contour_to_add.diameters = np.average(quantifier.get_diameters(step_size=20))
         new_contour = Contours(
             mask_id=mask_id,
-            parent_id=parent_contour_id,
+            parent_id=contour_to_add.parent_contour_id,
             coords=json.dumps({"x": contour_to_add.x, "y": contour_to_add.y}),
-            added_by=added_by,  # The user or model who added this contour
-            temporary=temporary,  # Whether the contour is temporary, eg. if a model added it
+            added_by=contour_to_add.added_by,  # The user or model who added this contour
+            temporary=contour_to_add.temporary,  # Whether the contour is temporary, eg. if a model added it
             label=contour_to_add.label,
-            area=quantifier.area,
-            perimeter=quantifier.perimeter,
-            circularity=quantifier.circularity,
-            diameters=json.dumps(quantifier.get_diameters()),
+            area=contour_to_add.area,
+            perimeter=contour_to_add.perimeter,
+            circularity=contour_to_add.circularity,
+            diameters=contour_to_add.diameters,
         )
 
         # Add contour to the database
@@ -249,11 +248,12 @@ async def add_contour(mask_id: int,
         return {
             "success": True,
             "message": "Contour added successfully.",
-            "contour_id": new_contour.id
+            "added_contour": contour_to_add.model_dump_json(),
         }
     except Exception as e:
         logger.error(f"Error adding contour: {e}")
-        raise HTTPException(status_code=500, detail="Error adding contour.")
+        db.rollback()
+        raise e
 
 
 @router.delete("/delete_contour/{contour_id}")
