@@ -9,7 +9,7 @@ class ContourModel(BaseModel):
     """ Model for a contour to be added. """
     x: List[float] = Field(default_factory=list, description="X-coordinates of the contour.")
     y: List[float] = Field(default_factory=list, description="Y-coordinates of the contour.")
-    label: int = Field(default=0, description="ID of the label of the mask.")
+    label: int | None = Field(default=None, description="ID of the label of the mask. None for unlabelled contour.")
     parent_contour_id: int | None = Field(default=None, description="ID of the parent contour. None if the contour has "
                                                                     "no parent")
 
