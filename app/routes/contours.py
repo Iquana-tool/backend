@@ -234,6 +234,7 @@ async def add_contour(mask_id: int,
             coords=json.dumps({"x": contour_to_add.x, "y": contour_to_add.y}),
             added_by=contour_to_add.added_by,  # The user or model who added this contour
             temporary=contour_to_add.temporary,  # Whether the contour is temporary, eg. if a model added it
+            confidence_score=contour_to_add.confidence,
             label=contour_to_add.label,
             area=contour_to_add.area,
             perimeter=contour_to_add.perimeter,

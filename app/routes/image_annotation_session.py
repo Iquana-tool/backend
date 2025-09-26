@@ -339,7 +339,9 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
     contour_model = ContourModel(x=contour[..., 1].tolist(),
                                  y=contour[..., 0].tolist(),
                                  label=None,
-                                 parent_contour_id=state.focussed_contour_id)
+                                 parent_contour_id=state.focussed_contour_id,
+                                 confidence=response_seg['score']
+                                 )
     response = await add_contour(
         state.mask_id,
         contour_to_add=contour_model,
@@ -350,8 +352,8 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
         id=client_msg.id,
         type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
         success=response["success"],
-        message=response["message"],
-        data=None
+        message=f"Successfully segmented object with confidence score {response_seg['score']:.1%}" if response["success"] else response["message"],
+        data=response["added_contour"] if response["success"] else None,
     ))
 
 

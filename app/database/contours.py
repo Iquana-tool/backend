@@ -12,6 +12,7 @@ class Contours(database):
     parent_id = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'))
     temporary = Column(Boolean, nullable=False, default=False)  # Whether a contour is temporary or not.
     added_by = Column(String(255), nullable=False)  # Who added this contour: User, SAM2, UNET, DINO etc.
+    confidence_score = Column(Float, nullable=False)  # Confidence score provided by a model, for users this is set to 1
     # Allowing labels to be null, this allows contours without labels to exist, such that users can label them later.
     label = Column(Integer, ForeignKey('labels.id', ondelete='CASCADE'), nullable=True)
     area = Column(Float, nullable=False)

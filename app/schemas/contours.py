@@ -13,6 +13,7 @@ class ContourModel(BaseModel):
     parent_contour_id: int | None = Field(default=None, description="ID of the parent contour. None if the contour has "
                                                                     "no parent")
     added_by: str = Field(default_factory=str, description="ID of the user or model who added this contour.")
+    confidence: float = Field(default=1., description="Confidence score of the contour.")
     temporary: bool = Field(default=False, description="Whether or not this contour is temporarily added (eg. if a model added it).")
     area: float | None = Field(default=None, description="Area of the contour.")
     perimeter: float | None = Field(default=None, description="Perimeter of the contour.")
