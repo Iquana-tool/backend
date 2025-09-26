@@ -40,6 +40,33 @@ async def upload_image(user_id: int, image_id: int):
             response.raise_for_status()
     return response.json()
 
+
+async def select_model(user_id: int, model_identifier: str):
+    """
+    Preload a model into the model cache
+    Args:
+        user_id: The user id.
+        model_identifier: The model identifier string
+
+    Returns:
+        Response message indicating success.
+    """
+    url = f"{BASE_URL}/models/select_model/{model_identifier}"
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+    return response.json()
+
+
+async def get_models():
+    """ List all available models."""
+    url = f"{BASE_URL}/models/available"
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+    return response.json()
+
+
 async def focus_crop(user_id: int, min_x: float, min_y: float, max_x: float, max_y: float):
     """Crop the uploaded image to the specified bounding box.
     Args:
@@ -109,6 +136,8 @@ async def segment_image_with_prompts(user_id: int, model_identifier: str, prompt
         mask = np.frombuffer(mask_bytes, dtype=dtype).reshape(shape)
 
         return {
+            "success": True,
+            "message": f"Successfully computed mask from prompts with confidence of {score:.1%}",
             "mask": mask,
             "score": score,
             "shape": shape,
