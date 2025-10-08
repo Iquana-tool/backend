@@ -7,11 +7,11 @@ from dotenv import load_dotenv
 import paths
 from app.routes.prompted_segmentation.image_segmentation import router as prompted_segmentation_router
 
-from app.routes.automatic_segmentation import router as automatic_general_router
-from app.routes.automatic_segmentation.segmentation import router as automatic_inference_router
-from app.routes.automatic_segmentation.training import router as automatic_training_router
-from app.routes.automatic_segmentation.models import router as automatic_models_router
-from app.routes.automatic_segmentation.upload_data import router as automatic_upload_router
+from app.routes.semantic_segmentation import router as automatic_general_router
+from app.routes.semantic_segmentation.segmentation import router as automatic_inference_router
+from app.routes.semantic_segmentation.training import router as automatic_training_router
+from app.routes.semantic_segmentation.models import router as automatic_models_router
+from app.routes.semantic_segmentation.upload_data import router as automatic_upload_router
 
 from app.routes.images import router as image_router
 from app.routes.masks import router as mask_router

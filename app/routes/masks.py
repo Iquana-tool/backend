@@ -13,7 +13,7 @@ from app.schemas.segmentation.segmentations import SegmentationMaskModel
 from app.services.mask_generation import generate_mask
 from app.services.database_access import save_array_to_disk
 from app.services.labels import get_hierarchical_label_name
-from app.routes.automatic_segmentation.upload_data import proxy_upload_file
+from app.routes.semantic_segmentation.upload_data import proxy_upload_file
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])

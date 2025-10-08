@@ -139,7 +139,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
         messages from the user as input to start tasks in the background.
         Client sent messages should be structured as JSON and should look like this: \n
         { \n
-        "type": "prompted_segmentation" | "automatic_segmentation" | "image", \n
+        "type": "prompted_segmentation" | "semantic_segmentation" | "image", \n
         "data": { ... }  # Data specific to the message type \n
         } \n
         For info on the message types and their data structure, see the respective documentation.
@@ -328,12 +328,12 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
 
 async def handle_automatic_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of an automatic model. """
-    pass
+    raise NotImplementedError("Method not implemented yet!")
 
 
 async def handle_automatic_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle segmentation using an automatic model. """
-    pass
+    raise NotImplementedError("Method not implemented yet!")
 
 
 async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -380,7 +380,7 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
 
 async def handle_completion_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of a completion model. """
-    pass
+    raise NotImplementedError("Method not implemented yet!")
 
 
 async def handle_completion_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -421,4 +421,4 @@ async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessa
 
 async def handle_object_conflict_resolve(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle how an object conflict should be resolved. """
-    pass
+    raise NotImplementedError("Method not implemented yet!")

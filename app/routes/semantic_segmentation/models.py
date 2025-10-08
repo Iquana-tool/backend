@@ -10,7 +10,7 @@ from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 
 logger = getLogger(__name__)
-router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
+router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
 
 
 @router.get("/get_available_base_models")

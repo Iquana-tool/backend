@@ -9,7 +9,7 @@ class ClientMessageType(StrEnum):
     PROMPTED_SELECT_MODEL = "prompted_select_model"  # Select a model for prompted segmentation
     PROMPTED_SEGMENTATION = "prompted_segmentation"  # Perform prompted segmentation
     AUTOMATIC_SELECT_MODEL = "automatic_select_model"  # Select a model for automatic segmentation
-    AUTOMATIC_SEGMENTATION = "automatic_segmentation"  # Perform automatic segmentation
+    AUTOMATIC_SEGMENTATION = "semantic_segmentation"  # Perform automatic segmentation
     COMPLETION_SELECT_MODEL = "completion_select_model"  # Select a model for mask completion
     COMPLETION_ENABLE = "completion_enable"  # Enable mask completion
     COMPLETION_DISABLE = "completion_disable"  # Disable mask completion

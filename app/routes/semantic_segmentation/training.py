@@ -11,7 +11,7 @@ from logging import getLogger
 
 
 logger = getLogger(__name__)
-router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
+router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
 
 
 @router.get("/get_training_status/{model_id}")

@@ -11,7 +11,7 @@ from app.database.masks import Masks
 from ...services.util import get_mask_path_from_image_path
 
 logger = getLogger(__name__)
-router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
+router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
 
 
 

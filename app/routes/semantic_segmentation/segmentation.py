@@ -18,7 +18,7 @@ from logging import getLogger
 
 
 logger = getLogger(__name__)
-router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
+router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
 
 
 @router.post("/segment_batch/{model_id}")
