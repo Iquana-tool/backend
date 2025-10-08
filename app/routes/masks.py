@@ -9,6 +9,7 @@ from app.database import get_session
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
+from app.routes.prompted_segmentation.util import get_masks_responses
 from app.schemas.segmentation.segmentations import SegmentationMaskModel
 from app.services.mask_generation import generate_mask
 from app.services.database_access import save_array_to_disk
@@ -185,6 +186,15 @@ async def delete_mask(mask_id: int, db: Session = Depends(get_session)):
     db.delete(mask)
     db.commit()
     return {"success": True, "message": "Mask deleted successfully."}
+
+
+@router.post("/post_mask/{mask_id}")
+async def post_mask(mask_id: int, mask: UploadFile =File(...), session: Session = Depends(get_session)):
+    mask_array = np.frombuffer(mask.file.read(), dtype=np.uint8)
+    mask_responses = await get_masks_responses([mask_array], [1], only_return_one=False)
+    image_id = session.query(Masks.image_id).filter_by(id=mask_id).first()
+    return await create_masks_and_add_contours_for_images([image_id], mask_array)
+
 
 
 async def create_masks_and_add_contours_for_images(image_ids: list[int],
