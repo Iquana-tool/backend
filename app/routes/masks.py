@@ -1,7 +1,7 @@
 import json
 import logging
 import numpy as np
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, File
 from starlette.datastructures import UploadFile
 from sqlalchemy.orm import Session
 from app.routes.contours import delete_contour, add_contours
@@ -128,41 +128,6 @@ async def unfinish_mask(mask_id: int, db: Session = Depends(get_session)):
     }
 
 
-@router.get("/get_contours_of_mask/{mask_id}", deprecated=True)
-async def get_contours_of_mask(mask_id: int, db: Session = Depends(get_session)):
-    """ Get all contours of a mask by its ID.
-
-    > This endpoint is deprecated and will be removed in the future. Please use the contour endpoints instead.
-    """
-    # TODO: Remove this endpoint in the future.
-    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
-    if not contours:
-        raise HTTPException(status_code=404, detail="No contours found for mask.")
-    formatted_contours = []
-    for contour in contours:
-        coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
-        diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
-        label_name = get_hierarchical_label_name(contour.label)
-        formatted_contours.append({
-            "id": contour.id,
-            "x": coords["x"],
-            "y": coords["y"],
-            "label": contour.label,
-            "label_name": label_name,
-            "area": contour.area,
-            "perimeter": contour.perimeter,
-            "circularity": contour.circularity,
-            "diameters": diameters
-        })
-
-    return {
-        "success": True,
-        "warning": "This endpoint is deprecated. Use 'contours/get_contours_of_mask' instead.",
-        "mask_id": mask_id,
-        "contours": formatted_contours
-    }
-
-
 @router.get("/get_mask/{mask_id}")
 async def get_mask(mask_id: int, db: Session = Depends(get_session)):
     """ Get a mask by its ID. """
@@ -220,19 +185,6 @@ async def delete_mask(mask_id: int, db: Session = Depends(get_session)):
     db.delete(mask)
     db.commit()
     return {"success": True, "message": "Mask deleted successfully."}
-
-
-@router.get("/get_masks_for_image/{image_id}", deprecated=True)
-async def get_masks_for_image(image_id: int, db: Session = Depends(get_session)):
-    """ Get all masks for a given image ID.
-
-    > This endpoint is deprecated and will be removed in the future. Images can now only have one mask, so this endpoint
-    will always return a single mask or an error if no mask exists.
-    """
-    masks = db.query(Masks).filter_by(image_id=image_id).all()
-    if not masks:
-        raise HTTPException(status_code=404, detail="No masks found for image.")
-    return masks
 
 
 async def create_masks_and_add_contours_for_images(image_ids: list[int],
