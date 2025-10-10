@@ -207,7 +207,11 @@ async def post_mask(mask_id: int,
     dataset_id = session.query(Images.dataset_id).filter_by(id=image_id).first()
     labels = session.query(Labels).filter_by(dataset_id=dataset_id)
     label_hierarchy = LabelHierarchy.from_query(labels)
-    contour_hierarchy = await ContourHierarchy.add_to_db(
+
+    # Create an initial hierarchy of already added contours
+    contour_hierarchy = ContourHierarchy.from_query(session.query(Contours).filter_by(mask_id=mask_id))
+    # Add new contours from the mask
+    contour_hierarchy = await contour_hierarchy.add_contours_from_mask_to_self_and_db(
         mask_id,
         mask_array,
         label_hierarchy,
