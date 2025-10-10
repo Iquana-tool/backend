@@ -4,13 +4,16 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Depends, File
 from starlette.datastructures import UploadFile
 from sqlalchemy.orm import Session
+
+from app.database.labels import Labels
 from app.routes.contours import delete_contour, add_contours
 from app.database import get_session
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
-from app.routes.prompted_segmentation.util import get_masks_responses
-from app.schemas.segmentation.segmentations import SegmentationMaskModel
+from app.routes.prompted_segmentation.util import convert_numpy_masks_to_segmentation_mask_models
+from app.schemas.labels import LabelHierarchy
+from app.schemas.segmentation.segmentations import SemanticSegmentationMaskModel
 from app.services.mask_generation import generate_mask
 from app.services.database_access import save_array_to_disk
 from app.services.labels import get_hierarchical_label_name
@@ -188,24 +191,36 @@ async def delete_mask(mask_id: int, db: Session = Depends(get_session)):
     return {"success": True, "message": "Mask deleted successfully."}
 
 
-@router.post("/post_mask/{mask_id}")
-async def post_mask(mask_id: int, mask: UploadFile =File(...), session: Session = Depends(get_session)):
+@router.post("/post_mask/mask_id={mask_id}&added_by={added_by}&temporary={temporary}")
+async def post_mask(mask_id: int,
+                    added_by: str,
+                    temporary:bool,
+                    mask: UploadFile =File(...),
+                    session: Session = Depends(get_session)):
+    """
+    Upload a mask to a mask id. Compute the contours for each label in the mask, build the hierarchy and add
+    them to the database.
+    """
     mask_array = np.frombuffer(mask.file.read(), dtype=np.uint8)
-    mask_responses = await get_masks_responses([mask_array], [1], only_return_one=False)
     image_id = session.query(Masks.image_id).filter_by(id=mask_id).first()
-    return await create_masks_and_add_contours_for_images([image_id], mask_array)
+    dataset_id = session.query(Images.dataset_id).filter_by(id=image_id).first()
+    labels = session.query(Labels).filter_by(dataset_id=dataset_id)
+    hierarchy = LabelHierarchy.from_query(labels)
+    mask_model = SemanticSegmentationMaskModel.from_numpy_mask(mask_array, 1., hierarchy)
+    temporary_lst = [temporary for _ in range(len(mask_model.contours))]
+    return await add_contours(mask_id, mask_model.contours, added_by, temporary_lst)
 
 
 
 async def create_masks_and_add_contours_for_images(image_ids: list[int],
-                                                   mask_responses: list[SegmentationMaskModel],
+                                                   mask_responses: list[SemanticSegmentationMaskModel],
                                                    db: Session = Depends(get_session)):
     """
     Create masks for a list of image IDs and add contours to them.
 
     Args:
         image_ids (list[int]): List of image IDs for which to create masks.
-        mask_responses (list[SegmentationMaskModel]): List of segmentation mask responses containing contours.
+        mask_responses (list[SemanticSegmentationMaskModel]): List of segmentation mask responses containing contours.
         db (Session): The database session.
 
     Returns:
