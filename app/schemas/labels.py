@@ -38,7 +38,7 @@ class LabelHierarchy(BaseModel):
     value_to_label_object: dict[int, Label]
 
     @classmethod
-    def from_query(cls, query: "Query[type[Labels]]") -> Self:
+    def from_query(cls, query: "Query[type[Labels]]"):
         # Fetch all root labels (parent_id is None)
         root_labels = query.filter_by(parent_id=None).all()
         root_ids = [label.id for label in root_labels]
