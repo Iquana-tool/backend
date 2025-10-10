@@ -13,7 +13,7 @@ from app.database.masks import Masks
 from app.database.contours import Contours
 from app.routes.masks import create_masks_and_add_contours_for_images
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
-from app.routes.prompted_segmentation.util import get_masks_responses
+from app.routes.prompted_segmentation.util import convert_numpy_masks_to_segmentation_mask_models
 from logging import getLogger
 
 
@@ -67,10 +67,10 @@ async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Se
                 masks.append(mask_arr)
         labels = db.query(Labels).filter_by(dataset_id=(dataset_ids[0])[0]).all()
         label_id_to_value = {i + 1: label.id for i, label in enumerate(labels)}
-        mask_responses = await get_masks_responses(masks,
-                                                   np.ones(len(image_ids)).tolist(),
-                                                   label_id_to_value,
-                                                   only_return_one=False)
+        mask_responses = await convert_numpy_masks_to_segmentation_mask_models(masks,
+                                                                               np.ones(len(image_ids)).tolist(),
+                                                                               label_id_to_value,
+                                                                               only_return_one=False)
         responses = await create_masks_and_add_contours_for_images(image_ids, mask_responses, db)
         failed = len([response["success"] for response in responses["responses"] if not response["success"]])
         success = len(image_ids) - failed
