@@ -12,6 +12,7 @@ from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
 from app.routes.prompted_segmentation.util import convert_numpy_masks_to_segmentation_mask_models
+from app.schemas.contours import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
 from app.schemas.segmentation.segmentations import SemanticSegmentationMask
 from app.services.mask_generation import generate_mask
@@ -205,10 +206,20 @@ async def post_mask(mask_id: int,
     image_id = session.query(Masks.image_id).filter_by(id=mask_id).first()
     dataset_id = session.query(Images.dataset_id).filter_by(id=image_id).first()
     labels = session.query(Labels).filter_by(dataset_id=dataset_id)
-    hierarchy = LabelHierarchy.from_query(labels)
-    mask_model = SemanticSegmentationMask.from_numpy_mask(mask_array, 1., hierarchy)
-    temporary_lst = [temporary for _ in range(len(mask_model.contours))]
-    return await add_contours(mask_id, mask_model.contours, added_by, temporary_lst)
+    label_hierarchy = LabelHierarchy.from_query(labels)
+    contour_hierarchy = await ContourHierarchy.add_to_db(
+        mask_id,
+        mask_array,
+        label_hierarchy,
+        added_by,
+        temporary,
+        session
+    )
+    return {
+        "success": True,
+        "message": "Converted mask object to contour hierarchy and added it to the database.",
+        "result": contour_hierarchy.model_dump_json()
+    }
 
 
 

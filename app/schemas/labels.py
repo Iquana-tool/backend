@@ -58,7 +58,7 @@ class LabelHierarchy(BaseModel):
             value_to_label[label_obj.value] = label_obj
             if label.parent_id is not None:
                 parent = id_to_label[label.parent_id]
-                parent.add_child(id_to_label[label.id])
+                parent.add_child(label_obj)
             queue.extend(query.filter_by(parent_id=label.id).all())
 
         # Return the root-level labels

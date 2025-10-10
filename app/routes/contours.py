@@ -187,8 +187,7 @@ async def add_contour(mask_id: int,
         dict: A dictionary containing the success status, message, and the ID of the added contour.
     """
     try:
-        existing_mask = db.query(Masks).filter_by(id=mask_id).first()
-        parent_contour_id = contour_to_add.parent_contour_id
+        parent_contour_id = contour_to_add.parent_id
         expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label).first())[0]
         should_have_parent = expected_parent_label is not None
         if should_have_parent and parent_contour_id is None:
@@ -219,32 +218,11 @@ async def add_contour(mask_id: int,
                 "contour_id": None
             }
 
-        # Quantify contour
-        height, width = get_height_width_of_image(existing_mask.image_id)
-        rescaled_x = [int(x * width) for x in contour_to_add.x]
-        rescaled_y = [int(y * height) for y in contour_to_add.y]
-        quantifier = ContourQuantifier().from_coordinates(rescaled_x, rescaled_y)
-        contour_to_add.area = quantifier.area
-        contour_to_add.perimeter = quantifier.perimeter
-        contour_to_add.circularity = quantifier.circularity
-        contour_to_add.diameters = np.average(quantifier.get_diameters(step_size=20))
-        new_contour = Contours(
-            mask_id=mask_id,
-            parent_id=contour_to_add.parent_contour_id,
-            coords=json.dumps({"x": contour_to_add.x, "y": contour_to_add.y}),
-            added_by=contour_to_add.added_by,  # The user or model who added this contour
-            temporary=contour_to_add.temporary,  # Whether the contour is temporary, eg. if a model added it
-            confidence_score=contour_to_add.confidence,
-            label=contour_to_add.label,
-            area=contour_to_add.area,
-            perimeter=contour_to_add.perimeter,
-            circularity=contour_to_add.circularity,
-            diameters=contour_to_add.diameters,
-        )
-
         # Add contour to the database
-        db.add(new_contour)
+        entry = contour_to_add.to_db_entry(mask_id)
+        db.add(entry)
         db.commit()
+        contour_to_add.id = entry.id
 
         return {
             "success": True,

@@ -18,7 +18,8 @@ class Contours(database):
     area = Column(Float, nullable=False)
     perimeter = Column(Float, nullable=False)
     circularity = Column(Float, nullable=False)
-    diameters = Column(JSON, nullable=False)
-    coords = Column(JSON, nullable=False)
+    diameter = Column(Float, nullable=False)
+    x = Column(JSON, nullable=False)
+    y = Column(JSON, nullable=False)
     # Easy access to children, this makes accessing children much faster
     children = relationship("Contours", backref="parent", remote_side=[id], single_parent=True)

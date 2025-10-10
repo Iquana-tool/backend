@@ -57,45 +57,6 @@ class SemanticSegmentationMask(BaseModel):
     confidence: float = Field(default=0.0, description="Confidence score of the segmentation. This can be a predicted"
                                                        " IoU for example.")
 
-    @classmethod
-    def from_numpy_mask(cls, np_mask, confidence, label_hierarchy: LabelHierarchy):
-        """ Get a semantic segmentation mask model from a mask, a confidence score and a label hierarchy."""
-        # Get contours of the postprocessed mask if postprocessing is enabled
-        # Postprocessing might improve performance by removing noise
-        contour_models_of_label_value = {}
-        flat_contours_list = []
-        unique_labels = np.unique(np_mask)
-        flat_label_hierarchy = [label.value for label in label_hierarchy.build_flat_hierarchy(breadth_first=True)]
-        for label in unique_labels:
-            # Check whether all labels are okay
-            if label not in flat_label_hierarchy:
-                raise ValueError(f"Mask contains label {label}, which is not part of the label hierarchy!")
-
-        for label in flat_label_hierarchy:
-            # Go through the labels by a breadth first search
-            if label == 0:
-                # Skip the background label (usually 0)
-                continue
-            # First: Extract the mask for the current label and create Contour Models
-            mask_label = postprocess_binary_mask((np_mask == label).astype(np.uint8))
-            contours = get_contours_from_binary_mask(mask_label, only_return_biggest=False)
-            contour_models = [Contour.from_cv_contour(contour, label, np_mask.shape[1], np_mask.shape[0])
-                              for contour in contours]
-
-            # Second: Iterate through the models and check for parent links
-            parent = label_hierarchy.get_parent_by_value_of_child(label)
-            if parent is not None:
-                for contour in contour_models:
-                    for parent_contour in contour_models_of_label_value[parent.value]:
-                        if contour in parent_contour:
-                            contour.parent_contour_id = parent_contour.id
-                    else:
-                        logger.error("Contour could not be added to a parent contour")
-
-            contour_models_of_label_value[label] = contour_models
-            flat_contours_list += contour_models
-        return SemanticSegmentationMask(contours=flat_contours_list, confidence=confidence)
-
 
 class SegmentationResponse(BaseModel):
     """ Model for the prompted_segmentation response. """
