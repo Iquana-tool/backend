@@ -44,17 +44,22 @@ class LabelHierarchy(BaseModel):
         root_ids = [label.id for label in root_labels]
 
         # Fetch all labels in the hierarchy
-        all_labels = query.all()
+        queue = deque(root_labels)
 
-        # Build a map from id to Label
-        id_to_label = {label.id: Label.from_db(label) for label in all_labels}
-        value_to_label = {label.value: id_to_label[label.id] for label in all_labels}
+        # Build a map from id/value to Label
+        id_to_label = {}
+        value_to_label = {}
 
         # Build the hierarchy
-        for label in all_labels:
+        while queue:
+            label = queue.popleft()
+            label_obj = Label.from_db(label)
+            id_to_label[label_obj.id] = label_obj
+            value_to_label[label_obj.value] = label_obj
             if label.parent_id is not None:
                 parent = id_to_label[label.parent_id]
                 parent.add_child(id_to_label[label.id])
+            queue.extend(query.filter_by(parent_id=label.id).all())
 
         # Return the root-level labels
         return cls(
