@@ -16,7 +16,7 @@ from app.routes.masks import create_mask, finish_mask
 from app.schemas.segmentation.segmentations import Prompts
 from app.services.ai_services import prompted_segmentation as prompted_service
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
-from app.schemas.contours import ContourModel
+from app.schemas.contours import Contour
 from app.services.ai_services.prompted_segmentation import select_model, segment_image_with_prompts, focus_contour, \
     unfocus_crop
 from app.services.contours import get_contours_from_binary_mask
@@ -242,7 +242,7 @@ async def handle_unfocus_image(websocket: WebSocket, client_msg: ClientMessage, 
 
 async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle adding an object to the mask."""
-    contour = ContourModel.model_validate_json(client_msg.data)
+    contour = Contour.model_validate_json(client_msg.data)
     response = await add_contour(state.mask_id, contour, f"User {state.user_id}")
     if not response["success"]:
         await send_msg(websocket, ServerMessage(
@@ -356,12 +356,12 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
     prompts_model = Prompts.model_value(prompts_data)
     response_seg = await segment_image_with_prompts(state.user_id, model_identifier, prompts_model)
     contour = get_contours_from_binary_mask(response_seg["mask"], only_return_biggest=True)
-    contour_model = ContourModel(x=contour[..., 1].tolist(),
-                                 y=contour[..., 0].tolist(),
-                                 label=None,
-                                 parent_contour_id=state.focussed_contour_id,
-                                 confidence=response_seg['score']
-                                 )
+    contour_model = Contour(x=contour[..., 1].tolist(),
+                            y=contour[..., 0].tolist(),
+                            label=None,
+                            parent_contour_id=state.focussed_contour_id,
+                            confidence=response_seg['score']
+                            )
     response = await add_contour(
         state.mask_id,
         contour_to_add=contour_model,

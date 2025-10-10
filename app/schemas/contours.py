@@ -11,13 +11,14 @@ from pydantic import BaseModel, field_validator, Field, ValidationError, model_v
 from app.schemas.quantification import QuantificationModel
 
 
-class ContourModel(BaseModel):
+class Contour(BaseModel):
     """ Model for a contour to be added. """
     x: List[float] = Field(default_factory=list, description="X-coordinates of the contour.")
     y: List[float] = Field(default_factory=list, description="Y-coordinates of the contour.")
     label: int | None = Field(default=None, description="ID of the label of the mask. None for unlabelled contour.")
     parent_contour_id: int | None = Field(default=None, description="ID of the parent contour. None if the contour has "
                                                                     "no parent")
+    children: list["Contour"] = Field(default=[], description="List of objects represented by their contours.")
     added_by: str = Field(default_factory=str, description="ID of the user or model who added this contour.")
     confidence: float = Field(default=1., description="Confidence score of the contour.")
     temporary: bool = Field(default=False, description="Whether or not this contour is temporarily added (eg. if a model added it).")
@@ -67,7 +68,7 @@ class ContourModel(BaseModel):
     def from_cv_contour(cls, cv_contour, label, height, width):
         x_coords = cv_contour[..., 0].flatten() / width  # Normalize x-coordinates
         y_coords = cv_contour[..., 1].flatten() / height  # Normalize y-coordinates
-        return ContourModel(
+        return Contour(
             x=x_coords.tolist(),
             y=y_coords.tolist(),
             label=label
@@ -82,3 +83,6 @@ class ContourModel(BaseModel):
             pt=(pt * 10_000).astype(np.uint32),
             measureDist=False) >= 0 for pt in self.points)
 
+
+class ContourHierarchy(BaseModel):
+    """ """

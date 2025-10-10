@@ -10,7 +10,7 @@ from app.database.labels import Labels
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
-from app.schemas.contours import ContourModel
+from app.schemas.contours import Contour
 from app.services.database_access import get_height_width_of_image
 from app.services.labels import get_hierarchical_label_name
 from app.services.contours import find_parent_contour, coords_to_cv_contour
@@ -173,14 +173,14 @@ async def finalise(contour_id: int, db: Session = Depends(get_session)):
 
 @router.post("/add_contour")
 async def add_contour(mask_id: int,
-                      contour_to_add: ContourModel,
+                      contour_to_add: Contour,
                       db: Session = Depends(get_session)):
     """
     Add a contour to a mask in the database.
 
     Args:
         mask_id (int): The ID of the mask to which the contour will be added.
-        contour_to_add (ContourModel): The contour data to add.
+        contour_to_add (Contour): The contour data to add.
         db (Session): The database session.
 
     Returns:
@@ -299,7 +299,7 @@ async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
 
 @router.post("/add_contours")
 async def add_contours(mask_id: int,
-                       contours_to_add: list[ContourModel],
+                       contours_to_add: list[Contour],
                        added_by: str,
                        temporary_list: list[bool],
                        db: Session = Depends(get_session)):
@@ -308,7 +308,7 @@ async def add_contours(mask_id: int,
 
     Args:
         mask_id (int): The ID of the mask to which the contours will be added.
-        contours_to_add (list[ContourModel]): A list of contour data to add.
+        contours_to_add (list[Contour]): A list of contour data to add.
         parent_contour_id (int, optional): The ID of the parent contour. Defaults to None.
         db (Session): The database session.
 
