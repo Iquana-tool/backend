@@ -2,10 +2,11 @@ import numpy as np
 from app.services.contours import get_contours_from_binary_mask
 from app.services.postprocessing import postprocess_binary_mask
 from app.schemas.contours import ContourModel
-from app.schemas.segmentation.segmentations import SegmentationMaskModel
+from app.schemas.segmentation.segmentations import SemanticSegmentationMaskModel
 
 
-async def get_masks_responses(masks, qualities, label_map: dict = None, only_return_one: bool = True):
+async def convert_numpy_masks_to_segmentation_mask_models(masks, qualities, label_map: dict = None, only_return_one: bool = True) \
+        -> list[SemanticSegmentationMaskModel]:
     """ Convert masks to SegmentationMaskModel objects with contours. Internally, it separates masks by labels and
     extracts contours for each label.
 
@@ -35,7 +36,7 @@ async def get_masks_responses(masks, qualities, label_map: dict = None, only_ret
                                                     label if not label_map else label_map[label],
                                                     mask_label.shape[0],
                                                     mask_label.shape[1])
-        masks_response.append(SegmentationMaskModel(contours=contours_response, predicted_iou=quality))
+        masks_response.append(SemanticSegmentationMaskModel(contours=contours_response, confidence=quality))
     return masks_response
 
 

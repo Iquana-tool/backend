@@ -7,7 +7,7 @@ from fastapi import APIRouter
 import app.services.ai_services.prompted_segmentation as prompted_service
 from app.database import get_context_session
 from app.database.contours import Contours
-from app.routes.prompted_segmentation.util import get_masks_responses
+from app.routes.prompted_segmentation.util import convert_numpy_masks_to_segmentation_mask_models
 from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationResponse
 
 logger = getLogger(__name__)
@@ -94,7 +94,7 @@ async def segment_image(request: PromptedSegmentationRequest):
 
     cv2.imwrite("debug_mask.png", mask * 255)
     # Convert to response object
-    masks_response = await get_masks_responses([mask * request.label], [score])
+    masks_response = await convert_numpy_masks_to_segmentation_mask_models([mask * request.label], [score])
     return {
         "success": True,
         "message": "Prompted segmentation completed successfully.",
