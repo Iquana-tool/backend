@@ -23,6 +23,14 @@ class ContourModel(BaseModel):
     temporary: bool = Field(default=False, description="Whether or not this contour is temporarily added (eg. if a model added it).")
     quantification: QuantificationModel = Field(default_factory=QuantificationModel, description="Quantification of the contour.")
 
+    @model_validator(mode="after")
+    def validate_after(self):
+        """ Validate after initialization. Check if quantifications are computed. """
+        if self.quantification.is_empty:
+            self.quantification.parse_cv_contour(self.contour)
+
+
+
     @field_validator('x', 'y')
     def validate_coordinates(cls, value):
         return [min(max(coord, 0), 1) for coord in value]

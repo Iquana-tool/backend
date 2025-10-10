@@ -12,6 +12,27 @@ class QuantificationModel(BaseModel):
     max_diameter: list[float] | None = Field(default=None, description="Maximum distance of any two points in "
                                                                        "the contour.")
 
+    @property
+    def is_empty(self) -> bool:
+        return self.area is None
+
+    def parse_cv_contour(self, cv_contour):
+        # Compute quantification values with opencv functions
+        self.area = cv.contourArea(cv_contour)
+        self.perimeter = cv.arcLength(cv_contour, True)
+        if self.area == 0:
+            self.circularity = 0
+        else:
+            self.circularity = (4 * np.pi * self.area) / (self.perimeter ** 2)
+
+        # Compute the max diameter separately, because no function exists.
+        # Squeeze one dimensional dimension. Idk why opencv has this.
+        points = cv_contour.squeeze()
+        # Compute all pairwise distances
+        distances = squareform(pdist(points, 'euclidean'))
+        # The diameter is the maximum distance
+        self.max_diameter = np.max(distances)
+
     @classmethod
     def from_cv_contour(cls, cv_contour: np.ndarray):
         # Compute quantification values with opencv functions
