@@ -21,12 +21,15 @@ class ContourModel(BaseModel):
     added_by: str = Field(default_factory=str, description="ID of the user or model who added this contour.")
     confidence: float = Field(default=1., description="Confidence score of the contour.")
     temporary: bool = Field(default=False, description="Whether or not this contour is temporarily added (eg. if a model added it).")
-    quantification: QuantificationModel = Field(default_factory=QuantificationModel, description="Quantification of the contour.")
+    quantification: QuantificationModel | None = Field(default=None, description="Quantification of the contour. Does "
+                                                                                 "not need to be provided.")
 
     @model_validator(mode="after")
     def validate_after(self):
         """ Validate after initialization. Check if quantifications are computed. """
-        if self.quantification.is_empty:
+        if self.quantification is None:
+            self.quantification = QuantificationModel.from_cv_contour(self.contour)
+        elif self.quantification.is_empty:
             self.quantification.parse_cv_contour(self.contour)
 
 
