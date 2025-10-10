@@ -166,8 +166,14 @@ class SemanticSegmentationMaskModel(BaseModel):
         # Get contours of the postprocessed mask if postprocessing is enabled
         # Postprocessing might improve performance by removing noise
         contour_models_of_label_value = {}
+        flat_contours_list = []
         unique_labels = np.unique(np_mask)
         flat_label_hierarchy = [label.value for label in label_hierarchy.build_flat_hierarchy(breadth_first=True)]
+        for label in unique_labels:
+            # Check whether all labels are okay
+            if label not in flat_label_hierarchy:
+                raise ValueError(f"Mask contains label {label}, which is not part of the label hierarchy!")
+
         for label in flat_label_hierarchy:
             # Go through the labels by a breadth first search
             if label == 0:
@@ -190,8 +196,8 @@ class SemanticSegmentationMaskModel(BaseModel):
                         logger.error("Contour could not be added to a parent contour")
 
             contour_models_of_label_value[label] = contour_models
-        contours = list(concat(contour_models_of_label_value[label] for label in unique_labels))
-        return SemanticSegmentationMaskModel(contours=contours, confidence=confidence)
+            flat_contours_list += contour_models
+        return SemanticSegmentationMaskModel(contours=flat_contours_list, confidence=confidence)
 
 
 class SegmentationResponse(BaseModel):
