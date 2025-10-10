@@ -1,3 +1,4 @@
+from operator import concat
 from typing import List, Annotated, Union, Dict
 
 import numpy as np
@@ -5,10 +6,14 @@ from pydantic import BaseModel, Field, field_validator
 from app.database import get_context_session
 from app.database.images import Images
 from app.database.scans import Scans
+from app.routes.prompted_segmentation.util import get_contour_models
 from app.schemas.contours import ContourModel
+from app.schemas.labels import LabelHierarchy
 from app.schemas.segmentation.prompts import PointPrompt, BoxPrompt, PolygonPrompt, CirclePrompt
 from logging import getLogger
-
+from collections import defaultdict
+from app.services.contours import get_contours_from_binary_mask
+from app.services.postprocessing import postprocess_binary_mask
 
 logger = getLogger(__name__)
 
@@ -149,14 +154,48 @@ class ScanPromptedSegmentationRequest(BaseModel):
         return value
 
 
-class SegmentationMaskModel(BaseModel):
+class SemanticSegmentationMaskModel(BaseModel):
     """ Model for the mask. """
-    contours: List[ContourModel]
-    predicted_iou: Annotated[float, "Predicted IoU of the mask."] = 0.0
+    contours: List[ContourModel] = Field(default=[], description="List of objects represented by their contours.")
+    confidence: float = Field(default=0.0, description="Confidence score of the segmentation. This can be a predicted"
+                                                       " IoU for example.")
+
+    @classmethod
+    def from_numpy_mask(cls, np_mask, confidence, label_hierarchy: LabelHierarchy):
+        """ Get a semantic segmentation mask model from a mask, a confidence score and a label hierarchy."""
+        # Get contours of the postprocessed mask if postprocessing is enabled
+        # Postprocessing might improve performance by removing noise
+        contour_models_of_label_value = {}
+        unique_labels = np.unique(np_mask)
+        flat_label_hierarchy = [label.value for label in label_hierarchy.build_flat_hierarchy(breadth_first=True)]
+        for label in flat_label_hierarchy:
+            # Go through the labels by a breadth first search
+            if label == 0:
+                # Skip the background label (usually 0)
+                continue
+            # First: Extract the mask for the current label and create Contour Models
+            mask_label = postprocess_binary_mask((np_mask == label).astype(np.uint8))
+            contours = get_contours_from_binary_mask(mask_label, only_return_biggest=False)
+            contour_models = [ContourModel.from_cv_contour(contour, label, np_mask.shape[1], np_mask.shape[0])
+                              for contour in contours]
+
+            # Second: Iterate through the models and check for parent links
+            parent = label_hierarchy.get_parent_by_value_of_child(label)
+            if parent is not None:
+                for contour in contour_models:
+                    for parent_contour in contour_models_of_label_value[parent.value]:
+                        if contour in parent_contour:
+                            contour.parent_contour_id = parent_contour.id
+                    else:
+                        logger.error("Contour could not be added to a parent contour")
+
+            contour_models_of_label_value[label] = contour_models
+        contours = list(concat(contour_models_of_label_value[label] for label in unique_labels))
+        return SemanticSegmentationMaskModel(contours=contours, confidence=confidence)
 
 
 class SegmentationResponse(BaseModel):
     """ Model for the prompted_segmentation response. """
-    masks: List[SegmentationMaskModel]
+    masks: List[SemanticSegmentationMaskModel]
     image_id: int = 0
     model: str
