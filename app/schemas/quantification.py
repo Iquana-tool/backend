@@ -9,7 +9,7 @@ class QuantificationModel(BaseModel):
     area: float | None = Field(default=None, description="Area of the contour.")
     perimeter: float | None = Field(default=None, description="Perimeter of the contour.")
     circularity: float | None = Field(default=None, description="Circularity of the contour.")
-    max_diameter: list[float] | None = Field(default=None, description="Maximum distance of any two points in "
+    max_diameter:float | None = Field(default=None, description="Maximum distance of any two points in "
                                                                        "the contour.")
 
     @property
