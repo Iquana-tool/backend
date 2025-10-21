@@ -35,6 +35,7 @@ class QuantificationModel(BaseModel):
 
     @classmethod
     def from_cv_contour(cls, cv_contour: np.ndarray):
+        cv_contour = cv_contour.astype(np.float32)
         # Compute quantification values with opencv functions
         area_px = cv.contourArea(cv_contour)
         perimeter_px = cv.arcLength(cv_contour, True)

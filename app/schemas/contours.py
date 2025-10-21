@@ -25,8 +25,8 @@ class Contour(BaseModel):
                                                                     "no parent")
     children: list["Contour"] = Field(default=[], description="List of objects represented by their contours.")
 
-    x: List[float] = Field(default_factory=list, description="X-coordinates of the contour.")
-    y: List[float] = Field(default_factory=list, description="Y-coordinates of the contour.")
+    x: list[float] = Field(default_factory=list, description="X-coordinates of the contour.")
+    y: list[float] = Field(default_factory=list, description="Y-coordinates of the contour.")
 
     added_by: str = Field(default_factory=str, description="ID of the user or model who added this contour.")
     confidence: float = Field(default=1., description="Confidence score of the contour.")
@@ -41,6 +41,7 @@ class Contour(BaseModel):
             self.quantification = QuantificationModel.from_cv_contour(self.contour)
         elif self.quantification.is_empty:
             self.quantification.parse_cv_contour(self.contour)
+        return self
 
     @field_validator('x', 'y')
     def validate_coordinates(cls, value):
@@ -56,7 +57,7 @@ class Contour(BaseModel):
 
     @property
     def points(self) -> np.ndarray[tuple[float, float]]:
-        return np.array(zip(self.x, self.y))
+        return np.array(list(zip(self.x, self.y)))
 
     def to_rescaled_contour(self, height, width):
         """ Return a rescaled contour given the height and width. """
@@ -67,9 +68,9 @@ class Contour(BaseModel):
     def to_db_entry(self, mask_id):
         return Contours(
             id=self.id,
-            mask_id=self.mask_id,
-            x=self.x,
-            y=self.y,
+            mask_id=mask_id,
+            x=json.dumps(self.x),
+            y=json.dumps(self.y),
             label=self.label,
             parent_id=self.parent_id,
             temporary=self.temporary,

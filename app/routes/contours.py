@@ -185,38 +185,39 @@ async def add_contour(mask_id: int,
     """
     try:
         parent_contour_id = contour_to_add.parent_id
-        expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label).first())[0]
+        expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label).first())
         should_have_parent = expected_parent_label is not None
-        if should_have_parent and parent_contour_id is None:
-            # Contour should have a parent but none was given.
-            logger.error(f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).")
-            return {
-                "success": False,
-                "message": f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).",
-                "contour_id": None
-            }
-        elif should_have_parent and parent_contour_id is not None:
-            # Contour should have a parent and one is given one
-            parent_contour_label = db.query(Contours.label).filter_by(id=parent_contour_id).first()
-            if expected_parent_label != parent_contour_label:
-                logger.error(f"Error adding contour: Parent contour does not match the expected parent label."
-                             f"\nGiven label of parent contour: ({parent_contour_label})"
-                             f"\tExpected label of parent contour: ({expected_parent_label})")
+        if contour_to_add.label is not None:
+            if should_have_parent and parent_contour_id is None:
+                # Contour should have a parent but none was given.
+                logger.error(f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).")
                 return {
                     "success": False,
-                    "message": "Parent contour does not match the expected parent label.",
+                    "message": f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).",
                     "contour_id": None
                 }
-        else:
-            logger.error("Contour with label should not have a parent but has a parent contour id given.")
-            return {
-                "success": False,
-                "message": "Contour with label should not have a parent but has a parent contour id given.",
-                "contour_id": None
-            }
+            elif should_have_parent and parent_contour_id is not None:
+                # Contour should have a parent and one is given one
+                parent_contour_label = db.query(Contours.label).filter_by(id=parent_contour_id).first()
+                if expected_parent_label != parent_contour_label:
+                    logger.error(f"Error adding contour: Parent contour does not match the expected parent label."
+                                 f"\nGiven label of parent contour: ({parent_contour_label})"
+                                 f"\tExpected label of parent contour: ({expected_parent_label})")
+                    return {
+                        "success": False,
+                        "message": "Parent contour does not match the expected parent label.",
+                        "contour_id": None
+                    }
+            else:
+                logger.error("Contour with label should not have a parent but has a parent contour id given.")
+                return {
+                    "success": False,
+                    "message": "Contour with label should not have a parent but has a parent contour id given.",
+                    "contour_id": None
+                }
 
         # Add contour to the database
-        entry = contour_to_add.to_db_entry(mask_id)
+        entry = contour_to_add.to_db_entry(mask_id[0])
         db.add(entry)
         db.commit()
         contour_to_add.id = entry.id
@@ -224,10 +225,10 @@ async def add_contour(mask_id: int,
         return {
             "success": True,
             "message": "Contour added successfully.",
-            "added_contour": contour_to_add.model_dump_json(),
+            "added_contour": contour_to_add.model_dump(),
         }
     except Exception as e:
-        logger.error(f"Error adding contour: {e}")
+        print(f"Error adding contour: {e}")
         db.rollback()
         raise e
 

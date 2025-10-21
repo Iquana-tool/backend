@@ -36,7 +36,7 @@ async def upload_image(user_id: int, image_id: int):
     url = f"{BASE_URL}/annotation_session/open_image/user_uid={user_id}"
     with get_context_session() as session:
         image_path = session.query(Images.file_path).filter_by(id=image_id).first()
-        image_path = Paths.base_dir + "/" + image_path[0]
+        image_path = image_path[0]
 
     with open(image_path, "rb") as f:
         file = {"image": f}
