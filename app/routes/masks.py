@@ -55,7 +55,7 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
     """ Mark a mask as finished, generate it as an image file and upload it to the AI external service. """
     # Check if mask exists
     existing_mask = db.query(Masks).filter_by(id=mask_id).first()
-    if not existing_mask:
+    if not db.query(Masks).filter_by(id=mask_id).exists():
         raise HTTPException(status_code=404, detail="Mask not found.")
     print(f"Finishing this mask: {existing_mask}")
     # Check if the mask is already finished
@@ -67,9 +67,12 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
         }
     image = db.query(Images).filter_by(id=existing_mask.image_id).first()
     # Generate the mask from contours
-    mask_image = generate_mask(mask_id)
-    logging.debug(f"Generated mask with the following labels: {np.unique(mask_image).tolist()}")
-    mask_path = save_array_to_disk(mask_image,
+    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
+    contours_hierarchy = ContourHierarchy.from_contours(contours)
+    semantic_mask = contours_hierarchy.to_semantic_mask(image.height, image.width)
+
+    logging.debug(f"Generated mask with the following labels: {np.unique(semantic_mask).tolist()}")
+    mask_path = save_array_to_disk(semantic_mask,
                        image.dataset_id,
                        image.scan_id,
                        is_mask=True,
