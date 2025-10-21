@@ -1,24 +1,20 @@
-import json
 import logging
+
 import numpy as np
-from fastapi import APIRouter, HTTPException, Depends, File
-from starlette.datastructures import UploadFile
+from fastapi import APIRouter, HTTPException, Depends, File, UploadFile
 from sqlalchemy.orm import Session
 
-from app.database.labels import Labels
-from app.routes.contours import delete_contour, add_contours
 from app.database import get_session
-from app.database.images import Images
-from app.database.masks import Masks
 from app.database.contours import Contours
-from app.routes.prompted_segmentation.util import convert_numpy_masks_to_segmentation_mask_models
+from app.database.images import Images
+from app.database.labels import Labels
+from app.database.masks import Masks
+from app.routes.contours import delete_contour, add_contours
+from app.routes.semantic_segmentation.upload_data import proxy_upload_file
 from app.schemas.contours import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
 from app.schemas.prompted_segmentation.segmentations import SemanticSegmentationMask
-from app.services.mask_generation import generate_mask
 from app.services.database_access import save_array_to_disk
-from app.services.labels import get_hierarchical_label_name
-from app.routes.semantic_segmentation.upload_data import proxy_upload_file
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
@@ -199,7 +195,7 @@ async def delete_mask(mask_id: int, db: Session = Depends(get_session)):
 async def post_mask(mask_id: int,
                     added_by: str,
                     temporary:bool,
-                    mask: UploadFile =File(...),
+                    mask: UploadFile = File(...),
                     session: Session = Depends(get_session)):
     """
     Upload a mask to a mask id. Compute the contours for each label in the mask, build the hierarchy and add

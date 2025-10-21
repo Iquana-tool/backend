@@ -9,7 +9,6 @@ from pydantic import BaseModel, field_validator, Field, model_validator
 from sqlalchemy.orm import Query, Session
 
 from app.database.contours import Contours
-from app.routes.contours import add_contour
 from app.schemas.labels import LabelHierarchy
 from app.schemas.quantification import QuantificationModel
 from app.services.contours import get_contours_from_binary_mask

@@ -1,14 +1,15 @@
-from fastapi.params import Depends
-from sqlalchemy.orm import Session
-from app.database import get_session
-from app.database.labels import Labels
-from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
-from app.schemas.automatic_segmentation.training import TrainingRequest
-import httpx
-from fastapi.responses import JSONResponse
-from fastapi import APIRouter
 from logging import getLogger
 
+import httpx
+from fastapi import APIRouter
+from fastapi.params import Depends
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+
+from app.database import get_session
+from app.database.labels import Labels
+from app.schemas.semantic_segmentation.training import TrainingRequest
+from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
