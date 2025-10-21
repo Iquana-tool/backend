@@ -72,13 +72,15 @@ class AnnotationSessionState(BaseModel):
 
 async def receive_msg(websocket: WebSocket) -> ClientMessage:
     msg = await websocket.receive_json()
+    print("Received message JSON:", msg)
     try:
-        msg = ClientMessage.model_validate_json(msg)
+        msg = ClientMessage.model_validate(msg)
         logger.info(f"Received message: {msg}")
         return msg
     except ValidationError as e:
         # Client message couldn't be validated, send an error message
         logger.error(f"Client message couldn't be validated, sent an error message. \n{str(e)}")
+        raise e
         await send_msg(websocket,
                        ServerMessage(
                            id="0",
@@ -213,6 +215,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
     except Exception as e:
         logger.error(f"WebSocket connection error for user {user_id} and image {image_id}: {e}")
         print(f"Error: {e}")
+        raise e
     finally:
         await websocket.close()
 
@@ -355,9 +358,10 @@ async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientM
 
 async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle prompted_segmentation using a prompted model. """
+    print("Clinet msg data:", client_msg.data)
     model_identifier = client_msg.data.get("model_identifier")
     prompts_data = client_msg.data.get("prompts")
-    prompts_model = Prompts.model_value(prompts_data)
+    prompts_model = Prompts.model_validate(prompts_data)
     response_seg = await segment_image_with_prompts(state.user_id, model_identifier, prompts_model)
     contour = get_contours_from_binary_mask(response_seg["mask"], only_return_biggest=True)
     contour_model = Contour(x=contour[..., 1].tolist(),
