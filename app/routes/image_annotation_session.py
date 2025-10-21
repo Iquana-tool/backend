@@ -72,6 +72,7 @@ class AnnotationSessionState(BaseModel):
 
 async def receive_msg(websocket: WebSocket) -> ClientMessage:
     msg = await websocket.receive_json()
+    print("Received message JSON:", msg)
     try:
         msg = ClientMessage.model_validate(msg)
         logger.info(f"Received message: {msg}")
@@ -79,6 +80,7 @@ async def receive_msg(websocket: WebSocket) -> ClientMessage:
     except ValidationError as e:
         # Client message couldn't be validated, send an error message
         logger.error(f"Client message couldn't be validated, sent an error message. \n{str(e)}")
+        raise e
         await send_msg(websocket,
                        ServerMessage(
                            id="0",
@@ -352,6 +354,7 @@ async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientM
 
 async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle prompted_segmentation using a prompted model. """
+    print("Clinet msg data:", client_msg.data)
     model_identifier = client_msg.data.get("model_identifier")
     prompts_data = client_msg.data.get("prompts")
     prompts_model = Prompts.model_validate(prompts_data)

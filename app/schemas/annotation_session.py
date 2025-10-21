@@ -45,8 +45,8 @@ class Message(BaseModel):
     id: str = Field(..., description="Unique message ID to correlate messages.")
     type: str = Field(..., description="Identifier for what this message should trigger or what is being delivered.")
     message: str | None = Field(default=None, description="Additional human readable message.")
-    success: bool = Field(..., description="Whether the message was successful. Can be ignored for requests.")
-    data: dict | None = Field(default=None, description="Data to send.")
+    success: bool | None = Field(..., description="Whether the message was successful. Can be ignored for requests.")
+    data: Union[dict, list, None] = Field(default_factory=dict, description="Data to send.")
 
 
 class ClientMessage(Message):
