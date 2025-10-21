@@ -106,17 +106,16 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
     image_id = state.image_id
     # Check for running backends
     running = []
-    if not prompted_service.check_backend():
+    failed_initializations = []
+    if not await prompted_service.check_backend():
         logger.error("Prompted prompted_segmentation backend is not reachable. Please make sure it is running.")
+        failed_initializations.append("prompted_segmentation")
     else:
         running.append("prompted_segmentation")
         logger.debug("Prompted prompted_segmentation backend is reachable.")
-
-    # Initialize backends by uploading the image etc.
-    failed_initializations = []
-    if not (await prompted_service.upload_image(user_id, image_id))["success"]:
-        logger.error(f"Failed to upload image {image_id} for user {user_id} to prompted prompted_segmentation backend.")
-        failed_initializations.append("prompted_segmentation")
+        if not (await prompted_service.upload_image(user_id, image_id))["success"]:
+            logger.error(f"Failed to upload image {image_id} for user {user_id} to prompted prompted_segmentation backend.")
+            failed_initializations.append("prompted_segmentation")    
 
     logger.info("Annotation session initialized.")
     return ServerMessage(
@@ -161,6 +160,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
         :raises WebsocketException: If the WebSocket connection fails.
     """
     await websocket.accept()
+    print(f"WebSocket connection accepted for user {user_id} and image {image_id}")
     state = AnnotationSessionState(
         image_id=image_id,
         user_id=user_id,
@@ -168,7 +168,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
     )
     try:
         # Call some functions on startup
+        print(f"Calling on startup for user {user_id} and image {image_id}")
         response = await on_startup(state)
+        print(f"Startup response: {response}")
         # Send a message about startup
         await send_msg(websocket, response)
         while True:
@@ -210,6 +212,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
                     pass
     except Exception as e:
         logger.error(f"WebSocket connection error for user {user_id} and image {image_id}: {e}")
+        print(f"Error: {e}")
     finally:
         await websocket.close()
 

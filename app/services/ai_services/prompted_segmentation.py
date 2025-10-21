@@ -2,7 +2,7 @@ import json
 
 import httpx
 import numpy as np
-
+from paths import Paths
 from app.database.contours import Contours
 from app.database.images import Images
 from app.schemas.prompted_segmentation.prompts import Prompts
@@ -36,7 +36,9 @@ async def upload_image(user_id: int, image_id: int):
     url = f"{BASE_URL}/annotation_session/open_image/user_uid={user_id}"
     with get_context_session() as session:
         image_path = session.query(Images.file_path).filter_by(id=image_id).first()
-    with open(image_path[0], "rb") as f:
+        image_path = Paths.base_dir + "/" + image_path[0]
+
+    with open(image_path, "rb") as f:
         file = {"image": f}
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(url, files=file)

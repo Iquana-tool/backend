@@ -277,7 +277,8 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
     try:
         response = {}
         image = db.query(Images).filter_by(id=image_id).first()
-        file_path = image.file_path if not low_res else os.path.join(Paths.thumbnails_dir, f"{image_id}.png")
+        file_path = Paths.base_dir + "/" + image.file_path if not low_res else os.path.join(Paths.thumbnails_dir, f"{image_id}.png")
+        print(file_path)
         if not os.path.exists(file_path) and low_res:
             # The thumbnail has not been created yet, so create it
             image = cv2.imread(image.file_path)
@@ -289,6 +290,7 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
         return response
     except Exception as e:
         logger.error(f"Get image error: {str(e)}")
+        raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 
