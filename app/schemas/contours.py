@@ -49,12 +49,21 @@ class Contour(BaseModel):
 
     @property
     def contour(self) -> np.ndarray:
-        """ As a opencv contour. """
-        return np.array([[self.x, self.y]])
+        """
+        As a opencv contour.
+        Opencv contours have the form Number of points x empty dimension x Tuple of x and y coordinate.
+        """
+        return np.expand_dims(self.points, axis=1)
 
     @property
     def points(self) -> np.ndarray[tuple[float, float]]:
         return np.array(zip(self.x, self.y))
+
+    def to_rescaled_contour(self, height, width):
+        """ Return a rescaled contour given the height and width. """
+        rescaled_x = (np.array(self.x) * height).asytpe(int)
+        rescaled_y = (np.array(self.y) * width).astype(int)
+        return np.expand_dims(np.array(zip(rescaled_x, rescaled_y)), axis=1)
 
     def to_db_entry(self, mask_id):
         return Contours(
@@ -223,3 +232,28 @@ class ContourHierarchy(BaseModel):
             contour_models_with_label_id[label] = contour_models
         db.commit()
         return self
+
+    def to_semantic_mask(self, height, width, label_id_to_value_map: dict[int, int]) -> np.ndarray:
+        """ Turn the hierarchy into a semantic mask of the given shape. In a semantic mask each pixel value represents a
+        class. """
+        # Create empty canvas
+        canvas = np.zeros((height, width), dtype=np.uint8)
+        # Create empty queue
+        queue = deque()
+        # Enqueue root contours
+        queue.extend(self.root_contours)
+        while queue:
+            # Remove the oldest entry
+            contour = queue.popleft()
+            # If the contour has no label we cannot add it to the mask
+            if contour.label:
+                canvas = cv2.drawContours(canvas,
+                                          contour.to_rescaled_contour(height, width),
+                                          -1, # -1 means fill the contour
+                                          [label_id_to_value_map[contour.label]],
+                                          1)
+                # Add all children to the queue
+                if len(contour.children) > 0:
+                    queue.extend(contour.children)
+        # Return the filled array
+        return canvas
