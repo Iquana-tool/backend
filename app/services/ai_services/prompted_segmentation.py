@@ -73,10 +73,9 @@ async def get_models():
 async def focus_contour(user_id, contour_id):
     """Crop the uploaded image to a contour. """
     with get_context_session() as session:
-        contour = session.query(Contours.coords).filter_by(id=contour_id).first()
-        coords = json.loads(contour.coords)
-        x = coords["x"]
-        y = coords["y"]
+        contour = session.query(Contours.x, Contours.y).filter_by(id=contour_id).first()
+        x = json.loads(contour.x)
+        y = json.loads(contour.y)
         min_x = min(x)
         max_x = max(x)
         min_y = min(y)

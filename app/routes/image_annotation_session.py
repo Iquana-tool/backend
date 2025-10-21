@@ -67,6 +67,7 @@ class AnnotationSessionState(BaseModel):
                 create_mask(self.image_id)
             mask_id = session.query(Masks.id).filter_by(image_id=self.image_id).first()
             self.mask_id = mask_id
+        return self
 
 
 async def receive_msg(websocket: WebSocket) -> ClientMessage:
