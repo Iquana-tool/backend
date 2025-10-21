@@ -133,7 +133,7 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
 
 
 
-@router.websocket("/ws/annotation_session/user={user_id}&image={image_id}")
+@router.websocket("/ws/user={user_id}&image={image_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
     """WebSocket endpoint to handle real-time image annotation sessions. The image annotation session takes multiple
         messages from the user as input to start tasks in the background.
