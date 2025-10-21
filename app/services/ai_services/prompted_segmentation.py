@@ -5,7 +5,7 @@ import numpy as np
 
 from app.database.contours import Contours
 from app.database.images import Images
-from app.schemas.prompted_segmentation.segmentations import Prompts
+from app.schemas.prompted_segmentation.prompts import Prompts
 from paths import PROMPTED_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.database import get_context_session
 from logging import getLogger

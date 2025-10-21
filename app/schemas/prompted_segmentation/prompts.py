@@ -63,3 +63,15 @@ class CirclePrompt(BaseModel):
         if not (0 <= value <= 1):
             raise ValueError("Coordinates must be between 0 and 1.")
         return value
+
+
+class Prompts(BaseModel):
+    """ Model for validating a prompted prompted_segmentation request. One request represents one object to be segmented."""
+    point_prompts: list[PointPrompt] | None = Field(default=None,
+                                             description="A list of point prompts. Each point prompt must have x, y, and label.")
+    box_prompt: BoxPrompt | None = Field(default=None,
+                                         description="A bounding box prompt. Must have min_x, min_y, max_x, and max_y.")
+    circle_prompt: CirclePrompt | None = Field(default=None,
+                                               description="A circle prompt. Must have center_x, center_y, and radius.")
+    polygon_prompt: PolygonPrompt | None = Field(default=None,
+                                                 description="A polygon prompt. Must have a list of vertices.")
