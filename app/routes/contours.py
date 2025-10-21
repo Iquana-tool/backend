@@ -1,20 +1,17 @@
 import json
-import numpy as np
-from fastapi import Depends, HTTPException
-from sqlalchemy.orm import Session, joinedload
-from fastapi import APIRouter
 from logging import getLogger
 
+import numpy as np
+from fastapi import APIRouter
+from fastapi import Depends, HTTPException
+from sqlalchemy.orm import Session, joinedload
+
 from app.database import get_session
-from app.database.labels import Labels
-from app.database.images import Images
-from app.database.masks import Masks
 from app.database.contours import Contours
+from app.database.labels import Labels
+from app.database.masks import Masks
 from app.schemas.contours import Contour
-from app.services.database_access import get_height_width_of_image
 from app.services.labels import get_hierarchical_label_name
-from app.services.contours import find_parent_contour, coords_to_cv_contour
-from app.services.quantifications import ContourQuantifier
 
 router = APIRouter(prefix="/contours", tags=["contours"])
 logger = getLogger(__name__)

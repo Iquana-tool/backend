@@ -2,7 +2,7 @@ import numpy as np
 from app.services.contours import get_contours_from_binary_mask
 from app.services.postprocessing import postprocess_binary_mask
 from app.schemas.contours import Contour
-from app.schemas.segmentation.segmentations import SemanticSegmentationMask
+from app.schemas.prompted_segmentation.segmentations import SemanticSegmentationMask
 
 
 async def convert_numpy_masks_to_segmentation_mask_models(masks, qualities, label_map: dict = None, only_return_one: bool = True) \
@@ -15,7 +15,7 @@ async def convert_numpy_masks_to_segmentation_mask_models(masks, qualities, labe
         qualities (list of float): List of quality scores for each mask.
         label_map (dict, optional): Mapping from original labels to new labels. If None, uses original labels.
         only_return_one (bool): If True, returns only one contour per label. If False, returns all contours. This is used
-                    for prompted segmentation where we want to return only one contour per label.
+                    for prompted prompted_segmentation where we want to return only one contour per label.
 
     Returns:
         List[SegmentationMaskModel]: List of SegmentationMaskModel objects, each containing contours and predicted IoU."""

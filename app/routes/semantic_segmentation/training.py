@@ -42,7 +42,7 @@ async def cancel_training_of_model(model_id: str):
 
 @router.post("/start_training")
 async def start_training(request: TrainingRequest, db: Session = Depends(get_session)):
-    """ Start training a model for automatic segmentation.
+    """ Start training a model for automatic prompted_segmentation.
     This endpoint prepares the request with necessary parameters and forwards it to the Automatic Segmentation Service.
     Args:
         request (TrainingRequest): The training request containing dataset_id and other parameters.

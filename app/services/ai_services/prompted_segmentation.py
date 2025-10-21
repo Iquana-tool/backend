@@ -5,7 +5,7 @@ import numpy as np
 
 from app.database.contours import Contours
 from app.database.images import Images
-from app.schemas.segmentation.segmentations import Prompts
+from app.schemas.prompted_segmentation.segmentations import Prompts
 from paths import PROMPTED_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.database import get_context_session
 from logging import getLogger
@@ -14,7 +14,7 @@ logger = getLogger(__name__)
 
 
 async def check_backend():
-    """Check if the prompted segmentation backend is reachable.
+    """Check if the prompted prompted_segmentation backend is reachable.
     Returns:
         bool: True if the backend is reachable, False otherwise.
     """
@@ -23,12 +23,12 @@ async def check_backend():
         async with httpx.AsyncClient(timeout=10) as client:
             return await client.get(url)
     except (httpx.RequestError, httpx.HTTPStatusError) as e:
-        logger.error(f"Error checking prompted segmentation backend: {e}")
+        logger.error(f"Error checking prompted prompted_segmentation backend: {e}")
         return False
 
 
 async def upload_image(user_id: int, image_id: int):
-    """Upload an image to the prompted segmentation backend.
+    """Upload an image to the prompted prompted_segmentation backend.
     :param user_id: The user id.
     :param image_id: The image id.
     :returns dict: A dictionary containing the success status and message.
@@ -131,7 +131,7 @@ async def segment_image_with_prompts(user_id: int, model_identifier: str, prompt
     """Segment an image using 2D prompts.
     Args:
         user_id (str): Unique identifier for the user.
-        model_identifier (str): Identifier for the segmentation model.
+        model_identifier (str): Identifier for the prompted_segmentation model.
         prompts_request (dict): Dictionary containing point and box prompts.
     Returns:
         dict: A response dict

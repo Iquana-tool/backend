@@ -116,7 +116,7 @@ async def get_segmentation_mask_file(
     mask_id: int,
     db: Session = Depends(get_session)
 ):
-    """Download the segmentation mask file for the given mask_id."""
+    """Download the prompted_segmentation mask file for the given mask_id."""
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if not mask:
         return {

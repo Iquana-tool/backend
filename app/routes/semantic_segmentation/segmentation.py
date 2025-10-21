@@ -11,7 +11,7 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.contours import Contours
-from app.routes.masks import create_masks_and_add_contours_for_images
+from app.routes.masks import create_masks_and_add_contours_for_images, post_mask
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.routes.prompted_segmentation.util import convert_numpy_masks_to_segmentation_mask_models
 from logging import getLogger
@@ -23,10 +23,10 @@ router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation
 
 @router.post("/segment_batch/{model_id}")
 async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Session = Depends(get_session)):
-    """ Segment a batch of images using the automatic segmentation backend.
+    """ Segment a batch of images using the automatic prompted_segmentation backend.
 
     Args:
-        model_id (int): The ID of the model to use for segmentation.
+        model_id (int): The ID of the model to use for prompted_segmentation.
         image_ids (list[int]): List of image IDs to segment.
         db (Session): Database session dependency.
 
@@ -36,16 +36,9 @@ async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Se
     try:
         dataset_ids = db.query(Images.dataset_id).filter(Images.id.in_(image_ids)).distinct().all()
         if len(dataset_ids) > 1:
-            logger.error("Batch segmentation is being performed on images from multiple datasets. "
+            logger.error("Batch prompted_segmentation is being performed on images from multiple datasets. "
                            "This may lead to unexpected results.")
-        # Remove all previous contours first.
-        contours = db.query(Contours).join(Masks, Contours.mask_id == Masks.id).filter(Masks.image_id.in_(image_ids)).all()
-        if contours:
-            logger.info(f"Deleting {len(contours)} contours from the database before batch segmentation.")
-            for contour in contours:
-                # Delete contours from database
-                db.delete(contour)
-            db.commit()
+
         image_paths = list(db.query(Images.file_path).filter(Images.id.in_(image_ids)).all())
         image_paths = [tup[0] for tup in image_paths]
         response = await send_batch_request(model_id, image_paths)
@@ -84,22 +77,26 @@ async def segment_batch_with_backend(model_id: int, image_ids: list[int], db: Se
         raise e
 
 
-async def send_batch_request(model_id: int, image_paths: list[str]):
-    """ Send a batch request to the automatic segmentation backend.
+async def send_inference_request(model_registry_key: str, image_path: str, mask_id: int):
+    """ Send a batch request to the automatic prompted_segmentation backend.
 
     Args:
-        model_id (int): The ID of the model to use for segmentation.
-        image_paths (list[str]): List of image file paths to segment.
+        model_registry_key (str): The ID of the model to use for prompted_segmentation.
+        image_path (list[str]): Path to image file.
+        mask_id (int): The ID of the mask to add the result to.
 
     Returns:
-        httpx.Response: The response from the segmentation backend.
+        httpx.Response: The response from the prompted_segmentation backend.
     """
-    url = f"{BASE_URL}/segment/segment_batch"
+    url = f"{BASE_URL}/inference/start_inference/model={model_registry_key}&mask_id={mask_id}"
     files = [
-        ("files", (os.path.basename(p), open(p, "rb"), f"image/{p.rsplit('.', maxsplit=1)[-1]}"))
-        for p in image_paths
+        ("files",
+         (os.path.basename(image_path),
+                   open(image_path, "rb"),
+                   f"image/{image_path.rsplit('.', maxsplit=1)[-1]}")
+         )
     ]
-    data = {"model_id": model_id}
+    data = {"model_registry_key": model_registry_key, "mask_id": mask_id}
     logger.info(f"Sending request to {url} with {len(files)} files")
 
     try:

@@ -13,7 +13,7 @@ from app.database.images import Images
 from app.database.masks import Masks
 from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour, modify_contour
 from app.routes.masks import create_mask, finish_mask
-from app.schemas.segmentation.segmentations import Prompts
+from app.schemas.prompted_segmentation.segmentations import Prompts
 from app.services.ai_services import prompted_segmentation as prompted_service
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from app.schemas.contours import Contour
@@ -106,15 +106,15 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
     # Check for running backends
     running = []
     if not prompted_service.check_backend():
-        logger.error("Prompted segmentation backend is not reachable. Please make sure it is running.")
+        logger.error("Prompted prompted_segmentation backend is not reachable. Please make sure it is running.")
     else:
         running.append("prompted_segmentation")
-        logger.debug("Prompted segmentation backend is reachable.")
+        logger.debug("Prompted prompted_segmentation backend is reachable.")
 
     # Initialize backends by uploading the image etc.
     failed_initializations = []
     if not (await prompted_service.upload_image(user_id, image_id))["success"]:
-        logger.error(f"Failed to upload image {image_id} for user {user_id} to prompted segmentation backend.")
+        logger.error(f"Failed to upload image {image_id} for user {user_id} to prompted prompted_segmentation backend.")
         failed_initializations.append("prompted_segmentation")
 
     logger.info("Annotation session initialized.")
@@ -332,7 +332,7 @@ async def handle_automatic_select_model(websocket: WebSocket, client_msg: Client
 
 
 async def handle_automatic_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle segmentation using an automatic model. """
+    """ Handle prompted_segmentation using an automatic model. """
     raise NotImplementedError("Method not implemented yet!")
 
 
@@ -350,7 +350,7 @@ async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientM
 
 
 async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle segmentation using a prompted model. """
+    """ Handle prompted_segmentation using a prompted model. """
     model_identifier = client_msg.data.get("model_identifier")
     prompts_data = client_msg.data.get("prompts")
     prompts_model = Prompts.model_value(prompts_data)

@@ -9,7 +9,7 @@ from app.database.scans import Scans
 from app.routes.prompted_segmentation.util import get_contour_models
 from app.schemas.contours import Contour
 from app.schemas.labels import LabelHierarchy
-from app.schemas.segmentation.prompts import PointPrompt, BoxPrompt, PolygonPrompt, CirclePrompt
+from app.schemas.prompted_segmentation.prompts import PointPrompt, BoxPrompt, PolygonPrompt, CirclePrompt
 from logging import getLogger
 from collections import defaultdict
 from app.services.contours import get_contours_from_binary_mask
@@ -19,7 +19,7 @@ logger = getLogger(__name__)
 
 
 class Prompts(BaseModel):
-    """ Model for validating a prompted segmentation request. One request represents one object to be segmented."""
+    """ Model for validating a prompted prompted_segmentation request. One request represents one object to be segmented."""
     point_prompts: list[PointPrompt] | None = Field(default=None,
                                              description="A list of point prompts. Each point prompt must have x, y, and label.")
     box_prompt: BoxPrompt | None = Field(default=None,
@@ -54,7 +54,7 @@ class PromptedSegmentationRequest(BaseModel):
 class SemanticSegmentationMask(BaseModel):
     """ Model for semantic masks. """
     contours: List[Contour] = Field(default=[], description="List of objects represented by their contours.")
-    confidence: float = Field(default=0.0, description="Confidence score of the segmentation. This can be a predicted"
+    confidence: float = Field(default=0.0, description="Confidence score of the prompted_segmentation. This can be a predicted"
                                                        " IoU for example.")
 
 

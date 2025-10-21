@@ -14,7 +14,7 @@ from app.database.contours import Contours
 from app.routes.prompted_segmentation.util import convert_numpy_masks_to_segmentation_mask_models
 from app.schemas.contours import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
-from app.schemas.segmentation.segmentations import SemanticSegmentationMask
+from app.schemas.prompted_segmentation.segmentations import SemanticSegmentationMask
 from app.services.mask_generation import generate_mask
 from app.services.database_access import save_array_to_disk
 from app.services.labels import get_hierarchical_label_name
@@ -235,7 +235,7 @@ async def create_masks_and_add_contours_for_images(image_ids: list[int],
 
     Args:
         image_ids (list[int]): List of image IDs for which to create masks.
-        mask_responses (list[SemanticSegmentationMask]): List of segmentation mask responses containing contours.
+        mask_responses (list[SemanticSegmentationMask]): List of prompted_segmentation mask responses containing contours.
         db (Session): The database session.
 
     Returns:

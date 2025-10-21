@@ -8,7 +8,7 @@ import app.services.ai_services.prompted_segmentation as prompted_service
 from app.database import get_context_session
 from app.database.contours import Contours
 from app.routes.prompted_segmentation.util import convert_numpy_masks_to_segmentation_mask_models
-from app.schemas.segmentation.segmentations import PromptedSegmentationRequest, SegmentationResponse
+from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationRequest, SegmentationResponse
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/prompted_segmentation", tags=["prompted_segmentation"])
@@ -16,17 +16,17 @@ router = APIRouter(prefix="/prompted_segmentation", tags=["prompted_segmentation
 
 @router.get("/health")
 async def health_check():
-    """Health check endpoint to verify if the prompted segmentation backend is reachable."""
+    """Health check endpoint to verify if the prompted prompted_segmentation backend is reachable."""
     if await prompted_service.check_backend():
         return {
             "success": True,
-            "message": "Prompted segmentation backend is reachable.",
+            "message": "Prompted prompted_segmentation backend is reachable.",
             "response": None
         }
     else:
         return {
             "success": False,
-            "message": "Prompted segmentation backend is not reachable. Please make sure it is running.",
+            "message": "Prompted prompted_segmentation backend is not reachable. Please make sure it is running.",
             "response": None
         }
 
@@ -52,14 +52,14 @@ async def segment_image(request: PromptedSegmentationRequest):
     if not await prompted_service.check_backend():
         return {
             "success": False,
-            "message": "Prompted segmentation backend is not reachable. Please make sure it is running.",
+            "message": "Prompted prompted_segmentation backend is not reachable. Please make sure it is running.",
             "response": None
         }
-    logger.debug("Prompted segmentation backend is reachable.")
+    logger.debug("Prompted prompted_segmentation backend is reachable.")
 
     # First set the image in the model cache
     await prompted_service.upload_image("test", request.image_id)
-    logger.debug(f"Image {request.image_id} uploaded to prompted segmentation backend.")
+    logger.debug(f"Image {request.image_id} uploaded to prompted prompted_segmentation backend.")
 
     # Then, if a crop is provided, focus the model on the crop
     use_crop = request.parent_contour_id is not None
@@ -76,10 +76,10 @@ async def segment_image(request: PromptedSegmentationRequest):
                                                 min_y,
                                                 max_x,
                                                 max_y)
-        logger.debug(f"Image cropped to contour {request.parent_contour_id} for prompted segmentation.")
+        logger.debug(f"Image cropped to contour {request.parent_contour_id} for prompted prompted_segmentation.")
     else:
         await prompted_service.unfocus_crop("test")
-        logger.debug("Image uncropped for prompted segmentation.")
+        logger.debug("Image uncropped for prompted prompted_segmentation.")
 
     # Now segment the image
     response = await prompted_service.segment_image_with_prompts(
@@ -87,7 +87,7 @@ async def segment_image(request: PromptedSegmentationRequest):
         request.model,
         request.prompts,
     )
-    logger.debug("Prompted segmentation successful.")
+    logger.debug("Prompted prompted_segmentation successful.")
 
     mask = response["mask"]
     score = response["score"]
@@ -97,6 +97,6 @@ async def segment_image(request: PromptedSegmentationRequest):
     masks_response = await convert_numpy_masks_to_segmentation_mask_models([mask * request.label], [score])
     return {
         "success": True,
-        "message": "Prompted segmentation completed successfully.",
+        "message": "Prompted prompted_segmentation completed successfully.",
         "response": SegmentationResponse(masks=masks_response, image_id=request.image_id, model=request.model)
     }

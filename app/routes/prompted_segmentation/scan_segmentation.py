@@ -1,6 +1,6 @@
 import logging
 from fastapi import APIRouter
-from app.schemas.segmentation.segmentations import ScanPromptedSegmentationRequest, SegmentationResponse
+from app.schemas.prompted_segmentation.segmentations import ScanPromptedSegmentationRequest, SegmentationResponse
 
 
 logger = logging.getLogger(__name__)
@@ -20,4 +20,4 @@ async def segment_scan(request: ScanPromptedSegmentationRequest):
     Returns:
         SegmentationResponse: The response object containing the prompted_segmentation results.
     """
-    raise NotImplementedError("Scan segmentation is not yet implemented.")
+    raise NotImplementedError("Scan prompted_segmentation is not yet implemented.")

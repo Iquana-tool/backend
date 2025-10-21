@@ -6,10 +6,10 @@ from enum import StrEnum
 class ClientMessageType(StrEnum):
     FOCUS_IMAGE = "focus_image"  # Focus on a specific region of the image
     UNFOCUS_IMAGE = "unfocus_image"  # Revert to the original image
-    PROMPTED_SELECT_MODEL = "prompted_select_model"  # Select a model for prompted segmentation
-    PROMPTED_SEGMENTATION = "prompted_segmentation"  # Perform prompted segmentation
-    AUTOMATIC_SELECT_MODEL = "automatic_select_model"  # Select a model for automatic segmentation
-    AUTOMATIC_SEGMENTATION = "semantic_segmentation"  # Perform automatic segmentation
+    PROMPTED_SELECT_MODEL = "prompted_select_model"  # Select a model for prompted prompted_segmentation
+    PROMPTED_SEGMENTATION = "prompted_segmentation"  # Perform prompted prompted_segmentation
+    AUTOMATIC_SELECT_MODEL = "automatic_select_model"  # Select a model for automatic prompted_segmentation
+    AUTOMATIC_SEGMENTATION = "semantic_segmentation"  # Perform automatic prompted_segmentation
     COMPLETION_SELECT_MODEL = "completion_select_model"  # Select a model for mask completion
     COMPLETION_ENABLE = "completion_enable"  # Enable mask completion
     COMPLETION_DISABLE = "completion_disable"  # Disable mask completion
