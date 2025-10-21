@@ -55,7 +55,7 @@ class AnnotationSessionState(BaseModel):
     @field_validator("image_id", mode="before")
     def validate_image_id(cls, value, values):
         with get_context_session() as session:
-            if not session.query(Images).filter_by(id=value).exists():
+            if session.query(Images).filter_by(id=value).one() is None:
                 raise ValidationError(f"Image ID {value} does not exist.")
         return value
 
@@ -63,7 +63,7 @@ class AnnotationSessionState(BaseModel):
     def validate_model(self):
         """ Validate the model and fill fields that were not initialized yet."""
         with get_context_session() as session:
-            if not session.query(Masks).filter_by(image_id=self.image_id).exists():
+            if session.query(Masks).filter_by(image_id=self.image_id).first() is None:
                 create_mask(self.image_id)
             mask_id = session.query(Masks.id).filter_by(image_id=self.image_id).first()
             self.mask_id = mask_id
