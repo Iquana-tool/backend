@@ -55,7 +55,7 @@ class AnnotationSessionState(BaseModel):
     @field_validator("image_id", mode="before")
     def validate_image_id(cls, value, values):
         with get_context_session() as session:
-            if not session.query(Images).filter_by(image_id=value).exists():
+            if not session.query(Images).filter_by(id=value).exists():
                 raise ValidationError(f"Image ID {value} does not exist.")
         return value
 
