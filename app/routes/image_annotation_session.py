@@ -13,7 +13,7 @@ from app.database.images import Images
 from app.database.masks import Masks
 from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour, modify_contour
 from app.routes.masks import create_mask, finish_mask
-from app.schemas.prompted_segmentation.segmentations import Prompts
+from app.schemas.prompted_segmentation.prompts import Prompts
 from app.services.ai_services import prompted_segmentation as prompted_service
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from app.schemas.contours import Contour
