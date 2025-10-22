@@ -103,9 +103,6 @@ async def save_image_to_disk_and_db(image: AnyStr,
     Returns:
         int: The ID of the newly saved image in the database, or None if an error occurs.
     """
-    # Generate hash for the image
-    hash_code = generate_hash_for_image(image)
-
     # Check if image already exists in the database
     with get_context_session() as session:
         file_path = save_image_to_disk(image, dataset_id, scan_id,
