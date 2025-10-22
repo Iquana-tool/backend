@@ -23,3 +23,4 @@ class Contours(database):
     y = Column(JSON, nullable=False)
     # Easy access to children, this makes accessing children much faster
     children = relationship("Contours", backref="parent", remote_side=[id], single_parent=True)
+

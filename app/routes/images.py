@@ -1,28 +1,27 @@
+import io
+import json
 import logging
 import os.path
 import shutil
-from collections import defaultdict
-import json
+import zipfile
+from typing import Literal
 
 import cv2
-
-from paths import Paths
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
-from typing import Literal
-from app.routes.masks import delete_mask, create_mask
-from app.database import get_session
-from app.database.images import Images
-from app.database.scans import Scans
-from app.database.datasets import Datasets
-from app.database.masks import Masks
-from app.services.database_access import parse_log_file, get_height_width_of_image, save_as_low_res_image_to_disk
-from app.services.database_access import save_image_to_disk_and_db, load_image_as_base64_from_disk
-from app.services.util import extract_numbers
-import zipfile
-import io
 
+from app.database import get_session
+from app.database.datasets import Datasets
+from app.database.images import Images
+from app.database.masks import Masks
+from app.database.scans import Scans
+from app.routes.masks import delete_mask, create_mask
+from app.schemas.image import Image
+from app.services.database_access import parse_log_file, get_height_width_of_image, save_as_low_res_image_to_disk
+from app.services.database_access import save_image_to_disk_and_db
+from app.services.util import extract_numbers
+from paths import Paths
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
@@ -118,8 +117,8 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
             await delete_mask(mask.id, db)
         if os.path.exists(image.file_path):
             os.remove(image.file_path)  # Remove the original image file
-        if os.path.exists(os.path.join(Paths.thumbnails_dir, f"{image_id}.png")):
-            os.remove(os.path.join(Paths.thumbnails_dir, f"{image_id}.png"))  # Remove the thumbnail
+        if os.path.exists(image.thumbnail_file_path):
+            os.remove(image.thumbnail_file_path)  # Remove the thumbnail
         db.delete(image)
         db.commit()
         return {"success": True,
@@ -262,7 +261,7 @@ async def list_images_with_annotation_status(dataset_id: int, status: Literal["f
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/get_image/{image_id}&{low_res}", response_model=dict[int, str])
+@router.get("/get_image/{image_id}&{low_res}")
 async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(get_session)):
     """Get images via ids.
 
@@ -275,23 +274,20 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
         A dict mapping from image ID to base64 encoded image.
     """
     try:
-        response = {}
-        image = db.query(Images).filter_by(id=image_id).first()
-        file_path = image.file_path if not low_res else os.path.join(Paths.thumbnails_dir, f"{image_id}.png")
-        print(file_path)
-        if not os.path.exists(file_path) and low_res:
-            # The thumbnail has not been created yet, so create it
-            image = cv2.imread(image.file_path)
-            save_as_low_res_image_to_disk(image, image_id)
-        image_b64 = load_image_as_base64_from_disk(file_path)
-        if not image_b64:
-            raise HTTPException(status_code=404, detail="Image not found")
-        response[image_id] = image_b64
-        return response
+        image_query = db.query(Images).filter_by(id=image_id).first()
+        image = Image.from_db(image_query)
+        if low_res:
+            b64_str = image.load_thumbnail(as_base64=True)
+        else:
+            b64_str = image.load_image(as_base64=True)
+        return {
+            "success": True,
+            "message": f"Successfully retrieved image {image_id}.",
+            image_id: b64_str
+        }
     except Exception as e:
         logger.error(f"Get image error: {str(e)}")
         raise e
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/get_images")
@@ -311,16 +307,15 @@ async def get_images(image_ids: str, low_res: bool = False, db: Session = Depend
         image_ids = json.loads(image_ids)
         if not isinstance(image_ids, list):
             raise HTTPException(status_code=400, detail="image_ids must be a list")
-            
+
         response = {}
-        file_paths = db.query(Images.file_path, Images.id).filter(Images.id.in_(image_ids)).all()
-        for (fp, id) in file_paths:
-            file_path = fp if not low_res else os.path.join(Paths.thumbnails_dir, f"{id}.png")
-            if not os.path.exists(file_path) and low_res:
-                # The thumbnail has not been created yet, so create it
-                image = cv2.imread(fp)
-                save_as_low_res_image_to_disk(image, id)
-            response[id] = load_image_as_base64_from_disk(file_path)
+        images_query = db.query(Images).filter(Images.id.in_(image_ids)).all()
+        images = [Image.from_db(img) for img in images_query]
+        for img in images:
+            if low_res:
+                response[img.id] = img.load_thumbnail(as_base64=True)
+            else:
+                response[img.id] = img.load_image(as_base64=True)
         return {
             "success": True,
             "message": f"Successfully retrieved {len(image_ids)} images.",
@@ -328,7 +323,7 @@ async def get_images(image_ids: str, low_res: bool = False, db: Session = Depend
         }
     except Exception as e:
         logger.error(f"Get images error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise e
 
 
 @router.get("/get_images_of_dataset/{dataset_id}")
@@ -347,16 +342,13 @@ async def get_images_of_dataset(dataset_id: int, low_res: bool = False, limit: i
     """
     try:
         response = {}
-        images = db.query(Images).filter_by(dataset_id=dataset_id).limit(limit).all()
-        if not images:
-            raise HTTPException(status_code=404, detail="No images found for this dataset")
-        for image in images:
-            file_path = image.file_path if not low_res else os.path.join(Paths.thumbnails_dir, f"{image.id}.png")
-            if not os.path.exists(file_path) and low_res:
-                # The thumbnail has not been created yet, so create it
-                img = cv2.imread(image.file_path)
-                save_as_low_res_image_to_disk(img, image.id)
-            response[image.id] = load_image_as_base64_from_disk(file_path)
+        images_query = db.query(Images).filter_by(dataset_id=dataset_id).limit(limit).all()
+        images = [Image.from_db(img) for img in images_query]
+        for img in images:
+            if low_res:
+                response[id] = img.load_thumbnail(as_base64=True)
+            else:
+                response[id] = img.load_image(as_base64=True)
         return {
             "success": True,
             "message": f"Successfully retrieved {len(images)} images from dataset {dataset_id}.",
