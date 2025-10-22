@@ -31,7 +31,7 @@ async def health_check():
         }
 
 
-@router.post('/segment_image', deprecated=True)
+@router.post('/segment_image')
 async def segment_image(request: PromptedSegmentationRequest):
     """Perform prompted_segmentation with optional prompts, using data validation.
     This function handles the prompted_segmentation of images based on the provided request.
@@ -59,7 +59,7 @@ async def segment_image(request: PromptedSegmentationRequest):
 
     # First set the image in the model cache
     await prompted_service.upload_image("test", request.image_id)
-    logger.debug(f"Image {request.image_id} uploaded to prompted prompted_segmentation backend.")
+    logger.debug(f"Image {request.image_id} uploaded to prompted segmentation backend.")
 
     # Then, if a crop is provided, focus the model on the crop
     use_crop = request.parent_contour_id is not None
