@@ -126,6 +126,7 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
         data={
             "running": running,
             "failed": failed_initializations,
+            "objects": await get_contours_of_mask(state.mask_id),
         }
     )
 
