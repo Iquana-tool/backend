@@ -28,10 +28,6 @@ logger = getLogger(__name__)
 class AnnotationSessionState(BaseModel):
     """ A class to track the state of the annotation session. """
     image_id: int = Field(..., title="Image ID", description="The id of the image whose annotations are being done.")
-    mask_id: int = Field(default=None,
-                         init=False,  # Isnt initialized in the init
-                         title="Mask ID",
-                         description="The id of the mask who annotations are being added to.")
     user_id: int = Field(...,
                          title="User ID",
                          description="The id of the user who is annotating.")
@@ -59,15 +55,13 @@ class AnnotationSessionState(BaseModel):
                 raise ValidationError(f"Image ID {value} does not exist.")
         return value
 
-    @model_validator(mode="after")
-    def validate_model(self):
+    @property
+    def mask_id(self):
         """ Validate the model and fill fields that were not initialized yet."""
         with get_context_session() as session:
             if session.query(Masks).filter_by(image_id=self.image_id).first() is None:
                 create_mask(self.image_id)
-            mask_id = session.query(Masks.id).filter_by(image_id=self.image_id).first()
-            self.mask_id = mask_id
-        return self
+            return session.query(Masks.id).filter_by(image_id=self.image_id).first()
 
 
 async def receive_msg(websocket: WebSocket) -> ClientMessage:
