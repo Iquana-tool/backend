@@ -316,7 +316,8 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
             data=None
         ))
     if fields_to_be_updated:
-        response = await modify_contour(contour_id, **fields_to_be_updated)
+        with get_context_session() as session:
+            response = await modify_contour(contour_id, db=session, **fields_to_be_updated)
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
