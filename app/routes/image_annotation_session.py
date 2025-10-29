@@ -317,7 +317,8 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
             data=None
         ))
     if fields_to_be_updated:
-        response = await modify_contour(contour_id, **fields_to_be_updated)
+        with get_context_session() as session:
+            response = await modify_contour(contour_id, db=session, **fields_to_be_updated)
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
@@ -361,10 +362,11 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
     prompts_model = Prompts.model_validate(prompts_data)
     response_seg = await segment_image_with_prompts(state.user_id, model_identifier, prompts_model)
     contour = get_contours_from_binary_mask(response_seg["mask"], only_return_biggest=True).astype(float).squeeze()
-    contour[..., 1] = contour[..., 1] / response_seg["mask"].shape[1]
-    contour[..., 0] = contour[..., 0] / response_seg["mask"].shape[0]
-    x = contour[..., 1].squeeze().tolist()
-    y = contour[..., 0].squeeze().tolist()
+    
+    contour[..., 0] = contour[..., 0] / response_seg["mask"].shape[1]  
+    contour[..., 1] = contour[..., 1] / response_seg["mask"].shape[0] 
+    x = contour[..., 0].squeeze().tolist()
+    y = contour[..., 1].squeeze().tolist()
     contour_model = Contour(x=x,
                             y=y,
                             label=None,
