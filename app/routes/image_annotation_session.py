@@ -110,6 +110,9 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
             failed_initializations.append("prompted_segmentation")    
 
     logger.info("Annotation session initialized.")
+    with get_context_session() as session:
+        contours_response = await get_contours_of_mask(state.mask_id, db=session)
+        objects = contours_response.get("quantification", [])
     return ServerMessage(
         id="test",
         type=ServerMessageType.SESSION_INITIALIZED,
@@ -120,7 +123,7 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
         data={
             "running": running,
             "failed": failed_initializations,
-            "objects": await get_contours_of_mask(state.mask_id),
+            "objects": objects,
         }
     )
 
@@ -241,7 +244,8 @@ async def handle_unfocus_image(websocket: WebSocket, client_msg: ClientMessage, 
 async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle adding an object to the mask."""
     contour = Contour.model_validate_json(client_msg.data)
-    response = await add_contour(state.mask_id, contour, f"User {state.user_id}")
+    with get_context_session() as session:
+        response = await add_contour(state.mask_id, contour, db=session)
     if not response["success"]:
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
@@ -251,7 +255,9 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
             data=None,
         ))
     else:
-        updated_objects = await get_contours_of_mask(state.mask_id)
+        with get_context_session() as session:
+            contours_response = await get_contours_of_mask(state.mask_id, db=session)
+            updated_objects = contours_response.get("quantification", [])
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.OBJECT_ADDED,
@@ -266,7 +272,8 @@ async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage
         make them non temporary, they will be added to the mask and can be used for training.
     """
     contour_id = client_msg.data.get("contour_id")
-    response = await finalise(contour_id)
+    with get_context_session() as session:
+        response = await finalise(contour_id, db=session)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
@@ -284,7 +291,8 @@ async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage
 async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle removing an object from the mask. """
     contour_id = client_msg.data.get("contour_id")
-    response = await delete_contour(contour_id)
+    with get_context_session() as session:
+        response = await delete_contour(contour_id, db=session)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_REMOVED if response["success"] else ServerMessageType.ERROR,
