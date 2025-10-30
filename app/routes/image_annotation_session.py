@@ -102,6 +102,7 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
     if not await prompted_service.check_backend():
         logger.error("Prompted prompted_segmentation backend is not reachable. Please make sure it is running.")
         failed_initializations.append("prompted_segmentation")
+        raise ConnectionError("Prompted prompted_segmentation backend is not reachable. Please make sure it is running.")
     else:
         running.append("prompted_segmentation")
         logger.debug("Prompted prompted_segmentation backend is reachable.")
@@ -111,8 +112,10 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
 
     logger.info("Annotation session initialized.")
     with get_context_session() as session:
-        contours_response = await get_contours_of_mask(state.mask_id, db=session)
-        objects = contours_response.get("quantification", [])
+        contours_response = await get_contours_of_mask(state.mask_id,
+                                                       flattened=False,
+                                                       db=session)
+        objects = contours_response.get("contours", [])
     return ServerMessage(
         id="test",
         type=ServerMessageType.SESSION_INITIALIZED,

@@ -10,7 +10,7 @@ from app.database import get_session
 from app.database.contours import Contours
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.schemas.contours import Contour
+from app.schemas.contours import Contour, ContourHierarchy
 from app.services.labels import get_hierarchical_label_name
 
 router = APIRouter(prefix="/contours", tags=["contours"])
@@ -35,9 +35,9 @@ def build_hierarchical_json(mask_id, filter_labels_ids, db: Session, parent_id=N
 
     result = []
     for contour in contours:
+        contour_model = Contour.from_db(contour)
         label_name = get_hierarchical_label_name(contour.label)
         child_contours = build_hierarchical_json(mask_id, filter_labels_ids, db, contour.id)
-        diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
         coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
         result.append({
             "id": contour.id,
@@ -47,7 +47,7 @@ def build_hierarchical_json(mask_id, filter_labels_ids, db: Session, parent_id=N
             "area": contour.area,
             "perimeter": contour.perimeter,
             "circularity": contour.circularity,
-            "diameters": diameters,
+            "diameter": contour,
             "diameter_avg": np.average(diameters) if diameters else None,
             "coords": coords,
             "center_x": np.mean(coords["x"]) if coords and "x" in coords else None,
@@ -92,13 +92,12 @@ async def get_contours_of_mask(mask_id: int, flattened: bool = True, db: Session
         dict: A dictionary containing the success status and message if error, or a hierarchical JSON structure of
         contours for the given mask_id.
     """
-    quantification = build_hierarchical_json(mask_id, [], db)
-    if flattened:
-        quantification = flatten_hierarchical_dict(quantification)
+    contours_query = db.query(Contours).filter_by(mask_id=mask_id)
+    hierarchy = ContourHierarchy.from_query(contours_query)
     return {
         "success": True,
-        "message": f"Quantification data for mask {mask_id} exported successfully.",
-        "quantification": quantification
+        "message": f"Contours {'hierarchy' if not flattened else ''} retrieved.",
+        "contours": hierarchy.model_dump() if not flattened else hierarchy.dump_contours_as_list()
     }
 
 
@@ -217,7 +216,7 @@ async def add_contour(mask_id: int,
                 }
 
         # Add contour to the database
-        entry = contour_to_add.to_db_entry(mask_id[0])
+        entry = contour_to_add.to_db_entry(mask_id)
         db.add(entry)
         db.commit()
         contour_to_add.id = entry.id

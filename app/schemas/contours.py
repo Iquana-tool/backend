@@ -164,6 +164,19 @@ class ContourHierarchy(BaseModel):
             label_id_to_contours=label_id_to_contour,
         )
 
+    def dump_contours_as_list(self, breadth_first: bool = True) -> list[Contour]:
+        """ Dump all contours in the hierarchy as a list. Can be done in breadth first or depth first order. """
+        contours_list = []
+        queue = deque(self.root_contours)
+        while queue:
+            contour = queue.popleft()
+            contours_list.append(contour)
+            if breadth_first:
+                queue.extend(contour.children)
+            else:
+                queue.extendleft(reversed(contour.children))
+        return contours_list
+
     async def add_contours_from_mask_to_self_and_db(self,
                                                     mask_id: int,
                                                     np_mask: np.ndarray,
