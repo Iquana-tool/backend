@@ -51,7 +51,7 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
     """ Mark a mask as finished, generate it as an image file and upload it to the AI external service. """
     # Check if mask exists
     existing_mask = db.query(Masks).filter_by(id=mask_id).first()
-    if not db.query(Masks).filter_by(id=mask_id).exists():
+    if not existing_mask:
         raise HTTPException(status_code=404, detail="Mask not found.")
     print(f"Finishing this mask: {existing_mask}")
     # Check if the mask is already finished

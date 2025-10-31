@@ -129,7 +129,7 @@ class ContourHierarchy(BaseModel):
     """ A hierarchy of contours. """
     root_contours: list[Contour] = Field(default=[], description="List of objects represented by their contours.")
     id_to_contour: dict[int, Contour] = Field(default=None, description="Dict mapping contour id to object.")
-    label_id_to_contours: dict[int, list[Contour]] = Field(default=defaultdict(list),
+    label_id_to_contours: dict[int | None, list[Contour]] = Field(default=defaultdict(list),
                                                            description="Dict mapping label id to a list of objects.")
 
     @classmethod
