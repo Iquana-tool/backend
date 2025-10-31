@@ -427,7 +427,8 @@ async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMess
 
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle marking a mask as finished. """
-    response = await finish_mask(state.mask_id)
+    with get_context_session() as session:
+        response = await finish_mask(state.mask_id, db=session)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
