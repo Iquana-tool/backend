@@ -255,7 +255,8 @@ async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
         while stack:
             current = stack.pop()
             deleted_ids.append(current.id)
-            stack.extend(current.children)  # Add children to the stack
+            if current.children:  # Add children to the stack if they exist
+                stack.extend(current.children)
 
         # Delete the root contour (CASCADE will handle the rest)
         db.delete(contour)
