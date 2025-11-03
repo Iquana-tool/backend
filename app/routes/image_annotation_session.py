@@ -260,7 +260,7 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
     else:
         with get_context_session() as session:
             contours_response = await get_contours_of_mask(state.mask_id, db=session)
-            updated_objects = contours_response.get("quantification", [])
+            updated_objects = contours_response.get("contours", [])
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.OBJECT_ADDED,

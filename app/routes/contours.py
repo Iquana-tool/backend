@@ -221,6 +221,15 @@ async def add_contour(mask_id: int,
         db.commit()
         contour_to_add.id = entry.id
 
+        # Get image dimensions and compute path
+        from app.database.masks import Masks
+        from app.database.images import Images
+        mask = db.query(Masks).filter_by(id=mask_id).first()
+        if mask:
+            image = db.query(Images).filter_by(id=mask.image_id).first()
+            if image:
+                contour_to_add.compute_path(image.width, image.height)
+
         return {
             "success": True,
             "message": "Contour added successfully.",

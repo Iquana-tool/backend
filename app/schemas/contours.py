@@ -27,6 +27,7 @@ class Contour(BaseModel):
 
     x: list[float] = Field(default_factory=list, description="X-coordinates of the contour.")
     y: list[float] = Field(default_factory=list, description="Y-coordinates of the contour.")
+    path: str | None = Field(default=None, description="SVG path string for rendering the contour.")
 
     added_by: str = Field(default_factory=str, description="ID of the user or model who added this contour.")
     confidence: float = Field(default=1., description="Confidence score of the contour.")
@@ -58,6 +59,20 @@ class Contour(BaseModel):
     @property
     def points(self) -> np.ndarray[tuple[float, float]]:
         return np.array(list(zip(self.x, self.y)))
+
+    def compute_path(self, image_width: int, image_height: int):
+        """Compute SVG path from normalized coordinates (0-1) to pixel coordinates."""
+        if not self.x or not self.y or len(self.x) == 0:
+            self.path = ""
+            return
+        first_x = round(self.x[0] * image_width)
+        first_y = round(self.y[0] * image_height)
+        path = f"M {first_x} {first_y}"
+        for i in range(1, len(self.x)):
+            x = round(self.x[i] * image_width)
+            y = round(self.y[i] * image_height)
+            path += f" L {x} {y}"
+        self.path = path + " Z"
 
     def to_rescaled_contour(self, height, width):
         """ Return a rescaled contour given the height and width. """
@@ -95,8 +110,8 @@ class Contour(BaseModel):
         )
 
     @classmethod
-    def from_db(cls, contour: Contours):
-        return cls(
+    def from_db(cls, contour: Contours, image_width: int | None = None, image_height: int | None = None):
+        contour_obj = cls(
             id=contour.id,
             parent_id=contour.parent_id,
             label=contour.label,
@@ -111,6 +126,10 @@ class Contour(BaseModel):
                 max_diameter=contour.diameter,
             )
         )
+        # Compute SVG path if image dimensions are provided
+        if image_width is not None and image_height is not None:
+            contour_obj.compute_path(image_width, image_height)
+        return contour_obj
 
     def __in__(self, other):
         """
@@ -135,6 +154,18 @@ class ContourHierarchy(BaseModel):
     @classmethod
     def from_query(cls, query: Query[type[Contours]]) -> "ContourHierarchy":
         """ Adds all contours in a breadth first search, then connects them to a hierarchy. """
+        # Get image dimensions (all contours share same mask : image)
+        first_contour = query.first()
+        image_width, image_height = 1, 1
+        if first_contour:
+            from app.database.masks import Masks
+            from app.database.images import Images
+            mask = query.session.query(Masks).filter_by(id=first_contour.mask_id).first()
+            if mask:
+                image = query.session.query(Images).filter_by(id=mask.image_id).first()
+                if image:
+                    image_width, image_height = image.width, image.height
+
         # Fetch all root contours (parent_id is None)
         root_contours = query.filter_by(parent_id=None).all()
         root_ids = [contour.id for contour in root_contours]
@@ -149,7 +180,7 @@ class ContourHierarchy(BaseModel):
         # Build the hierarchy
         while queue:
             contour = queue.popleft()
-            contour_obj = Contour.from_db(contour)
+            contour_obj = Contour.from_db(contour, image_width, image_height)
             id_to_contour[contour.id] = contour_obj
             label_id_to_contour[contour.label].append(contour_obj)
             if contour.parent_id is not None:
