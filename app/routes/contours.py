@@ -218,6 +218,22 @@ async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
         raise HTTPException(status_code=500, detail="Error deleting contour.")
 
 
+@router.delete("/delete_temporary_contours_of_mask/{mask_id}")
+async def delete_temporary_contours_of_mask(mask_id: int, db: Session = Depends(get_session)):
+    """ Deletes all temporary contours of a mask. """
+    try:
+        contours = db.query(Contours).filter_by(mask_id=mask_id, temporary=True).delete()
+        db.commit()
+        return {
+            "success": True,
+            "message": f"Deleted {contours} temporary contours of mask {mask_id}"
+        }
+    except Exception as e:
+        logger.error(e)
+        db.rollback()
+        raise e
+
+
 @router.post("/add_contours")
 async def add_contours(mask_id: int,
                        contours_to_add: list[Contour],
