@@ -14,7 +14,7 @@ router = APIRouter(prefix="/labels", tags=["labels"])
 @router.get("/get_labels/{dataset_id}")
 async def get_labels(dataset_id: int, db: Session = Depends(get_session)):
     """Retrieve all labels for a given dataset."""
-    labels = db.query(Labels).filter_by(dataset_id=dataset_id).all()
+    labels = db.query(Labels).filter_by(dataset_id=dataset_id)
     labels_hierarchy = LabelHierarchy.from_query(labels)
     return {
         "success": True,
