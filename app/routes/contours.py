@@ -226,7 +226,7 @@ async def delete_temporary_contours_of_mask(mask_id: int, db: Session = Depends(
         db.commit()
         return {
             "success": True,
-            "message": f"Deleted {contours} temporary contours of mask {mask_id}"
+            "message": f"Deleted all temporary contours of mask {mask_id}"
         }
     except Exception as e:
         logger.error(e)
