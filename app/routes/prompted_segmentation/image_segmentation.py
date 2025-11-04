@@ -32,6 +32,17 @@ async def health_check():
         }
 
 
+@router.get("/models")
+async def get_available_models():
+    """Retrieve the list of available prompted segmentation models from the backend."""
+    models = await prompted_service.get_available_models()
+    return {
+        "success": True,
+        "message": "Retrieved available prompted segmentation models.",
+        "response": models
+    }
+
+
 @router.post('/segment_image')
 async def segment_image(request: PromptedSegmentationHTTPRequest):
     """Perform prompted_segmentation with optional prompts, using data validation.

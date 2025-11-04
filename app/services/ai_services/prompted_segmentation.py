@@ -29,6 +29,16 @@ async def check_backend():
         logger.error(f"Error checking prompted prompted_segmentation backend: {e}")
         return False
 
+async def get_available_models():
+    """Retrieve the list of available prompted segmentation models from the backend.
+    Returns:
+        dict: A dictionary containing the list of available models.
+    """
+    url = f"{BASE_URL}/models/available"
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+    return response.json()
 
 async def upload_image(user_id: int, image_id: int):
     """Upload an image to the prompted prompted_segmentation backend.
