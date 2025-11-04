@@ -9,11 +9,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_core import ValidationError
 
 from app.database import get_context_session
+from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
 from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour, modify_contour
 from app.routes.masks import create_mask, finish_mask
 from app.schemas.prompted_segmentation.prompts import Prompts
+from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
 from app.services.ai_services import prompted_segmentation as prompted_service
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from app.schemas.contours import Contour
@@ -393,7 +395,25 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
     model_identifier = client_msg.data.get("model_identifier")
     prompts_data = client_msg.data.get("prompts")
     prompts_model = Prompts.model_validate(prompts_data)
-    response_seg = await segment_image_with_prompts(state.user_id, model_identifier, prompts_model)
+
+    if state.refinement_contour_id is not None:
+        # Get the contour to refine
+        with get_context_session() as session:
+            contour = session.query(Contours).filter_by(id=state.refine_contour_id).first()
+            contour_model = Contour.from_db(contour)
+        previous_mask = contour_model.to_binary_mask(1000, 1000)
+        logger.debug(f"Using contour {state.refine_contour_id} as previous mask for refinement.")
+    else:
+        previous_mask = None
+
+    websocket_request = PromptedSegmentationWebsocketRequest(
+        user_id=state.user_id,
+        model_identifier=model_identifier,
+        previous_mask=previous_mask,
+        prompts=prompts_model,
+    )
+
+    response_seg = await segment_image_with_prompts(websocket_request)
     contour = get_contours_from_binary_mask(response_seg["mask"], only_return_biggest=True).astype(float).squeeze()
     
     contour[..., 0] = contour[..., 0] / response_seg["mask"].shape[1]  
