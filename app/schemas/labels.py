@@ -1,5 +1,4 @@
 from collections import deque
-from typing import Any, Self
 
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Query
@@ -18,7 +17,6 @@ class Label(BaseModel):
     
     @classmethod
     def from_db(cls, label: Labels):
-        label = label
         return Label(
             id=label.id,
             dataset_id=label.dataset_id,
@@ -33,9 +31,15 @@ class Label(BaseModel):
     
     
 class LabelHierarchy(BaseModel):
-    root_level_labels: list[Label] = Field(..., description="The label hierarchy.")
-    id_to_label_object: dict[int, Label]
-    value_to_label_object: dict[int, Label]
+    root_level_labels: list[Label] = Field(..., description="The label hierarchy. A list of root-level Label objects. "
+                                                            "Each Label object may have children forming a tree structure.")
+    id_to_label_object: dict[int, Label] = Field(..., description="A dictionary mapping label ids to Label objects.")
+    value_to_label_object: dict[int, Label] = Field(...,
+                                                    description="A dictionary mapping label values to Label objects. "
+                                                                "The difference between id and value is that ids are "
+                                                                "unique to the database, while values are unique to the "
+                                                                "dataset only (ie datasets can have labels with the same "
+                                                                "value but not with the same id.")
 
     @classmethod
     def from_query(cls, query: "Query[type[Labels]]"):
@@ -67,6 +71,9 @@ class LabelHierarchy(BaseModel):
             id_to_label_object=id_to_label,
             value_to_label_object=value_to_label,
            )
+
+    def __len__(self):
+        return len(self.id_to_label_object.keys())
 
     def get_parent_by_id_of_child(self, child_id):
         child = self.id_to_label_object[child_id]
