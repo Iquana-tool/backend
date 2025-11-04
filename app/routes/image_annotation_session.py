@@ -46,6 +46,8 @@ class AnnotationSessionState(BaseModel):
                                                     " that the object for example overlaps with another.")
     focussed_contour_id: int | None = Field(default=None,
                                             description="The id of the focussed contour.")
+    refinement_contour_id: int | None = Field(default=None,
+                                                description="The id of the contour being refined.")
 
 
     @field_validator("image_id", mode="before")
@@ -180,6 +182,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
                     await handle_focus_image(websocket, client_msg, state)
                 case ClientMessageType.UNFOCUS_IMAGE:
                     await handle_unfocus_image(websocket, client_msg, state)
+                case ClientMessageType.SELECT_REFINEMENT_OBJECT:
+                    await handle_select_refinement_object(websocket, client_msg, state)
+                case ClientMessageType.UNSELECT_REFINEMENT_OBJECT:
+                    await handle_unselect_refinement_object(websocket, client_msg, state)
                 case ClientMessageType.OBJECT_ADD_MANUAL:
                     await handle_object_add(websocket, client_msg, state)
                 case ClientMessageType.OBJECT_FINALISE:
@@ -241,6 +247,29 @@ async def handle_unfocus_image(websocket: WebSocket, client_msg: ClientMessage, 
         type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
         success=response["success"],
         message=response["message"],
+        data=None
+    ))
+
+async def handle_select_refinement_object(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+    """ Handle the client selecting an object for refinement."""
+    refinement_contour_id = client_msg.data.get("contour_id")
+    state.refinement_contour_id = refinement_contour_id
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.SUCCESS,
+        success=True,
+        message=f"Selected contour {refinement_contour_id} for refinement.",
+        data=None
+    ))
+
+async def handle_unselect_refinement_object(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+    """ Handle the client unselecting an object for refinement."""
+    state.refinement_contour_id = None
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.SUCCESS,
+        success=True,
+        message=f"Unselected contour for refinement.",
         data=None
     ))
 
@@ -361,7 +390,6 @@ async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientM
 
 async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle prompted_segmentation using a prompted model. """
-    print("Clinet msg data:", client_msg.data)
     model_identifier = client_msg.data.get("model_identifier")
     prompts_data = client_msg.data.get("prompts")
     prompts_model = Prompts.model_validate(prompts_data)
