@@ -3,6 +3,7 @@ from typing import List
 
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
+from starlette.websockets import WebSocketDisconnect
 from logging import getLogger
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -77,15 +78,18 @@ async def receive_msg(websocket: WebSocket) -> ClientMessage:
     except ValidationError as e:
         # Client message couldn't be validated, send an error message
         logger.error(f"Client message couldn't be validated, sent an error message. \n{str(e)}")
-        raise e
-        await send_msg(websocket,
-                       ServerMessage(
-                           id="0",
-                           type=ServerMessageType.ERROR,
-                           message=f"Client message could not be validated. See error here:\n{str(e)}",
-                           data=None,
-                           success=False
-                       ))
+        try:
+            await send_msg(websocket,
+                           ServerMessage(
+                               id="0",
+                               type=ServerMessageType.ERROR,
+                               message=f"Client message could not be validated. See error here:\n{str(e)}",
+                               data=None,
+                               success=False
+                           ))
+        except Exception:
+            # Websocket might already be closed, ignore
+            pass
         raise e
 
 
@@ -216,12 +220,33 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
                 case _:
                     # Ignore erroneous messages from the client
                     pass
+    except WebSocketDisconnect:
+        # Client disconnected normally, just log and exit
+        logger.info(f"WebSocket disconnected for user {user_id} and image {image_id}")
+        print(f"WebSocket disconnected for user {user_id} and image {image_id}")
     except Exception as e:
         logger.error(f"WebSocket connection error for user {user_id} and image {image_id}: {e}")
         print(f"Error: {e}")
-        raise e
+        # Try to send error message if websocket is still open
+        try:
+            await send_msg(websocket, ServerMessage(
+                id="error",
+                type=ServerMessageType.ERROR,
+                message=f"An error occurred: {str(e)}",
+                success=False,
+                data=None
+            ))
+        except Exception:
+            # Websocket might already be closed, ignore
+            pass
     finally:
-        await websocket.close()
+        # Only close if websocket is still open
+        try:
+            if websocket.client_state.name != "DISCONNECTED":
+                await websocket.close()
+        except Exception:
+            # Websocket might already be closed, ignore
+            pass
 
 
 
@@ -406,7 +431,7 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
         previous_mask = None
 
     websocket_request = PromptedSegmentationWebsocketRequest(
-        user_id=state.user_id,
+        user_id=str(state.user_id),
         model_identifier=model_identifier,
         previous_mask=previous_mask,
         prompts=prompts_model,
