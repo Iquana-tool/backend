@@ -6,6 +6,8 @@ from enum import StrEnum
 class ClientMessageType(StrEnum):
     FOCUS_IMAGE = "focus_image"  # Focus on a specific region of the image
     UNFOCUS_IMAGE = "unfocus_image"  # Revert to the original image
+    SELECT_REFINEMENT_OBJECT = "refine_object"  # Refine an existing object with new prompts
+    UNSELECT_REFINEMENT_OBJECT = "unselect_refinement_object"  # Unselect the object being refined
     PROMPTED_SELECT_MODEL = "prompted_select_model"  # Select a model for prompted prompted_segmentation
     PROMPTED_SEGMENTATION = "prompted_segmentation"  # Perform prompted prompted_segmentation
     AUTOMATIC_SELECT_MODEL = "automatic_select_model"  # Select a model for automatic prompted_segmentation
