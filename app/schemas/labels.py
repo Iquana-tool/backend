@@ -12,7 +12,7 @@ class Label(BaseModel):
     name: str = Field(..., description="Human-readable name of the label.")
     value: int = Field(..., description="The label value, eg. what value does it map to. Usually different from the id."
                                         "Values are unique to the dataset.")
-    parent_id: int = Field(..., description="The parent label's id.")
+    parent_id: int | None = Field(None, description="The parent label's id.")
     children: list["Label"] = Field([], description="The child label object.")
     
     @classmethod
