@@ -35,7 +35,7 @@ async def health_check():
 @router.get("/models")
 async def get_available_models():
     """Retrieve the list of available prompted segmentation models from the backend."""
-    models = await prompted_service.get_available_models()
+    models = await prompted_service.get_models()
     return {
         "success": True,
         "message": "Retrieved available prompted segmentation models.",
