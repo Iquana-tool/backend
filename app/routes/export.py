@@ -1,20 +1,22 @@
-from logging import getLogger
-import numpy as np
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse
-import pandas as pd
+import io
 import json
 import os
 import zipfile
-import io
 from io import StringIO
-from app.database import get_session
+from logging import getLogger
+
+import numpy as np
+import pandas as pd
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
-from app.database.masks import Masks
+
+from app.database import get_session
 from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
-from app.routes.contours import flatten_hierarchical_dict, get_contours_of_mask
+from app.database.masks import Masks
+from app.routes.contours import get_contours_of_mask
 from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path
 
@@ -26,9 +28,8 @@ logger = getLogger(__name__)
 async def get_mask_csv(mask_id: int, db: Session = Depends(get_session)):
     """ Download quantification data for the given mask_id as a CSV file. """
     image_name = db.query(Images.file_name).join(Masks, Images.id == Masks.image_id).filter(Masks.id == mask_id).first()
-    response = await get_contours_of_mask(mask_id, db)
-    flat_list = flatten_hierarchical_dict(response["quantification"])
-    df = pd.DataFrame(flat_list)
+    response = await get_contours_of_mask(mask_id, True, db)
+    df = pd.DataFrame(response["contours"])
     csv_content = df.to_csv(index=False)
     response = StreamingResponse(StringIO(csv_content), media_type="text/csv")
     response.headers["Content-Disposition"] = f'attachment; filename="{image_name[0]}_quantifications.csv"'

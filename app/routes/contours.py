@@ -1,7 +1,4 @@
-import json
 from logging import getLogger
-
-import numpy as np
 from fastapi import APIRouter
 from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
@@ -11,70 +8,9 @@ from app.database.contours import Contours
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.schemas.contours import Contour, ContourHierarchy
-from app.services.labels import get_hierarchical_label_name
 
 router = APIRouter(prefix="/contours", tags=["contours"])
 logger = getLogger(__name__)
-
-
-def build_hierarchical_json(mask_id, filter_labels_ids, db: Session, parent_id=None):
-    """ Build a hierarchical JSON structure of contours for a given mask_id.
-
-    Args:
-        mask_id (int): The ID of the mask to filter contours.
-        filter_labels_ids (list[int]): Optional list of label IDs to filter contours.
-        db (Session): The database session.
-        parent_id (int): Optional parent contour ID to filter contours.
-
-    Returns:
-        list: A list of contours in hierarchical JSON format."""
-    query = db.query(Contours).filter_by(mask_id=mask_id, parent_id=parent_id)
-    if filter_labels_ids:
-        query = query.filter(Contours.label.in_(filter_labels_ids))
-    contours = query.all()
-
-    result = []
-    for contour in contours:
-        contour_model = Contour.from_db(contour)
-        label_name = get_hierarchical_label_name(contour.label)
-        child_contours = build_hierarchical_json(mask_id, filter_labels_ids, db, contour.id)
-        coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
-        result.append({
-            "id": contour.id,
-            "label": contour.label,
-            "label_name": label_name,
-            "parent_id": parent_id,
-            "area": contour.area,
-            "perimeter": contour.perimeter,
-            "circularity": contour.circularity,
-            "diameter": contour,
-            "diameter_avg": np.average(diameters) if diameters else None,
-            "coords": coords,
-            "center_x": np.mean(coords["x"]) if coords and "x" in coords else None,
-            "center_y": np.mean(coords["y"]) if coords and "y" in coords else None,
-            "children": child_contours
-        })
-    return result
-
-
-def flatten_hierarchical_dict(hierarchical_dict, parent_id=None):
-    """ Flatten a hierarchical dictionary into a list of dictionaries.
-
-    Args:
-        hierarchical_dict (list): The hierarchical dictionary to flatten.
-        parent_id (int): The parent ID for the current level.
-
-    Returns:
-        list: A flattened list of dictionaries."""
-    flat_list = []
-    for item in hierarchical_dict:
-        flat_item = {
-            k: v for k, v in item.items() if k != "children"
-        }
-        flat_list.append(flat_item)
-        if item.get("children"):
-            flat_list.extend(flatten_hierarchical_dict(item["children"], item["id"]))
-    return flat_list
 
 
 @router.get("/get_contours_of_mask/{mask_id}&flattened={flattened}")
