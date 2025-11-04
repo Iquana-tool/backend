@@ -18,7 +18,7 @@ async def get_labels(dataset_id: int, db: Session = Depends(get_session)):
     labels_hierarchy = LabelHierarchy.from_query(labels)
     return {
         "success": True,
-        "message": f"Retrieved {len(labels)} labels for dataset {dataset_id}.",
+        "message": f"Retrieved {len(labels_hierarchy)} labels for dataset {dataset_id}.",
         "labels": labels_hierarchy.model_dump()
     }
 

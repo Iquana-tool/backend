@@ -59,7 +59,6 @@ class AnnotationSessionState(BaseModel):
                 raise ValidationError(f"Image ID {value} does not exist.")
         return value
 
-    @property
     async def mask_id(self):
         """ Validate the model and fill fields that were not initialized yet."""
         with get_context_session() as session:
@@ -116,7 +115,7 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
 
     logger.info("Annotation session initialized.")
     with get_context_session() as session:
-        contours_response = await get_contours_of_mask(state.mask_id,
+        contours_response = await get_contours_of_mask(await state.mask_id(),
                                                        flattened=False,
                                                        db=session)
         objects = contours_response.get("contours", [])
@@ -279,7 +278,7 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
     """ Handle adding an object to the mask."""
     contour = Contour.model_validate_json(client_msg.data)
     with get_context_session() as session:
-        response = await add_contour(state.mask_id, contour, db=session)
+        response = await add_contour(await state.mask_id(), contour, db=session)
     if not response["success"]:
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
@@ -290,7 +289,7 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
         ))
     else:
         with get_context_session() as session:
-            contours_response = await get_contours_of_mask(state.mask_id, db=session)
+            contours_response = await get_contours_of_mask(await state.mask_id(), db=session)
             updated_objects = contours_response.get("contours", [])
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
@@ -430,7 +429,7 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
                             )
     with get_context_session() as session:
         response = await add_contour(
-            mask_id=state.mask_id,
+            mask_id=await state.mask_id(),
             contour_to_add=contour_model,
             db=session,
         )
@@ -476,7 +475,7 @@ async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMess
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle marking a mask as finished. """
     with get_context_session() as session:
-        response = await finish_mask(state.mask_id, db=session)
+        response = await finish_mask(await state.mask_id(), db=session)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
