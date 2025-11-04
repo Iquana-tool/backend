@@ -56,11 +56,11 @@ class AnnotationSessionState(BaseModel):
         return value
 
     @property
-    def mask_id(self):
+    async def mask_id(self):
         """ Validate the model and fill fields that were not initialized yet."""
         with get_context_session() as session:
             if session.query(Masks).filter_by(image_id=self.image_id).first() is None:
-                create_mask(self.image_id)
+                await create_mask(self.image_id)
             return session.query(Masks.id).filter_by(image_id=self.image_id).first().id
 
 
