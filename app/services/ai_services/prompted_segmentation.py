@@ -140,8 +140,9 @@ async def segment_image_with_prompts(request: PromptedSegmentationWebsocketReque
 
      # Send the request to the backend
     async with httpx.AsyncClient(timeout=120) as client:
-        url = f"{BASE_URL}/annotation_session/segment_image_with_prompts"
-        response = await client.post(url, json=request.model_dump(exclude_none=True))
+        url = f"{BASE_URL}/annotation_session/segment_image_with_prompts/model={request.model_identifier}&user_uid={request.user_id}"
+        # Only send the prompts in the body
+        response = await client.post(url, json=request.prompts.model_dump(exclude_none=True))
 
         response.raise_for_status()
         # Extract metadata from headers
