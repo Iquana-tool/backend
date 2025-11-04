@@ -74,6 +74,16 @@ class Contour(BaseModel):
             path += f" L {x} {y}"
         self.path = path + " Z"
 
+    def to_binary_mask(self, height, width) -> np.ndarray:
+        """ Return a binary mask given the height and width. """
+        binary_mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.drawContours(binary_mask,
+                         self.to_rescaled_contour(height, width),
+                         -1,  # -1 means fill the contour
+                         1,
+                         thickness=cv2.FILLED)
+        return binary_mask
+
     def to_rescaled_contour(self, height, width):
         """ Return a rescaled contour given the height and width. """
         rescaled_x = (np.array(self.x) * height).asytpe(int)
