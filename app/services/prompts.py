@@ -29,7 +29,7 @@ class Prompts:
                 list of two floats representing the x and y coordinates of the vertex.
         """
         for point in seg_req.point_prompts:
-            self.add_point_annotation(point.x, point.y, point.label)
+            self.add_point_annotation(point.x, point.y, point.label_id)
         box = seg_req.box_prompt
         if box:
             self.add_box_annotation(box.min_x, box.min_y, box.max_x, box.max_y)

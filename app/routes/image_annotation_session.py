@@ -374,7 +374,7 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
     y = contour[..., 1].squeeze().tolist()
     contour_model = Contour(x=x,
                             y=y,
-                            label=None,
+                            label_id=None,
                             added_by=model_identifier,
                             temporary=True,
                             parent_id=None,

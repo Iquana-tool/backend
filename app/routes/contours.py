@@ -184,9 +184,9 @@ async def add_contour(mask_id: int,
     """
     try:
         parent_contour_id = contour_to_add.parent_id
-        expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label).first())
+        expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label_id).first())
         should_have_parent = expected_parent_label is not None
-        if contour_to_add.label is not None:
+        if contour_to_add.label_id is not None:
             if should_have_parent and parent_contour_id is None:
                 # Contour should have a parent but none was given.
                 logger.error(f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).")

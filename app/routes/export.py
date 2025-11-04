@@ -79,13 +79,13 @@ async def get_dataset_csv(dataset_id: int,
     df_data = {}
     for row in data:
         contour, file_name, finished, generated = row
-        label_name = get_hierarchical_label_name(contour.label)
+        label_name = get_hierarchical_label_name(contour.label_id)
         diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
         coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
 
         df_data.setdefault("file_name", []).append(file_name)
         df_data.setdefault("label", []).append(label_name)
-        df_data.setdefault("label_id", []).append(contour.label)
+        df_data.setdefault("label_id", []).append(contour.label_id)
         df_data.setdefault("contour_id", []).append(contour.id)
         df_data.setdefault("area", []).append(contour.area)
         df_data.setdefault("perimeter", []).append(contour.perimeter)

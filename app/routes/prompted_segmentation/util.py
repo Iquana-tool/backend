@@ -52,6 +52,6 @@ def get_contour_models(contours, label, height, width):
         contour_models.append(Contour(
             x=x_coords.tolist(),
             y=y_coords.tolist(),
-            label=label
+            label_id=label
         ))
     return contour_models

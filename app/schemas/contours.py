@@ -20,7 +20,7 @@ logger = getLogger(__name__)
 class Contour(BaseModel):
     """ Model for a contour to be added. """
     id: int | None = Field(default=None, description="Contour id. Only pass None if the id is not yet known.")
-    label: int | None = Field(default=None, description="ID of the label of the mask. None for unlabelled contour.")
+    label_id: int | None = Field(default=None, description="ID of the label of the mask. None for unlabelled contour.")
     parent_id: int | None = Field(default=None, description="ID of the parent contour. None if the contour has "
                                                                     "no parent")
     children: list["Contour"] = Field(default=[], description="List of objects represented by their contours.")
@@ -86,7 +86,7 @@ class Contour(BaseModel):
             mask_id=mask_id,
             x=json.dumps(self.x),
             y=json.dumps(self.y),
-            label=self.label,
+            label=self.label_id,
             parent_id=self.parent_id,
             temporary=self.temporary,
             added_by=self.added_by,
@@ -104,7 +104,7 @@ class Contour(BaseModel):
         return cls(
             x=x_coords.tolist(),
             y=y_coords.tolist(),
-            label=label,
+            label_id=label,
             added_by=added_by,
             temporary=temporary,
         )
@@ -114,7 +114,7 @@ class Contour(BaseModel):
         contour_obj = cls(
             id=contour.id,
             parent_id=contour.parent_id,
-            label=contour.label,
+            label_id=contour.label,
             x=json.loads(contour.x),
             y=json.loads(contour.y),
             added_by=contour.added_by,
@@ -290,11 +290,11 @@ class ContourHierarchy(BaseModel):
             # Remove the oldest entry
             contour = queue.popleft()
             # If the contour has no label we cannot add it to the mask
-            if contour.label:
+            if contour.label_id:
                 canvas = cv2.drawContours(canvas,
                                           contour.to_rescaled_contour(height, width),
-                                          -1, # -1 means fill the contour
-                                          [label_id_to_value_map[contour.label]],
+                                          -1,  # -1 means fill the contour
+                                          [label_id_to_value_map[contour.label_id]],
                                           1)
                 # Add all children to the queue
                 if len(contour.children) > 0:
