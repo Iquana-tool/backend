@@ -10,16 +10,24 @@ from logging import getLogger
 logger = getLogger(__name__)
 
 
-class PromptedSegmentationRequest(BaseModel):
+class PromptedSegmentationHTTPRequest(BaseModel):
     """ Model for validating the prompted_segmentation request. """
-    apply_post_processing: bool = True
-    image_id: int = 1
-    mask_id: int = None
-    parent_contour_id: int = None
-    previous_contours: List[Contour] = None
-    model: Union[int, str] = "sam2_tiny"
-    prompts: Prompts
-    label: Annotated[int, "Label of the mask."] = 0
+    apply_post_processing: bool = Field(default=True, description="Apply post-processing to the segmentation mask.")
+    image_id: int = Field(..., description="The id of the image to be segmented.")
+    mask_id: int = Field(..., description="The id of the mask to which the found contours shall be linked.")
+    parent_contour_id: int | None = Field(None, description="The id of the parent contour to which the new contour will "
+                                                            "belong. The new contour will be added as a child of this "
+                                                            "contour and cannot lie outside of it. Additionally, the "
+                                                            "prompted segmentation will only look at the patch of the "
+                                                            "parent contour for segmentation. None if the new contour "
+                                                            "has no parent.")
+    refine_contour_id: int | None = Field(None, description="The id of the contour that you want to refine. None if you"
+                                                            " don't want to refine any contour, but run normal prompted "
+                                                            "segmentation.")
+    model_registry_key: str = Field(default="sam2_tiny", description="The model registry key to use for segmentation. "
+                                                                     "This key is used to look up the model in the model "
+                                                                     "registry of the prompted service.")
+    prompts: Prompts = Field(..., description="The prompts to use for segmentation.")
 
     @field_validator('image_id')
     def validate_image_id(cls, value):
@@ -29,6 +37,16 @@ class PromptedSegmentationRequest(BaseModel):
             elif session.query(Images).filter_by(id=value).first() is None:
                 raise ValueError("image_id does not exist in the database.")
             return value
+
+
+class PromptedSegmentationWebsocketRequest(BaseModel):
+    """ Model for 2D segmentation form data. """
+    model_identifier: str = Field(..., title="Model identifier", description="Model identifier string. "
+                                                                             "Used to select the model.")
+    user_id: str = Field(..., title="User ID", description="Unique identifier for the user.")
+    prompts: Prompts = Field(..., title="Prompts", description="Prompts for segmentation")
+    previous_mask: list[list[bool]] | None = Field(None, title="Previous Mask",
+                                                  description="Optional previous mask to provide context.")
 
 
 class SemanticSegmentationMask(BaseModel):
