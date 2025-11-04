@@ -1,7 +1,10 @@
 import json
+from typing import Union
 
 import httpx
 import numpy as np
+
+from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
 from paths import Paths
 from app.database.contours import Contours
 from app.database.images import Images
@@ -128,20 +131,18 @@ async def close_image(user_id: int):
         response.raise_for_status()
     return response.json()
 
-async def segment_image_with_prompts(user_id: int, model_identifier: str, prompts_request: Prompts):
+async def segment_image_with_prompts(request: PromptedSegmentationWebsocketRequest):
     """Segment an image using 2D prompts.
     Args:
-        user_id (str): Unique identifier for the user.
-        model_identifier (str): Identifier for the prompted_segmentation model.
-        prompts_request (dict): Dictionary containing point and box prompts.
+        request (PromptedSegmentationWebsocketRequest): Request object.
     Returns:
         dict: A response dict
     """
 
      # Send the request to the backend
     async with httpx.AsyncClient(timeout=120) as client:
-        url = f"{BASE_URL}/annotation_session/segment_image_with_prompts/model={model_identifier}&user_uid={user_id}"
-        response = await client.post(url, json=prompts_request.model_dump(exclude_none=True))
+        url = f"{BASE_URL}/annotation_session/segment_image_with_prompts"
+        response = await client.post(url, json=request.model_dump(exclude_none=True))
 
         response.raise_for_status()
         # Extract metadata from headers
