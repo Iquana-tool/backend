@@ -423,10 +423,10 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
     if state.refinement_contour_id is not None:
         # Get the contour to refine
         with get_context_session() as session:
-            contour = session.query(Contours).filter_by(id=state.refine_contour_id).first()
+            contour = session.query(Contours).filter_by(id=state.refinement_contour_id).first()
             contour_model = Contour.from_db(contour)
         previous_mask = contour_model.to_binary_mask(1000, 1000)
-        logger.debug(f"Using contour {state.refine_contour_id} as previous mask for refinement.")
+        logger.debug(f"Using contour {state.refinement_contour_id} as previous mask for refinement.")
     else:
         previous_mask = None
 
