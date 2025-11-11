@@ -427,8 +427,10 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
             contour_model = Contour.from_db(contour)
         previous_mask = contour_model.to_binary_mask(250, 250)
         logger.debug(f"Using contour {state.refinement_contour_id} as previous mask for refinement.")
+        message_type = ServerMessageType.OBJECT_MODIFIED
     else:
         previous_mask = None
+        message_type = ServerMessageType.OBJECT_ADDED
 
     websocket_request = PromptedSegmentationWebsocketRequest(
         user_id=str(state.user_id),
@@ -460,7 +462,7 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
         )
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
-        type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
+        type=message_type if response["success"] else ServerMessageType.ERROR,
         success=response["success"],
         message=f"Successfully segmented object with confidence score {response_seg['score']:.1%}" if response["success"] else response["message"],
         data=response["added_contour"] if response["success"] else None,
