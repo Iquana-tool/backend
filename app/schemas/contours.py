@@ -86,9 +86,9 @@ class Contour(BaseModel):
 
     def to_rescaled_contour(self, height, width):
         """ Return a rescaled contour given the height and width. """
-        rescaled_x = (np.array(self.x) * height).asytpe(int)
+        rescaled_x = (np.array(self.x) * height).astype(int)
         rescaled_y = (np.array(self.y) * width).astype(int)
-        return np.expand_dims(np.array(zip(rescaled_x, rescaled_y)), axis=1)
+        return np.expand_dims(np.array(list(zip(rescaled_x, rescaled_y))), axis=1)
 
     def to_db_entry(self, mask_id):
         return Contours(
