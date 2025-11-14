@@ -5,13 +5,16 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "bcrypt>=5.0.0",
     "fastapi[standard]>=0.68.0",
     "httpx>=0.24.0",
     "numpy>=1.21.0",
     "opencv-python>=4.11.0.86",
     "pandas>=2.3.3",
     "pillow~=11.1.0",
+    "pwdlib[argon2]>=0.3.0",
     "pydantic~=2.10.6",
+    "pyjwt>=2.10.1",
     "python-dotenv>=1.0.0",
     "scipy>=1.16.3",
     "sqlalchemy~=2.0.38",
