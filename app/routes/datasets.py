@@ -1,4 +1,5 @@
 import shutil
+from app.routes.auth import get_current_user  # Import the authentication dependency
 from logging import getLogger
 
 from paths import Paths
@@ -22,7 +23,8 @@ logger = getLogger(__name__)
 async def create_dataset(name: str,
                          description: str,
                          dataset_type: Literal["image", "scan", "DICOM"],
-                         db: Session = Depends(get_session)):
+                         db: Session = Depends(get_session),
+                         current_user=Depends(get_current_user)):
     """Create a new dataset.
 
     Args:
