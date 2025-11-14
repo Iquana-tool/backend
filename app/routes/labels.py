@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.labels import Labels
 from app.database.contours import Contours
+from app.schemas.labels import LabelHierarchy
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/labels", tags=["labels"])
@@ -13,8 +14,13 @@ router = APIRouter(prefix="/labels", tags=["labels"])
 @router.get("/get_labels/{dataset_id}")
 async def get_labels(dataset_id: int, db: Session = Depends(get_session)):
     """Retrieve all labels for a given dataset."""
-    classes = db.query(Labels).filter_by(dataset_id=dataset_id).all()
-    return classes
+    labels = db.query(Labels).filter_by(dataset_id=dataset_id)
+    labels_hierarchy = LabelHierarchy.from_query(labels)
+    return {
+        "success": True,
+        "message": f"Retrieved {len(labels_hierarchy)} labels for dataset {dataset_id}.",
+        "labels": labels_hierarchy.model_dump()
+    }
 
 
 @router.post("/create_label")

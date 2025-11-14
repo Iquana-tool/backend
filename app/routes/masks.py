@@ -1,19 +1,20 @@
-import json
 import logging
+
 import numpy as np
-from fastapi import APIRouter, HTTPException, Depends
-from starlette.datastructures import UploadFile
+from fastapi import APIRouter, HTTPException, Depends, File, UploadFile
 from sqlalchemy.orm import Session
-from app.routes.contours import delete_contour, add_contours
+
 from app.database import get_session
-from app.database.images import Images
-from app.database.masks import Masks
 from app.database.contours import Contours
-from app.schemas.segmentation.segmentations import SegmentationMaskModel
-from app.services.mask_generation import generate_mask
+from app.database.images import Images
+from app.database.labels import Labels
+from app.database.masks import Masks
+from app.routes.contours import delete_contour, add_contours
+from app.routes.semantic_segmentation.upload_data import proxy_upload_file
+from app.schemas.contours import ContourHierarchy
+from app.schemas.labels import LabelHierarchy
+from app.schemas.prompted_segmentation.segmentations import SemanticSegmentationMask
 from app.services.database_access import save_array_to_disk
-from app.services.labels import get_hierarchical_label_name
-from app.routes.automatic_segmentation.upload_data import proxy_upload_file
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
@@ -62,9 +63,12 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
         }
     image = db.query(Images).filter_by(id=existing_mask.image_id).first()
     # Generate the mask from contours
-    mask_image = generate_mask(mask_id)
-    logging.debug(f"Generated mask with the following labels: {np.unique(mask_image).tolist()}")
-    mask_path = save_array_to_disk(mask_image,
+    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
+    contours_hierarchy = ContourHierarchy.from_contours(contours)
+    semantic_mask = contours_hierarchy.to_semantic_mask(image.height, image.width)
+
+    logging.debug(f"Generated mask with the following labels: {np.unique(semantic_mask).tolist()}")
+    mask_path = save_array_to_disk(semantic_mask,
                        image.dataset_id,
                        image.scan_id,
                        is_mask=True,
@@ -128,41 +132,6 @@ async def unfinish_mask(mask_id: int, db: Session = Depends(get_session)):
     }
 
 
-@router.get("/get_contours_of_mask/{mask_id}", deprecated=True)
-async def get_contours_of_mask(mask_id: int, db: Session = Depends(get_session)):
-    """ Get all contours of a mask by its ID.
-
-    > This endpoint is deprecated and will be removed in the future. Please use the contour endpoints instead.
-    """
-    # TODO: Remove this endpoint in the future.
-    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
-    if not contours:
-        raise HTTPException(status_code=404, detail="No contours found for mask.")
-    formatted_contours = []
-    for contour in contours:
-        coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
-        diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
-        label_name = get_hierarchical_label_name(contour.label)
-        formatted_contours.append({
-            "id": contour.id,
-            "x": coords["x"],
-            "y": coords["y"],
-            "label": contour.label,
-            "label_name": label_name,
-            "area": contour.area,
-            "perimeter": contour.perimeter,
-            "circularity": contour.circularity,
-            "diameters": diameters
-        })
-
-    return {
-        "success": True,
-        "warning": "This endpoint is deprecated. Use 'contours/get_contours_of_mask' instead.",
-        "mask_id": mask_id,
-        "contours": formatted_contours
-    }
-
-
 @router.get("/get_mask/{mask_id}")
 async def get_mask(mask_id: int, db: Session = Depends(get_session)):
     """ Get a mask by its ID. """
@@ -222,28 +191,50 @@ async def delete_mask(mask_id: int, db: Session = Depends(get_session)):
     return {"success": True, "message": "Mask deleted successfully."}
 
 
-@router.get("/get_masks_for_image/{image_id}", deprecated=True)
-async def get_masks_for_image(image_id: int, db: Session = Depends(get_session)):
-    """ Get all masks for a given image ID.
-
-    > This endpoint is deprecated and will be removed in the future. Images can now only have one mask, so this endpoint
-    will always return a single mask or an error if no mask exists.
+@router.post("/post_mask/mask_id={mask_id}&added_by={added_by}&temporary={temporary}")
+async def post_mask(mask_id: int,
+                    added_by: str,
+                    temporary:bool,
+                    mask: UploadFile = File(...),
+                    session: Session = Depends(get_session)):
     """
-    masks = db.query(Masks).filter_by(image_id=image_id).all()
-    if not masks:
-        raise HTTPException(status_code=404, detail="No masks found for image.")
-    return masks
+    Upload a mask to a mask id. Compute the contours for each label in the mask, build the hierarchy and add
+    them to the database.
+    """
+    mask_array = np.frombuffer(mask.file.read(), dtype=np.uint8)
+    image_id = session.query(Masks.image_id).filter_by(id=mask_id).first()
+    dataset_id = session.query(Images.dataset_id).filter_by(id=image_id).first()
+    labels = session.query(Labels).filter_by(dataset_id=dataset_id)
+    label_hierarchy = LabelHierarchy.from_query(labels)
+
+    # Create an initial hierarchy of already added contours
+    contour_hierarchy = ContourHierarchy.from_query(session.query(Contours).filter_by(mask_id=mask_id))
+    # Add new contours from the mask
+    contour_hierarchy = await contour_hierarchy.add_contours_from_mask_to_self_and_db(
+        mask_id,
+        mask_array,
+        label_hierarchy,
+        added_by,
+        temporary,
+        session
+    )
+    return {
+        "success": True,
+        "message": "Converted mask object to contour hierarchy and added it to the database.",
+        "result": contour_hierarchy.model_dump_json()
+    }
+
 
 
 async def create_masks_and_add_contours_for_images(image_ids: list[int],
-                                                   mask_responses: list[SegmentationMaskModel],
+                                                   mask_responses: list[SemanticSegmentationMask],
                                                    db: Session = Depends(get_session)):
     """
     Create masks for a list of image IDs and add contours to them.
 
     Args:
         image_ids (list[int]): List of image IDs for which to create masks.
-        mask_responses (list[SegmentationMaskModel]): List of segmentation mask responses containing contours.
+        mask_responses (list[SemanticSegmentationMask]): List of prompted_segmentation mask responses containing contours.
         db (Session): The database session.
 
     Returns:

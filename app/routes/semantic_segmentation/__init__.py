@@ -6,12 +6,12 @@ from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 
 logger = getLogger(__name__)
-router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
+router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
 
 
 @router.get("/health")
 async def get_health():
-    """Check the health of the automatic segmentation service."""
+    """Check the health of the automatic prompted_segmentation service."""
     url = f"{BASE_URL}/health"
     async with httpx.AsyncClient() as client:
         resp = await client.get(url)

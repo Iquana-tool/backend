@@ -1,17 +1,18 @@
-from fastapi.params import Depends
-from sqlalchemy.orm import Session
-from app.database import get_session
-from app.database.labels import Labels
-from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
-from app.schemas.automatic_segmentation.training import TrainingRequest
-import httpx
-from fastapi.responses import JSONResponse
-from fastapi import APIRouter
 from logging import getLogger
 
+import httpx
+from fastapi import APIRouter
+from fastapi.params import Depends
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+
+from app.database import get_session
+from app.database.labels import Labels
+from app.schemas.semantic_segmentation.training import TrainingRequest
+from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)
-router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
+router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
 
 
 @router.get("/get_training_status/{model_id}")
@@ -42,7 +43,7 @@ async def cancel_training_of_model(model_id: str):
 
 @router.post("/start_training")
 async def start_training(request: TrainingRequest, db: Session = Depends(get_session)):
-    """ Start training a model for automatic segmentation.
+    """ Start training a model for automatic prompted_segmentation.
     This endpoint prepares the request with necessary parameters and forwards it to the Automatic Segmentation Service.
     Args:
         request (TrainingRequest): The training request containing dataset_id and other parameters.

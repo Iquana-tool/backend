@@ -1,7 +1,7 @@
 # This file contains classes for prompts
 import cv2
 import numpy as np
-from app.schemas.segmentation.segmentations import PromptedSegmentationRequest
+from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationHTTPRequest
 from logging import getLogger
 
 logger = getLogger(__name__)
@@ -18,9 +18,9 @@ class Prompts:
         self.point_labels = []
         self.box_prompts = []
 
-    def from_segmentation_request(self, seg_req: PromptedSegmentationRequest):
-        """ Initialize the prompts from a segmentation request. This method will extract the prompts from the
-            segmentation request and add them to the list of prompts. The segmentation request should contain the
+    def from_segmentation_request(self, seg_req: PromptedSegmentationHTTPRequest):
+        """ Initialize the prompts from a prompted_segmentation request. This method will extract the prompts from the
+            prompted_segmentation request and add them to the list of prompts. The prompted_segmentation request should contain the
             following attributes:
             - point_prompts: A list of point prompts, where each point prompt is a dictionary with keys 'x', 'y', and 'label'.
             - box_prompt: A dictionary with keys 'min_x', 'min_y', 'max_x', and 'max_y' representing the bounding box.
@@ -29,7 +29,7 @@ class Prompts:
                 list of two floats representing the x and y coordinates of the vertex.
         """
         for point in seg_req.point_prompts:
-            self.add_point_annotation(point.x, point.y, point.label)
+            self.add_point_annotation(point.x, point.y, point.label_id)
         box = seg_req.box_prompt
         if box:
             self.add_box_annotation(box.min_x, box.min_y, box.max_x, box.max_y)

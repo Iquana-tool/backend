@@ -7,11 +7,11 @@ from dotenv import load_dotenv
 import paths
 from app.routes.prompted_segmentation.image_segmentation import router as prompted_segmentation_router
 
-from app.routes.automatic_segmentation import router as automatic_general_router
-from app.routes.automatic_segmentation.segmentation import router as automatic_inference_router
-from app.routes.automatic_segmentation.training import router as automatic_training_router
-from app.routes.automatic_segmentation.models import router as automatic_models_router
-from app.routes.automatic_segmentation.upload_data import router as automatic_upload_router
+from app.routes.semantic_segmentation import router as automatic_general_router
+from app.routes.semantic_segmentation.inference import router as automatic_inference_router
+from app.routes.semantic_segmentation.training import router as automatic_training_router
+from app.routes.semantic_segmentation.models import router as automatic_models_router
+from app.routes.semantic_segmentation.upload_data import router as automatic_upload_router
 
 from app.routes.images import router as image_router
 from app.routes.masks import router as mask_router
@@ -20,6 +20,7 @@ from app.routes.labels import router as label_router
 from app.routes.export import router as export_router
 from app.routes.datasets import router as dataset_router
 from app.routes.prompted_segmentation.scan_segmentation import router as scan_segmentation_router
+from app.routes.image_annotation_session import router as image_annotation_session_router
 from app.database import init_db
 from logging import getLogger
 
@@ -77,6 +78,7 @@ def create_app():
     app.include_router(automatic_inference_router)
     app.include_router(automatic_models_router)
     app.include_router(automatic_upload_router)
+    app.include_router(image_annotation_session_router)
     app.include_router(scan_segmentation_router)
     app.include_router(mask_router)
     app.include_router(contour_router)

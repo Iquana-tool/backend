@@ -1,7 +1,5 @@
 import logging
 import os
-
-import hydra
 from app import create_app
 from paths import Paths
 

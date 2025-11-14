@@ -1,6 +1,6 @@
-import os
-from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Tuple, Union
+
+from pydantic import BaseModel, Field
 
 
 class TrainingRequest(BaseModel):

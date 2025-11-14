@@ -11,7 +11,7 @@ from app.database.masks import Masks
 from ...services.util import get_mask_path_from_image_path
 
 logger = getLogger(__name__)
-router = APIRouter(prefix="/automatic_segmentation", tags=["automatic_segmentation"])
+router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
 
 
 
@@ -23,7 +23,7 @@ async def proxy_upload_file(
     file: UploadFile = File(...),
 ):
     """
-    Proxies a single image/mask file upload to the segmentation training backend.
+    Proxies a single image/mask file upload to the prompted_segmentation training backend.
     """
     logger.debug(f"Uploading file with name {filename} to dataset {dataset_id} as {'image' if is_image else 'mask'}")
     url = f"{BASE_URL}/data/upload_file_to_dataset"
@@ -49,7 +49,7 @@ async def proxy_upload_dataset(
     db: Session = Depends(get_session)
 ):
     """
-    Finds all finished mask/image pairs for this dataset, and uploads them one-by-one to the segmentation backend.
+    Finds all finished mask/image pairs for this dataset, and uploads them one-by-one to the prompted_segmentation backend.
     """
     image_tuples = (
         db.query(Images.file_path)

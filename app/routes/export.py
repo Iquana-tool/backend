@@ -1,20 +1,22 @@
-from logging import getLogger
-import numpy as np
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse
-import pandas as pd
+import io
 import json
 import os
 import zipfile
-import io
 from io import StringIO
-from app.database import get_session
+from logging import getLogger
+
+import numpy as np
+import pandas as pd
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
-from app.database.masks import Masks
+
+from app.database import get_session
 from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
-from app.routes.contours import flatten_hierarchical_dict, get_contours_of_mask
+from app.database.masks import Masks
+from app.routes.contours import get_contours_of_mask
 from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path
 
@@ -26,9 +28,8 @@ logger = getLogger(__name__)
 async def get_mask_csv(mask_id: int, db: Session = Depends(get_session)):
     """ Download quantification data for the given mask_id as a CSV file. """
     image_name = db.query(Images.file_name).join(Masks, Images.id == Masks.image_id).filter(Masks.id == mask_id).first()
-    response = await get_contours_of_mask(mask_id, db)
-    flat_list = flatten_hierarchical_dict(response["quantification"])
-    df = pd.DataFrame(flat_list)
+    response = await get_contours_of_mask(mask_id, True, db)
+    df = pd.DataFrame(response["contours"])
     csv_content = df.to_csv(index=False)
     response = StreamingResponse(StringIO(csv_content), media_type="text/csv")
     response.headers["Content-Disposition"] = f'attachment; filename="{image_name[0]}_quantifications.csv"'
@@ -79,13 +80,13 @@ async def get_dataset_csv(dataset_id: int,
     df_data = {}
     for row in data:
         contour, file_name, finished, generated = row
-        label_name = get_hierarchical_label_name(contour.label)
+        label_name = get_hierarchical_label_name(contour.label_id)
         diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
         coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
 
         df_data.setdefault("file_name", []).append(file_name)
         df_data.setdefault("label", []).append(label_name)
-        df_data.setdefault("label_id", []).append(contour.label)
+        df_data.setdefault("label_id", []).append(contour.label_id)
         df_data.setdefault("contour_id", []).append(contour.id)
         df_data.setdefault("area", []).append(contour.area)
         df_data.setdefault("perimeter", []).append(contour.perimeter)
@@ -116,7 +117,7 @@ async def get_segmentation_mask_file(
     mask_id: int,
     db: Session = Depends(get_session)
 ):
-    """Download the segmentation mask file for the given mask_id."""
+    """Download the prompted_segmentation mask file for the given mask_id."""
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if not mask:
         return {
