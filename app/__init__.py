@@ -12,7 +12,7 @@ from app.routes.semantic_segmentation.inference import router as automatic_infer
 from app.routes.semantic_segmentation.training import router as automatic_training_router
 from app.routes.semantic_segmentation.models import router as automatic_models_router
 from app.routes.semantic_segmentation.upload_data import router as automatic_upload_router
-
+from app.routes.auth import router as auth_router
 from app.routes.images import router as image_router
 from app.routes.masks import router as mask_router
 from app.routes.contours import router as contour_router
@@ -70,6 +70,7 @@ def create_app():
         return {"status": "ok", "message": "API is running"}
 
     # Include the routers
+    app.include_router(auth_router)
     app.include_router(dataset_router)
     app.include_router(image_router)
     app.include_router(prompted_segmentation_router)
