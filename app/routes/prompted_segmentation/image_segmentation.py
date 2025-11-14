@@ -1,6 +1,4 @@
 from logging import getLogger
-
-import cv2
 from fastapi import APIRouter
 
 import app.services.ai_services.prompted_segmentation as prompted_service
@@ -122,7 +120,6 @@ async def segment_image(request: PromptedSegmentationHTTPRequest):
     mask = response["mask"]
     score = response["score"]
 
-    cv2.imwrite("debug_mask.png", mask * 255)
     # Convert to response object
     masks_response = await convert_numpy_masks_to_segmentation_mask_models([mask * request.label], [score])
     return {
