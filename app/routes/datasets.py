@@ -1,4 +1,6 @@
 import shutil
+
+from app.schemas.user import User
 from app.services.auth import get_current_user
 from logging import getLogger
 
@@ -46,7 +48,7 @@ async def create_dataset(name: str,
             description=description.strip(),
             folder_path=dataset_path,
             dataset_type=dataset_type,
-            created_by=current_user.id
+            created_by=current_user.username,
         )
         db.add(new_dataset)
         db.commit()
@@ -155,11 +157,11 @@ async def get_annotation_progress(dataset_id: int, db: Session = Depends(get_ses
 
 
 @router.get("/get_datasets")
-async def get_datasets(db: Session = Depends(get_session), current_user=Depends(get_current_user)):
+async def get_datasets(db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
     """Get all datasets owned by or shared with the current user."""
+    available_datasets = current_user.available_datasets
     datasets = db.query(Datasets).filter(
-        (Datasets.created_by == current_user.id) |
-        (Datasets.shared_with.any(id=current_user.id))
+        Datasets.id.in_(available_datasets)
     ).all()
     return {"success": True, "datasets": [
         {
@@ -176,8 +178,12 @@ async def get_datasets(db: Session = Depends(get_session), current_user=Depends(
 
 
 @router.delete("/delete_dataset/{dataset_id}")
-async def delete_dataset(dataset_id: int, db: Session = Depends(get_session)):
+async def delete_dataset(dataset_id: int,
+                         current_user: User = Depends(get_current_user),
+                         db: Session = Depends(get_session)):
     """Delete a dataset."""
+    if dataset_id not in current_user.owned_datasets:
+        return {"success": False, "message": "Dataset not owned by user. Only the owner can delete this dataset."}
     try:
         dataset = db.query(Datasets).filter_by(id=dataset_id).first()
         if not dataset:
