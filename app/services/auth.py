@@ -16,7 +16,7 @@ from paths import SECRET_KEY
 
 
 password_hash = PasswordHash.recommended()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
@@ -45,7 +45,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     return encoded_jwt
 
 
-async def get_current_user(token: Depends(oauth2_scheme), db: Session = Depends(get_session)) -> User:
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_session)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -58,7 +58,7 @@ async def get_current_user(token: Depends(oauth2_scheme), db: Session = Depends(
             raise credentials_exception
     except InvalidTokenError:
         raise credentials_exception
-    user = User.from_query(db.query(Users).filter_by(name=username).first())
+    user = User.from_query(db.query(Users).filter_by(username=username).first())
     if user is None:
         raise credentials_exception
     return user
