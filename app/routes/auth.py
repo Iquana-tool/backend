@@ -34,7 +34,7 @@ def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = D
         raise HTTPException(status_code=401, detail="Invalid username")
     elif not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid password")
-    access_token = create_access_token(data={"sub": user.username, "user_id": user.id})
+    access_token = create_access_token(data={"sub": user.username})
     return {
         "success": True,
         "message": "Successfully logged in.",
