@@ -97,7 +97,9 @@ async def get_dataset(dataset_id: int,
 
 
 @router.get("/get_number_of_images/{dataset_id}")
-async def get_number_of_images(dataset_id: int, db: Session = Depends(get_session)):
+async def get_number_of_images(dataset_id: int,
+                               user: User = Depends(get_current_user),
+                               db: Session = Depends(get_session)):
     """Get the number of images in a dataset."""
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
@@ -107,11 +109,14 @@ async def get_number_of_images(dataset_id: int, db: Session = Depends(get_sessio
 
 
 @router.get("/get_annotation_progress/{dataset_id}")
-async def get_annotation_progress(dataset_id: int, db: Session = Depends(get_session)):
+async def get_annotation_progress(dataset_id: int,
+                                  user: User = Depends(get_current_user),
+                                  db: Session = Depends(get_session)):
     """Get the annotation progress of a dataset.
 
     Args:
         dataset_id (int): The ID of the dataset to check.
+        user (Users): Authentication bearer token.
         db (Session): The database session.
 
     Returns:

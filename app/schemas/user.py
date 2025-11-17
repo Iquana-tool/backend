@@ -22,6 +22,14 @@ class User(BaseModel):
         return self.owned_datasets + self.accessible_datasets
 
 
+class System(User):
+    """ System user function for models and system-initiated actions that require user authentication. """
+    username: str = Field(...)
+    is_admin: bool = False
+    owned_datasets: list[int] = []
+    accessible_datasets: list[int] = []
+
+
 
 
 
