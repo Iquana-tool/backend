@@ -6,8 +6,19 @@ from fastapi.security import OAuth2PasswordBearer
 from jwt import InvalidTokenError
 from pwdlib import PasswordHash
 from pydantic import BaseModel
+from fastapi import status
+from sqlalchemy.orm import Session
 
+from app.database import get_session
+from app.database.users import Users
+from app.schemas.user import User
 from paths import SECRET_KEY
+
+
+password_hash = PasswordHash.recommended()
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 
 class TokenResponse(BaseModel):
@@ -34,13 +45,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     return encoded_jwt
 
 
-password_hash = PasswordHash.recommended()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
-
-async def get_current_user(token: Depends(oauth2_scheme)):
+async def get_current_user(token: Depends(oauth2_scheme), db: Session = Depends(get_session)) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -51,10 +56,9 @@ async def get_current_user(token: Depends(oauth2_scheme)):
         username = payload.get("sub")
         if username is None:
             raise credentials_exception
-        token_data = TokenData(username=username)
     except InvalidTokenError:
         raise credentials_exception
-    user = get_user(fake_users_db, username=token_data.username)
+    user = User.from_query(db.query(Users).filter_by(name=username).first())
     if user is None:
         raise credentials_exception
     return user

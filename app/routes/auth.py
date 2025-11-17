@@ -1,9 +1,8 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-
 from app.database import get_session
 from app.database.users import Users
-from app.services.auth import TokenResponse, create_access_token, get_current_user, verify_password, get_password_hash
+from app.services.auth import create_access_token, get_current_user, verify_password, get_password_hash
 
 router = APIRouter()
 
@@ -14,11 +13,11 @@ router = APIRouter()
 @router.post("/register")
 def register_user(name, password, db: Session = Depends(get_session)):
     # Check if user already exists
-    existing_user = db.query(Users).filter(Users.name == name).first()
+    existing_user = db.query(Users).filter(Users.username == name).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
     # Create new user
-    new_user = Users(name=name, enc_password=get_password_hash(password))
+    new_user = Users(username=name, hashed_password=get_password_hash(password))
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -26,14 +25,15 @@ def register_user(name, password, db: Session = Depends(get_session)):
         "success": True,
         "message": "User registered successfully",
         "id": new_user.id,
-        "name": new_user.name}
+        "name": new_user.username}
 
-@router.post("/login", response_model=TokenResponse)
+
+@router.post("/login")
 def login_user(name, password, db: Session = Depends(get_session)):
-    user = db.query(Users).filter(Users.name == name).first()
-    if not user or not verify_password(password, user.enc_password):
+    user = db.query(Users).filter(Users.username == name).first()
+    if not user or not verify_password(password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    access_token = create_access_token(data={"sub": user.name, "user_id": user.id})
+    access_token = create_access_token(data={"sub": user.username, "user_id": user.id})
     return {
         "success": True,
         "message": "Successfully logged in.",
@@ -43,4 +43,4 @@ def login_user(name, password, db: Session = Depends(get_session)):
 
 @router.get("/me")
 def read_users_me(current_user: Users = Depends(get_current_user)):
-    return {"id": current_user.id, "name": current_user.name}
+    return {"id": current_user.id, "name": current_user.username}
