@@ -24,7 +24,6 @@ def register_user(name, password, db: Session = Depends(get_session)):
     return {
         "success": True,
         "message": "User registered successfully",
-        "id": new_user.id,
         "name": new_user.username}
 
 

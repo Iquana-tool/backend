@@ -7,8 +7,7 @@ from sqlalchemy.orm import relationship
 class Users(database):
     """ Represents our users. """
     __tablename__ = "users"
-    id = Column(Integer, primary_key=True)
-    username = Column(String, nullable=False, unique=True)  # Ensure usernames are unique
+    username = Column(String, nullable=False, unique=True, primary_key=True)  # Ensure usernames are unique
     hashed_password = Column(String, nullable=False)  # Store hashed passwords only
     is_admin = Column(Boolean, nullable=False, default=False)
 
