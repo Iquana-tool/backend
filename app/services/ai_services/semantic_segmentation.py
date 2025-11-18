@@ -1,15 +1,18 @@
 import os
-
 import httpx
-
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.routes.semantic_segmentation.inference import logger
 from app.schemas.contours import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
+from app.schemas.user import System
 from app.services.util import extract_mask_from_response
+from app.routes import contours
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
+from logging import getLogger
+
+
+logger = getLogger(__name__)
 
 
 async def segment_image_with_semantic_model(model_registry_key, image_id, db):
@@ -18,6 +21,7 @@ async def segment_image_with_semantic_model(model_registry_key, image_id, db):
     dataset_id = image.dataset_id
     labels = db.query(Labels).filter_by(dataset_id=dataset_id)
     mask_id = db.query(Masks.id).filter_by(image_id=image_id).first()
+    await contours.delete_all_contours_of_mask(mask_id, System(username="semantic segmentation"), db)
     response = await send_inference_request(model_registry_key,
                                             image_path,
                                             mask_id
