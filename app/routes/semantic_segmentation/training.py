@@ -3,7 +3,7 @@ from logging import getLogger
 import httpx
 from fastapi import APIRouter
 from fastapi.params import Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_session
@@ -17,20 +17,42 @@ logger = getLogger(__name__)
 router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
 
 
-@router.get("/get_training_status/{model_id}")
-async def get_training_status(model_id: str,
-                     user: User = Depends(get_current_user)):
+@router.get("/get_training_status/{model_registry_key}")
+async def get_training_status(
+        model_registry_key: str,
+        user: User = Depends(get_current_user)
+):
     """ Get the status of a training job by its ID. """
-    url = f"{BASE_URL}/training/get_job_status/{model_id}"
+    url = f"{BASE_URL}/training/get_job_status/{model_registry_key}"
     async with httpx.AsyncClient() as client:
         resp = await client.get(url)
         resp.raise_for_status()
         return resp.json()
 
 
+@router.get("/get_training_status_stream/{model_registry_key}")
+async def get_training_status_stream(
+        model_registry_key: str,
+        user: User = Depends(get_current_user)
+):
+    """ Get live updates of the status of a training job by its ID. """
+    url = f"{BASE_URL}/training/get_status_stream/{model_registry_key}"
+    async with httpx.AsyncClient() as client:
+        # Use `stream=True` to get a streaming response
+        async with client.stream("GET", url) as response:
+            # Forward the stream as-is
+            return StreamingResponse(
+                response.aiter_bytes(),  # or response.aiter_text() for text streams
+                media_type=response.headers.get("content-type", "application/octet-stream"),
+                headers=dict(response.headers)
+            )
+
+
 @router.get("/cancel_training_of_model/{model_id}")
-async def cancel_training_of_model(model_id: str,
-                     user: User = Depends(get_current_user)):
+async def cancel_training_of_model(
+        model_id: str,
+        user: User = Depends(get_current_user)
+):
     """ Cancel a training job by its ID."""
     try:
         url = f"{BASE_URL}/training/cancel_job/{model_id}"
@@ -46,8 +68,11 @@ async def cancel_training_of_model(model_id: str,
 
 
 @router.post("/start_training")
-async def start_training(request: TrainingRequest, db: Session = Depends(get_session),
-                     user: User = Depends(get_current_user)):
+async def start_training(
+        request: TrainingRequest,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
     """ Start training a model for automatic prompted_segmentation.
     This endpoint prepares the request with necessary parameters and forwards it to the Automatic Segmentation Service.
     Args:
@@ -72,6 +97,7 @@ async def start_training(request: TrainingRequest, db: Session = Depends(get_ses
     request_dict["lr"] = 0.0001
     result = await send_start_training_request(request_dict)
     return JSONResponse(result)
+
 
 async def send_start_training_request(request: dict):
     """ Forwards TrainingRequest to Automatic Segmentation Service."""
