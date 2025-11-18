@@ -19,7 +19,6 @@ from app.routes.contours import router as contour_router
 from app.routes.labels import router as label_router
 from app.routes.export import router as export_router
 from app.routes.datasets import router as dataset_router
-from app.routes.prompted_segmentation.scan_segmentation import router as scan_segmentation_router
 from app.routes.image_annotation_session import router as image_annotation_session_router
 from app.database import init_db
 from logging import getLogger
@@ -80,7 +79,6 @@ def create_app():
     app.include_router(automatic_models_router)
     app.include_router(automatic_upload_router)
     app.include_router(image_annotation_session_router)
-    app.include_router(scan_segmentation_router)
     app.include_router(mask_router)
     app.include_router(contour_router)
     app.include_router(label_router)

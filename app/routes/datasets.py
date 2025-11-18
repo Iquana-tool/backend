@@ -67,13 +67,23 @@ async def share_dataset(
     dataset_id: int,
     share_with_username: str,
     db: Session = Depends(get_session),
-    current_user=Depends(get_current_user)
+    user: "User" = Depends(get_current_user)
 ):
-    """Share a dataset with another user by username."""
+    """Share a dataset with another user by username.
+
+    Args:
+        dataset_id (int): The ID of the dataset to share.
+        share_with_username (str): The username to share with.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and message.
+    """
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    if dataset.created_by != current_user.id:
+    if dataset.created_by != user.id:
         raise HTTPException(status_code=403, detail="Only the owner can share this dataset")
     user_to_share = db.query(Users).filter_by(name=share_with_username).first()
     if not user_to_share:
@@ -86,10 +96,21 @@ async def share_dataset(
 
 
 @router.get("/get_dataset/{dataset_id}")
-async def get_dataset(dataset_id: int,
-                     db: Session = Depends(get_session),
-                     current_user=Depends(get_current_user)):
-    """Get dataset information."""
+async def get_dataset(
+    dataset_id: int,
+    db: Session = Depends(get_session),
+    user: "User" = Depends(get_current_user)
+):
+    """Get dataset information.
+
+    Args:
+        dataset_id (int): The ID of the dataset.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and dataset information.
+    """
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
         return {"success": False, "message": "Dataset not found."}
@@ -97,10 +118,21 @@ async def get_dataset(dataset_id: int,
 
 
 @router.get("/get_number_of_images/{dataset_id}")
-async def get_number_of_images(dataset_id: int,
-                               user: User = Depends(get_current_user),
-                               db: Session = Depends(get_session)):
-    """Get the number of images in a dataset."""
+async def get_number_of_images(
+    dataset_id: int,
+    db: Session = Depends(get_session),
+    user: "User" = Depends(get_current_user)
+):
+    """Get the number of images in a dataset.
+
+    Args:
+        dataset_id (int): The ID of the dataset.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the number of images.
+    """
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
         return {"success": False, "message": "Dataset not found."}
@@ -162,9 +194,20 @@ async def get_annotation_progress(dataset_id: int,
 
 
 @router.get("/get_datasets")
-async def get_datasets(db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
-    """Get all datasets owned by or shared with the current user."""
-    available_datasets = current_user.available_datasets
+async def get_datasets(
+    db: Session = Depends(get_session),
+    user: "User" = Depends(get_current_user)
+):
+    """Get all datasets owned by or shared with the current user.
+
+    Args:
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and the list of datasets.
+    """
+    available_datasets = user.available_datasets
     datasets = db.query(Datasets).filter(
         Datasets.id.in_(available_datasets)
     ).all()
@@ -183,11 +226,22 @@ async def get_datasets(db: Session = Depends(get_session), current_user: User = 
 
 
 @router.delete("/delete_dataset/{dataset_id}")
-async def delete_dataset(dataset_id: int,
-                         current_user: User = Depends(get_current_user),
-                         db: Session = Depends(get_session)):
-    """Delete a dataset."""
-    if dataset_id not in current_user.owned_datasets:
+async def delete_dataset(
+    dataset_id: int,
+    db: Session = Depends(get_session),
+    user: "User" = Depends(get_current_user)
+):
+    """Delete a dataset.
+
+    Args:
+        dataset_id (int): The ID of the dataset to delete.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and message.
+    """
+    if dataset_id not in user.owned_datasets:
         return {"success": False, "message": "Dataset not owned by user. Only the owner can delete this dataset."}
     try:
         dataset = db.query(Datasets).filter_by(id=dataset_id).first()

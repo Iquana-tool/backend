@@ -2,25 +2,27 @@ import os
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 import httpx
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
-from . import logger
 from app.database import get_session
 from sqlalchemy.orm import Session
 from logging import getLogger
 from app.database.images import Images
 from app.database.masks import Masks
+from ...schemas.user import User
+from ...services.auth import get_current_user
 from ...services.util import get_mask_path_from_image_path
+
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
 
 
-
 @router.post("/upload_file_to_dataset")
 async def proxy_upload_file(
-    dataset_id: int,
-    is_image: bool,
-    filename: str = None,
-    file: UploadFile = File(...),
+        dataset_id: int,
+        is_image: bool,
+        filename: str = None,
+        file: UploadFile = File(...),
+        user: User = Depends(get_current_user)
 ):
     """
     Proxies a single image/mask file upload to the prompted_segmentation training backend.
@@ -45,8 +47,9 @@ async def proxy_upload_file(
 
 @router.post("/upload_dataset/{dataset_id}")
 async def proxy_upload_dataset(
-    dataset_id: int,
-    db: Session = Depends(get_session)
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """
     Finds all finished mask/image pairs for this dataset, and uploads them one-by-one to the prompted_segmentation backend.

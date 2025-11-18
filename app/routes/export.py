@@ -19,14 +19,27 @@ from app.database.masks import Masks
 from app.routes.contours import get_contours_of_mask
 from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path
+from app.schemas.user import User
+from app.services.auth import get_current_user
 
 router = APIRouter(prefix="/export", tags=["export"])
 logger = getLogger(__name__)
 
 
 @router.get("/get_mask_csv/{mask_id}")
-async def get_mask_csv(mask_id: int, db: Session = Depends(get_session)):
-    """ Download quantification data for the given mask_id as a CSV file. """
+async def get_mask_csv(
+    mask_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """
+    Download quantification data for the given mask_id as a CSV file.
+
+    Args:
+        mask_id (int): The ID of the mask.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+    """
     image_name = db.query(Images.file_name).join(Masks, Images.id == Masks.image_id).filter(Masks.id == mask_id).first()
     response = await get_contours_of_mask(mask_id, True, db)
     df = pd.DataFrame(response["contours"])
@@ -37,12 +50,16 @@ async def get_mask_csv(mask_id: int, db: Session = Depends(get_session)):
 
 
 @router.get("/get_dataset_csv/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}")
-async def get_dataset_csv(dataset_id: int,
-                           label_ids: list[int] = None,
-                           include_manual: bool = True,
-                           include_auto: bool = True,
-                           db: Session = Depends(get_session)):
-    """ Export quantification data for the given dataset_id and labels.
+async def get_dataset_csv(
+    dataset_id: int,
+    label_ids: list[int] = None,
+    include_manual: bool = True,
+    include_auto: bool = True,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """
+    Export quantification data for the given dataset_id and labels.
 
     Args:
         dataset_id (int): The ID of the dataset to export.
@@ -50,6 +67,7 @@ async def get_dataset_csv(dataset_id: int,
         include_manual (bool, optional): Whether to include manual masks. Defaults to True.
         include_auto (bool, optional): Whether to include auto-generated masks. Defaults to True.
         db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
+        user (User): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and message if error, or a
@@ -115,6 +133,7 @@ async def get_dataset_csv(dataset_id: int,
 @router.get("/get_segmentation_mask_file/{mask_id}")
 async def get_segmentation_mask_file(
     mask_id: int,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_session)
 ):
     """Download the prompted_segmentation mask file for the given mask_id."""
@@ -147,9 +166,22 @@ async def get_segmentation_dataset(
     dataset_id: int,
     include_manual: bool = True,
     include_auto: bool = True,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
 ):
-    """Download all images and masks as a ZIP file for the given dataset_id."""
+    """
+    Download all images and masks as a ZIP file for the given dataset_id.
+
+    Args:
+        dataset_id (int): The ID of the dataset.
+        include_manual (bool): Whether to include manual masks.
+        include_auto (bool): Whether to include auto-generated masks.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        StreamingResponse: A ZIP file containing all images and masks.
+    """
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found.")

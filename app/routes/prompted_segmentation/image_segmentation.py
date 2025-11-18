@@ -1,5 +1,5 @@
 from logging import getLogger
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 import app.services.ai_services.prompted_segmentation as prompted_service
 from app.database import get_context_session
@@ -8,13 +8,15 @@ from app.routes.prompted_segmentation.util import convert_numpy_masks_to_segment
 from app.schemas.contours import Contour
 from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationHTTPRequest, SegmentationResponse, \
     PromptedSegmentationWebsocketRequest
+from app.schemas.user import User
+from app.services.auth import get_current_user
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/prompted_segmentation", tags=["prompted_segmentation"])
 
 
 @router.get("/health")
-async def health_check():
+async def health_check(user: User = Depends(get_current_user)):
     """Health check endpoint to verify if the prompted prompted_segmentation backend is reachable."""
     if await prompted_service.check_backend():
         return {
@@ -31,7 +33,7 @@ async def health_check():
 
 
 @router.get("/models")
-async def get_available_models():
+async def get_available_models(user: User = Depends(get_current_user)):
     """Retrieve the list of available prompted segmentation models from the backend."""
     models = await prompted_service.get_models()
     return {
@@ -42,7 +44,8 @@ async def get_available_models():
 
 
 @router.post('/segment_image')
-async def segment_image(request: PromptedSegmentationHTTPRequest):
+async def segment_image(request: PromptedSegmentationHTTPRequest,
+                        user: User = Depends(get_current_user)):
     """Perform prompted_segmentation with optional prompts, using data validation.
     This function handles the prompted_segmentation of images based on the provided request.
     It validates the request, retrieves the appropriate model, and processes the image.
@@ -58,7 +61,6 @@ async def segment_image(request: PromptedSegmentationHTTPRequest):
         SegmentationResponse: The response object containing the prompted_segmentation results. When using cropping,
         the contours will be remapped to the original image size.
     """
-    user_id = "HTTP_Request"
     # Check if the backend is running
     if not await prompted_service.check_backend():
         return {
@@ -69,7 +71,7 @@ async def segment_image(request: PromptedSegmentationHTTPRequest):
     logger.debug("Prompted prompted_segmentation backend is reachable.")
 
     # First set the image in the model cache
-    await prompted_service.upload_image(user_id, request.image_id)
+    await prompted_service.upload_image(user.username, request.image_id)
     logger.debug(f"Image {request.image_id} uploaded to prompted segmentation backend.")
 
     # Then check if we refine a contour
@@ -93,7 +95,7 @@ async def segment_image(request: PromptedSegmentationHTTPRequest):
             min_y = min(contour_model.y)
             max_x = max(contour_model.x)
             max_y = max(contour_model.y)
-            await prompted_service.focus_crop(user_id,
+            await prompted_service.focus_crop(user.username,
                                                 min_x,
                                                 min_y,
                                                 max_x,
@@ -103,13 +105,13 @@ async def segment_image(request: PromptedSegmentationHTTPRequest):
                 previous_mask = previous_mask[min_y:max_y, min_x:max_x]
         logger.debug(f"Image cropped to contour {request.parent_contour_id} for prompted prompted_segmentation.")
     else:
-        await prompted_service.unfocus_crop(user_id)
+        await prompted_service.unfocus_crop(user.username)
         logger.debug("Image uncropped for prompted prompted_segmentation.")
 
     # Now segment the image
     response = await prompted_service.segment_image_with_prompts(
         PromptedSegmentationWebsocketRequest(
-            user_id=user_id,
+            user_id=user.username,
             model_identifier=request.model_identifier,
             prompts=request.prompts,
             previous_mask=previous_mask.tolist() if previous_mask is not None else None
