@@ -1,13 +1,11 @@
-import json
+from logging import getLogger
 from typing import List
 
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
-from starlette.websockets import WebSocketDisconnect
-from logging import getLogger
-
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_core import ValidationError
+from starlette.websockets import WebSocketDisconnect
 
 from app.database import get_context_session
 from app.database.contours import Contours
@@ -15,13 +13,15 @@ from app.database.images import Images
 from app.database.masks import Masks
 from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour, modify_contour
 from app.routes.masks import create_mask, finish_mask
+from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
+from app.schemas.contours import Contour
 from app.schemas.prompted_segmentation.prompts import Prompts
 from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
 from app.services.ai_services import prompted_segmentation as prompted_service
-from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
-from app.schemas.contours import Contour
+from app.services.ai_services import semantic_segmentation as semantic_service
 from app.services.ai_services.prompted_segmentation import select_model, segment_image_with_prompts, focus_contour, \
     unfocus_crop
+from app.services.ai_services.semantic_segmentation import segment_image_with_semantic_model
 from app.services.contours import get_contours_from_binary_mask
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
@@ -199,10 +199,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
                     await handle_object_delete(websocket, client_msg, state)
                 case ClientMessageType.OBJECT_MODIFY:
                     await handle_object_modify(websocket, client_msg, state)
-                case ClientMessageType.AUTOMATIC_SELECT_MODEL:
-                    await handle_automatic_select_model(websocket, client_msg, state)
-                case ClientMessageType.AUTOMATIC_SEGMENTATION:
-                    await handle_automatic_segmentation(websocket, client_msg, state)
+                case ClientMessageType.SEMANTIC_SELECT_MODEL:
+                    await handle_semantic_select_model(websocket, client_msg, state)
+                case ClientMessageType.SEMANTIC_SEGMENTATION:
+                    await handle_semantic_segmentation(websocket, client_msg, state)
                 case ClientMessageType.PROMPTED_SELECT_MODEL:
                     await handle_prompted_select_model(websocket, client_msg, state)
                 case ClientMessageType.PROMPTED_SEGMENTATION:
@@ -391,14 +391,24 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
         ))
 
 
-async def handle_automatic_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_semantic_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of an automatic model. """
     raise NotImplementedError("Method not implemented yet!")
 
 
-async def handle_automatic_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_semantic_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle prompted_segmentation using an automatic model. """
-    raise NotImplementedError("Method not implemented yet!")
+    selected_model = client_msg.data.get("selected_model")
+    selected_image = client_msg.data.get("selected_image")
+    with get_context_session() as session:
+        response = await segment_image_with_semantic_model(selected_model, selected_image, db=session)
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
+        success=response["success"],
+        message=response["message"],
+        data=response["contour_hierarchy"] if response["success"] else None,
+    ))
 
 
 async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):

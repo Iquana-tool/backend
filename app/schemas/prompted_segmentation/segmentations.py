@@ -55,6 +55,10 @@ class SemanticSegmentationMask(BaseModel):
     confidence: float = Field(default=0.0, description="Confidence score of the prompted_segmentation. This can be a predicted"
                                                        " IoU for example.")
 
+    @classmethod
+    def from_mask_and_score(cls, mask, score):
+        """ Create a semantic segmentation mask from a mask and a score. """
+
 
 class SegmentationResponse(BaseModel):
     """ Model for the prompted_segmentation response. """

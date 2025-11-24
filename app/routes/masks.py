@@ -271,7 +271,7 @@ async def delete_mask(
     return {"success": True, "message": "Mask deleted successfully."}
 
 
-@router.post("/post_mask/mask_id={mask_id}&added_by={added_by}&temporary={temporary}")
+@router.post("/post_mask/mask_id={mask_id}&added_by={added_by}&temporary={temporary}", deprecated=True)
 async def post_mask(
     mask_id: int,
     added_by: str,
@@ -304,7 +304,7 @@ async def post_mask(
     # Create an initial hierarchy of already added contours
     contour_hierarchy = ContourHierarchy.from_query(session.query(Contours).filter_by(mask_id=mask_id))
     # Add new contours from the mask
-    contour_hierarchy = await contour_hierarchy.add_contours_from_mask_to_self_and_db(
+    contour_hierarchy = await contour_hierarchy.from_semantic_mask(
         mask_id,
         mask_array,
         label_hierarchy,

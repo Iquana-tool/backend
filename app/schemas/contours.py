@@ -218,13 +218,13 @@ class ContourHierarchy(BaseModel):
                 queue.extendleft(reversed(contour.children))
         return contours_list
 
-    async def add_contours_from_mask_to_self_and_db(self,
-                                                    mask_id: int,
-                                                    np_mask: np.ndarray,
-                                                    label_hierarchy: LabelHierarchy,
-                                                    added_by: str,
-                                                    temporary: bool,
-                                                    db: Session):
+    @classmethod
+    async def from_semantic_mask(cls,
+                                 mask_id: int,
+                                 np_mask: np.ndarray,
+                                 label_hierarchy: LabelHierarchy,
+                                 added_by: str,
+                                 db: Session):
         """
         Get a contour hierarchy from a mask and a label hierarchy. The hierarchy will respect both the label
         hierarchy as well as spatial hierarchy, i.e. each child contour lies within its parent.
@@ -232,6 +232,7 @@ class ContourHierarchy(BaseModel):
         contour_models_with_label_id = {}
         root_contours = []
         id_to_contour = {}
+        label_id_to_contours = defaultdict(list)
         flat_label_hierarchy = label_hierarchy.build_flat_hierarchy(breadth_first=True)
         height, width = np_mask.shape[:2]
         for label in flat_label_hierarchy:
@@ -254,7 +255,7 @@ class ContourHierarchy(BaseModel):
                 contour_model = Contour.from_normalized_cv_contour(contour,
                                                                    label,
                                                                    added_by,
-                                                                   temporary)
+                                                                   True)
                 entry = contour_model.to_db_entry(mask_id)
                 db.add(entry)
                 db.flush()
@@ -262,8 +263,8 @@ class ContourHierarchy(BaseModel):
                 contour_model.id = entry.id
                 contour_entries.append(entry)
                 contour_models.append(contour_model)
-                self.id_to_contour[entry.id] = contour_model
-                self.label_id_to_contours[label.id].append(contour_model)
+                id_to_contour[entry.id] = contour_model
+                label_id_to_contours[label.id].append(contour_model)
 
             # Third: Iterate through the models and check for parent links
             parent = label_hierarchy.get_parent_by_value_of_child(label)
@@ -285,7 +286,11 @@ class ContourHierarchy(BaseModel):
                 root_contours.extend(contour_models)
             contour_models_with_label_id[label] = contour_models
         db.commit()
-        return self
+        return cls(
+            root_contours=root_contours,
+            id_to_contour=id_to_contour,
+            label_id_to_contours=label_id_to_contours,
+        )
 
     def to_semantic_mask(self, height, width, label_id_to_value_map: dict[int, int]) -> np.ndarray:
         """ Turn the hierarchy into a semantic mask of the given shape. In a semantic mask each pixel value represents a

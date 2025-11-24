@@ -5,6 +5,7 @@ import httpx
 import numpy as np
 
 from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
+from app.services.util import extract_mask_from_response
 from paths import Paths
 from app.database.contours import Contours
 from app.database.images import Images
@@ -145,14 +146,7 @@ async def segment_image_with_prompts(request: PromptedSegmentationWebsocketReque
         response = await client.post(url, json=request.prompts.model_dump(exclude_none=True))
 
         response.raise_for_status()
-        # Extract metadata from headers
-        shape = tuple(map(int, response.headers["X-Mask-Shape"].split(',')))
-        dtype = np.dtype(response.headers["X-Mask-Dtype"])
-        score = float(response.headers.get("X-Score", 0.0))
-
-        # Load the mask from raw bytes
-        mask_bytes = response.content
-        mask = np.frombuffer(mask_bytes, dtype=dtype).reshape(shape)
+        mask, shape, dtype, score = extract_mask_from_response(response)
 
         return {
             "success": True,

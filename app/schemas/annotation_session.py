@@ -10,8 +10,8 @@ class ClientMessageType(StrEnum):
     UNSELECT_REFINEMENT_OBJECT = "unselect_refinement_object"  # Unselect the object being refined
     PROMPTED_SELECT_MODEL = "prompted_select_model"  # Select a model for prompted prompted_segmentation
     PROMPTED_SEGMENTATION = "prompted_segmentation"  # Perform prompted prompted_segmentation
-    AUTOMATIC_SELECT_MODEL = "automatic_select_model"  # Select a model for automatic prompted_segmentation
-    AUTOMATIC_SEGMENTATION = "semantic_segmentation"  # Perform automatic prompted_segmentation
+    SEMANTIC_SELECT_MODEL = "semantic_select_model"  # Select a model for automatic prompted_segmentation
+    SEMANTIC_SEGMENTATION = "semantic_segmentation"  # Perform automatic prompted_segmentation
     COMPLETION_SELECT_MODEL = "completion_select_model"  # Select a model for mask completion
     COMPLETION_ENABLE = "completion_enable"  # Enable mask completion
     COMPLETION_DISABLE = "completion_disable"  # Disable mask completion
