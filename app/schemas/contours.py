@@ -2,7 +2,8 @@ import json
 from collections import deque, defaultdict
 from logging import getLogger
 from typing import List
-
+from app.database.masks import Masks
+from app.database.images import Images
 import cv2
 import numpy as np
 from pydantic import BaseModel, field_validator, Field, model_validator
@@ -59,6 +60,13 @@ class Contour(BaseModel):
     @property
     def points(self) -> np.ndarray[tuple[float, float]]:
         return np.array(list(zip(self.x, self.y)))
+
+    def get_children_by_label(self, label_id):
+        children = []
+        for child in self.children:
+            if child.label_id == label_id:
+                children.append(child)
+        return children
 
     def compute_path(self, image_width: int, image_height: int):
         """Compute SVG path from normalized coordinates (0-1) to pixel coordinates."""
@@ -168,8 +176,6 @@ class ContourHierarchy(BaseModel):
         first_contour = query.first()
         image_width, image_height = 1, 1
         if first_contour:
-            from app.database.masks import Masks
-            from app.database.images import Images
             mask = query.session.query(Masks).filter_by(id=first_contour.mask_id).first()
             if mask:
                 image = query.session.query(Images).filter_by(id=mask.image_id).first()
