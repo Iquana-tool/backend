@@ -1,9 +1,9 @@
 import logging
-
+ 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Depends, File, UploadFile
 from sqlalchemy.orm import Session
-
+ 
 from app.database import get_session
 from app.database.contours import Contours
 from app.database.images import Images
@@ -15,14 +15,29 @@ from app.schemas.contours import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
 from app.schemas.prompted_segmentation.segmentations import SemanticSegmentationMask
 from app.services.database_access import save_array_to_disk
-
+from app.schemas.user import User
+from app.services.auth import get_current_user
+ 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
 
 
 @router.put("/create_mask/{image_id}")
-async def create_mask(image_id: int, db: Session = Depends(get_session)):
-    """ Create a new mask for the given image ID. Only one mask can exist per image. """
+async def create_mask(
+    image_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """ Create a new mask for the given image ID. Only one mask can exist per image.
+
+    Args:
+        image_id (int): The ID of the image.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and mask ID.
+    """
     try:
         # Check if mask already exists for the image
         existing_mask = db.query(Masks).filter_by(image_id=image_id).first()
@@ -47,8 +62,21 @@ async def create_mask(image_id: int, db: Session = Depends(get_session)):
 
 
 @router.post("/finish_mask/{mask_id}")
-async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
-    """ Mark a mask as finished, generate it as an image file and upload it to the AI external service. """
+async def finish_mask(
+    mask_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """ Mark a mask as finished, generate it as an image file and upload it to the AI external service.
+
+    Args:
+        mask_id (int): The ID of the mask.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and mask ID.
+    """
     # Check if mask exists
     existing_mask = db.query(Masks).filter_by(id=mask_id).first()
     if not existing_mask:
@@ -66,7 +94,7 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
     contours = db.query(Contours).filter_by(mask_id=mask_id).all()
     contours_hierarchy = ContourHierarchy.from_contours(contours)
     semantic_mask = contours_hierarchy.to_semantic_mask(image.height, image.width)
-
+ 
     logging.debug(f"Generated mask with the following labels: {np.unique(semantic_mask).tolist()}")
     mask_path = save_array_to_disk(semantic_mask,
                        image.dataset_id,
@@ -88,7 +116,7 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
             file=img_upload,
             filename=file_name
         )
-
+ 
     with open(mask_path, "rb") as mask_file:
         mask_upload = UploadFile(file=mask_file,
                                  filename=file_name,
@@ -107,9 +135,22 @@ async def finish_mask(mask_id: int, db: Session = Depends(get_session)):
 
 
 @router.post("/unfinish_mask/{mask_id}")
-async def unfinish_mask(mask_id: int, db: Session = Depends(get_session)):
+async def unfinish_mask(
+    mask_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
     """ Remove the finished status from a mask, allowing it to be edited again. This will also delete the mask image
-        file and remove it from the AI external service. """
+        file and remove it from the AI external service.
+
+    Args:
+        mask_id (int): The ID of the mask.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and mask ID.
+    """
     # TODO: Implement deletion of mask image file and removal from AI external service.
     # Check if mask exists
     existing_mask = db.query(Masks).filter_by(id=mask_id).first()
@@ -133,8 +174,21 @@ async def unfinish_mask(mask_id: int, db: Session = Depends(get_session)):
 
 
 @router.get("/get_mask/{mask_id}")
-async def get_mask(mask_id: int, db: Session = Depends(get_session)):
-    """ Get a mask by its ID. """
+async def get_mask(
+    mask_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """ Get a mask by its ID.
+
+    Args:
+        mask_id (int): The ID of the mask.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and the mask.
+    """
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=404, detail="Mask not found.")
@@ -145,12 +199,25 @@ async def get_mask(mask_id: int, db: Session = Depends(get_session)):
 
 
 @router.get("/get_mask_annotation_status/{mask_id}")
-async def get_mask_annotation_status(mask_id: int, db: Session = Depends(get_session)):
-    """ Check the annotation status of a mask by its ID. """
+async def get_mask_annotation_status(
+    mask_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """ Check the annotation status of a mask by its ID.
+
+    Args:
+        mask_id (int): The ID of the mask.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the annotation status.
+    """
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=404, detail="Mask not found.")
-
+ 
     # Check if the mask is finished
     if mask.finished:
         return {
@@ -159,7 +226,7 @@ async def get_mask_annotation_status(mask_id: int, db: Session = Depends(get_ses
             "status": "manually_annotated",
             "mask_id": mask.id
         }
-
+ 
     # Check if the mask is generated
     if mask.generated:
         return {
@@ -168,7 +235,7 @@ async def get_mask_annotation_status(mask_id: int, db: Session = Depends(get_ses
             "status": "auto_annotated",
             "mask_id": mask.id
         }
-
+ 
     return {
         "success": True,
         "message": "Mask is neither finished nor generated.",
@@ -178,8 +245,21 @@ async def get_mask_annotation_status(mask_id: int, db: Session = Depends(get_ses
 
 
 @router.delete("/delete_mask/{mask_id}")
-async def delete_mask(mask_id: int, db: Session = Depends(get_session)):
-    """ Delete a mask and all its contours by its ID. """
+async def delete_mask(
+    mask_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """ Delete a mask and all its contours by its ID.
+
+    Args:
+        mask_id (int): The ID of the mask.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and message.
+    """
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=404, detail="Mask not found.")
@@ -192,21 +272,35 @@ async def delete_mask(mask_id: int, db: Session = Depends(get_session)):
 
 
 @router.post("/post_mask/mask_id={mask_id}&added_by={added_by}&temporary={temporary}")
-async def post_mask(mask_id: int,
-                    added_by: str,
-                    temporary:bool,
-                    mask: UploadFile = File(...),
-                    session: Session = Depends(get_session)):
+async def post_mask(
+    mask_id: int,
+    added_by: str,
+    temporary: bool,
+    mask: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
     """
     Upload a mask to a mask id. Compute the contours for each label in the mask, build the hierarchy and add
     them to the database.
+
+    Args:
+        mask_id (int): The ID of the mask.
+        added_by (str): Who added the mask.
+        temporary (bool): Whether the mask is temporary.
+        mask (UploadFile): The mask file.
+        session (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and result.
     """
     mask_array = np.frombuffer(mask.file.read(), dtype=np.uint8)
     image_id = session.query(Masks.image_id).filter_by(id=mask_id).first()
     dataset_id = session.query(Images.dataset_id).filter_by(id=image_id).first()
     labels = session.query(Labels).filter_by(dataset_id=dataset_id)
     label_hierarchy = LabelHierarchy.from_query(labels)
-
+ 
     # Create an initial hierarchy of already added contours
     contour_hierarchy = ContourHierarchy.from_query(session.query(Contours).filter_by(mask_id=mask_id))
     # Add new contours from the mask

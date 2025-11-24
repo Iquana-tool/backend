@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.images import Images
 from app.database.masks import Masks
+from app.schemas.user import User
+from app.services.auth import get_current_user
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)
@@ -15,10 +17,14 @@ router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation
 
 
 @router.post("/start_inference/model={model_id}&image={image_id}")
-async def send_inference_job(model_registry_key: str, image_id: int, db: Session = Depends(get_session)):
+async def send_inference_job(model_registry_key: str,
+                             image_id: int,
+                             user: User = Depends(get_current_user),
+                             db: Session = Depends(get_session)):
     """ Sends an inference job to the semantic segmentation service.
 
     Args:
+        user: User dependency.
         model_registry_key (str): The registry key of the model you want to use.
         image_id (int): ID of the image to segment.
         db (Session): Database session dependency.
@@ -50,8 +56,8 @@ async def send_inference_request(model_registry_key: str, image_path: str, mask_
     files = [
         ("files",
          (os.path.basename(image_path),
-                   open(image_path, "rb"),
-                   f"image/{image_path.rsplit('.', maxsplit=1)[-1]}")
+          open(image_path, "rb"),
+          f"image/{image_path.rsplit('.', maxsplit=1)[-1]}")
          )
     ]
     data = {"model_registry_key": model_registry_key, "mask_id": mask_id}
@@ -68,4 +74,3 @@ async def send_inference_request(model_registry_key: str, image_path: str, mask_
     except Exception as e:
         logger.error(f"An error occurred: {e}")
         raise
-

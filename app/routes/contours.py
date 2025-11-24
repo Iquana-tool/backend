@@ -8,13 +8,17 @@ from app.database.contours import Contours
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.schemas.contours import Contour, ContourHierarchy
+from app.schemas.user import User
+from app.services.auth import get_current_user
 
 router = APIRouter(prefix="/contours", tags=["contours"])
 logger = getLogger(__name__)
 
 
 @router.get("/get_contours_of_mask/{mask_id}&flattened={flattened}")
-async def get_contours_of_mask(mask_id: int, flattened: bool = True, db: Session = Depends(get_session)):
+async def get_contours_of_mask(mask_id: int, flattened: bool = True,
+                               db: Session = Depends(get_session),
+                               user: User = Depends(get_current_user)):
     """ Export quantification data for the given mask_id and labels.
 
     Args:
@@ -23,6 +27,7 @@ async def get_contours_of_mask(mask_id: int, flattened: bool = True, db: Session
             hierarchical structure will be preserved, i.e. children contours will be nested under their
             parent contour.
         db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
+        user (User): Authentication dependency.
 
     Returns:
         dict: A dictionary containing the success status and message if error, or a hierarchical JSON structure of
@@ -38,13 +43,17 @@ async def get_contours_of_mask(mask_id: int, flattened: bool = True, db: Session
 
 
 @router.post("/modify_contour/{contour_id}")
-async def modify_contour(contour_id, db: Session = Depends(get_session), **kwargs):
+async def modify_contour(contour_id,
+                         db: Session = Depends(get_session),
+                         user: User = Depends(get_current_user),
+                         **kwargs):
     """
     Edit a contour by updating its coordinates or label.
 
     Args:
         contour_id (int): The ID of the contour to edit.
         db (Session): The database session.
+        user (User): Authentication dependency.
         **kwargs: Arbitrary keyword arguments to update the contour attributes.
 
     Returns:
@@ -76,7 +85,9 @@ async def modify_contour(contour_id, db: Session = Depends(get_session), **kwarg
 
 
 @router.post("/change_contour_label/{contour_id}&new_label_id={new_label_id}")
-async def change_contour_label(contour_id: int, new_label_id: int, db: Session = Depends(get_session)):
+async def change_contour_label(contour_id: int, new_label_id: int,
+                               user: User = Depends(get_current_user),
+                               db: Session = Depends(get_session)):
     """
     Edit the label of a contour.
 
@@ -84,6 +95,7 @@ async def change_contour_label(contour_id: int, new_label_id: int, db: Session =
         contour_id (int): The ID of the contour to edit.
         new_label_id (int): The new label ID to set for the contour.
         db (Session): The database session.
+        user (User): Authentication dependency.
 
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the edited contour.
@@ -92,7 +104,9 @@ async def change_contour_label(contour_id: int, new_label_id: int, db: Session =
 
 
 @router.get("/finalise/{contour_id}")
-async def finalise(contour_id: int, db: Session = Depends(get_session)):
+async def finalise(contour_id: int,
+                   user: User = Depends(get_current_user),
+                   db: Session = Depends(get_session)):
     """ Mark a temporary contour as not temporary."""
     contour = db.query(Contours).filter_by(id=contour_id).first()
     contour.temporary = False
@@ -106,6 +120,7 @@ async def finalise(contour_id: int, db: Session = Depends(get_session)):
 @router.post("/add_contour")
 async def add_contour(mask_id: int,
                       contour_to_add: Contour,
+                      user: User = Depends(get_current_user),
                       db: Session = Depends(get_session)):
     """
     Add a contour to a mask in the database.
@@ -113,6 +128,7 @@ async def add_contour(mask_id: int,
     Args:
         mask_id (int): The ID of the mask to which the contour will be added.
         contour_to_add (Contour): The contour data to add.
+        user (User): Authentication dependency.
         db (Session): The database session.
 
     Returns:
@@ -120,6 +136,8 @@ async def add_contour(mask_id: int,
     """
     try:
         parent_contour_id = contour_to_add.parent_id
+
+        # Check parents
         expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label_id).first())
         should_have_parent = expected_parent_label is not None
         if contour_to_add.label_id is not None:
@@ -178,7 +196,9 @@ async def add_contour(mask_id: int,
 
 
 @router.delete("/delete_contour/{contour_id}")
-async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
+async def delete_contour(contour_id: int,
+                         user: User = Depends(get_current_user),
+                         db: Session = Depends(get_session)):
     """
     Delete a contour and all its descendants (via CASCADE).
     Returns the list of deleted contour IDs.
@@ -219,7 +239,9 @@ async def delete_contour(contour_id: int, db: Session = Depends(get_session)):
 
 
 @router.delete("/delete_temporary_contours_of_mask/{mask_id}")
-async def delete_temporary_contours_of_mask(mask_id: int, db: Session = Depends(get_session)):
+async def delete_temporary_contours_of_mask(mask_id: int,
+                                            user: User = Depends(get_current_user),
+                                            db: Session = Depends(get_session)):
     """ Deletes all temporary contours of a mask. """
     try:
         contours = db.query(Contours).filter_by(mask_id=mask_id, temporary=True).delete()
@@ -237,8 +259,8 @@ async def delete_temporary_contours_of_mask(mask_id: int, db: Session = Depends(
 @router.post("/add_contours")
 async def add_contours(mask_id: int,
                        contours_to_add: list[Contour],
-                       added_by: str,
                        temporary_list: list[bool],
+                       user: User = Depends(get_current_user),
                        db: Session = Depends(get_session)):
     """
     Add multiple contours to a mask in the database. Internally calls `add_contour` for each contour.
@@ -246,7 +268,8 @@ async def add_contours(mask_id: int,
     Args:
         mask_id (int): The ID of the mask to which the contours will be added.
         contours_to_add (list[Contour]): A list of contour data to add.
-        parent_contour_id (int, optional): The ID of the parent contour. Defaults to None.
+        temporary_list (list[bool]): A list saying whether or not the contours should be temporary.
+        user (User): Authentication dependency.
         db (Session): The database session.
 
     Returns:
@@ -256,7 +279,7 @@ async def add_contours(mask_id: int,
     added_ids = []
     for contour_to_add, temporary in zip(contours_to_add, temporary_list):
         logger.info(f"Added {len(added_ids)} / {len(contours_to_add)} contours. Failed {len(failed)}")
-        result = await add_contour(mask_id, contour_to_add, added_by, temporary, db)
+        result = await add_contour(mask_id, contour_to_add, user, temporary, db)
         if not result["success"]:
             failed.append({
                 "contour": contour_to_add,
@@ -283,18 +306,17 @@ async def add_contours(mask_id: int,
 
 
 @router.delete("/delete_all_contours_of_mask/{mask_id}")
-async def delete_all_contours_of_mask(mask_id: int, db: Session = Depends(get_session)):
+async def delete_all_contours_of_mask(mask_id: int,
+                                      user: User = Depends(get_current_user),
+                                      db: Session = Depends(get_session)):
     """ Deletes all contours of a mask. """
-    try:
-        contours = db.query(Contours).filter_by(mask_id=mask_id).delete()
-        mask = db.query(Masks).filter_by(id=mask_id).first()
-        mask.generated = False
-        mask.finished = False
-        db.commit()
-        return {
-            "success": True,
-            "message": f"Deleted all contours of mask {mask_id}"
-        }
-    except Exception as e:
-        logger.error(e)
-        raise HTTPException(500, e)
+    db.query(Contours).filter_by(mask_id=mask_id).delete()
+    mask = db.query(Masks).filter_by(id=mask_id).first()
+    mask.generated = False
+    mask.finished = False
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Deleted all contours of mask {mask_id}"
+    }
+

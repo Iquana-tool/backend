@@ -5,12 +5,12 @@ import os.path
 import shutil
 import zipfile
 from typing import Literal
-
+ 
 import cv2
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
-
+ 
 from app.database import get_session
 from app.database.datasets import Datasets
 from app.database.images import Images
@@ -22,19 +22,27 @@ from app.services.database_access import parse_log_file, get_height_width_of_ima
 from app.services.database_access import save_image_to_disk_and_db
 from app.services.util import extract_numbers
 from paths import Paths
-
+from app.schemas.user import User
+from app.services.auth import get_current_user
+ 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
 
 
 @router.post("/upload_image")
-async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Session = Depends(get_session)):
+async def upload_image(
+    dataset_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
     """Upload an image file.
 
     Args:
         dataset_id: ID of the dataset to which the image belongs.
         file: The image file to upload.
         db: Database session dependency.
+        user (User): The current authenticated user.
 
     Returns:
         A dictionary containing the success status, image ID, and a message.
@@ -57,13 +65,19 @@ async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Sessio
 
 
 @router.post("/upload_images")
-async def upload_images(dataset_id: int, files: list[UploadFile] = File(...), db: Session = Depends(get_session)):
+async def upload_images(
+    dataset_id: int,
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
     """Upload multiple image files.
 
     Args:
         dataset_id: ID of the dataset to which the images belong.
         files: List of image files to upload.
         db: Database session dependency.
+        user (User): The current authenticated user.
 
     Returns:
         A dictionary containing the success status, list of image IDs, and a message.
@@ -98,12 +112,17 @@ async def upload_images(dataset_id: int, files: list[UploadFile] = File(...), db
 
 
 @router.delete("/delete_image/{image_id}")
-async def delete_image(image_id: int, db: Session = Depends(get_session)):
+async def delete_image(
+    image_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
     """Delete an image and its associated masks.
 
     Args:
         image_id: ID of the image to delete.
         db: Database session dependency.
+        user (User): The current authenticated user.
 
     Returns:
         A dictionary indicating success and a message.
@@ -129,8 +148,21 @@ async def delete_image(image_id: int, db: Session = Depends(get_session)):
 
 
 @router.get("/list_images/{dataset_id}")
-async def list_images(dataset_id: int, db: Session = Depends(get_session)):
-    """List all uploaded image ids in an image dataset."""
+async def list_images(
+    dataset_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """List all uploaded image ids in an image dataset.
+
+    Args:
+        dataset_id: ID of the dataset to retrieve images from.
+        db: Database session dependency.
+        user (User): The current authenticated user.
+
+    Returns:
+        A dictionary containing the success status and the list of images.
+    """
     try:
         dataset = db.query(Datasets).filter_by(id=dataset_id).first()
         if dataset.dataset_type == "scan":
@@ -162,8 +194,21 @@ async def list_images(dataset_id: int, db: Session = Depends(get_session)):
 
 
 @router.get("/list_scans/{dataset_id}")
-async def list_scans(dataset_id: int, db: Session = Depends(get_session)):
-    """ List all uploaded scans in a scan dataset. """
+async def list_scans(
+    dataset_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """ List all uploaded scans in a scan dataset.
+
+    Args:
+        dataset_id: ID of the dataset to retrieve scans from.
+        db: Database session dependency.
+        user (User): The current authenticated user.
+
+    Returns:
+        A dictionary containing the success status and the list of scans.
+    """
     try:
         dataset = db.query(Datasets).filter_by(id=dataset_id).first()
         if dataset.dataset_type == "image":
@@ -202,14 +247,19 @@ async def list_scans(dataset_id: int, db: Session = Depends(get_session)):
 
 
 @router.get("/list_images_with_annotation_status/{dataset_id}&status={status}")
-async def list_images_with_annotation_status(dataset_id: int, status: Literal["finished", "generated", "missing"],
-                                          db: Session = Depends(get_session)):
+async def list_images_with_annotation_status(
+    dataset_id: int,
+    status: Literal["finished", "generated", "missing"],
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
     """List all images with masks of certain status for a given image ID.
 
     Args:
         dataset_id: Dataset ID to retrieve images from.
         status: The status of the masks to filter by. Can be "finished", "generated", or "missing".
         db: Database session dependency.
+        user (User): The current authenticated user.
 
     Returns:
         A list of image IDs.
@@ -262,13 +312,19 @@ async def list_images_with_annotation_status(dataset_id: int, status: Literal["f
 
 
 @router.get("/get_image/{image_id}&{low_res}")
-async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(get_session)):
+async def get_image(
+    image_id: int,
+    low_res: bool = False,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
     """Get images via ids.
 
     Args:
         image_id (int): Image ID to retrieve.
         low_res (bool): Whether to return low resolution images (thumbnails). Defaults to False.
         db (Session): Database session dependency.
+        user (User): The current authenticated user.
 
     Returns:
         A dict mapping from image ID to base64 encoded image.
@@ -291,13 +347,19 @@ async def get_image(image_id: int, low_res: bool = False, db: Session = Depends(
 
 
 @router.post("/get_images")
-async def get_images(image_ids: str, low_res: bool = False, db: Session = Depends(get_session)):
+async def get_images(
+    image_ids: str,
+    low_res: bool = False,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
     """Get images via a list of image IDs. This gets the images in batches to avoid sending too many requests at once.
 
     Args:
         image_ids (str): JSON string containing a list of image IDs to retrieve.
         low_res (bool): Whether to return low resolution images (thumbnails). Defaults to False.
         db (Session): Database session dependency.
+        user (User): The current authenticated user.
 
     Returns:
         A dictionary mapping from image ID to base64 encoded image.
@@ -327,8 +389,13 @@ async def get_images(image_ids: str, low_res: bool = False, db: Session = Depend
 
 
 @router.get("/get_images_of_dataset/{dataset_id}")
-async def get_images_of_dataset(dataset_id: int, low_res: bool = False, limit: int = None,
-                                db: Session = Depends(get_session)):
+async def get_images_of_dataset(
+    dataset_id: int,
+    low_res: bool = False,
+    limit: int = None,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
     """Get all images of a dataset.
 
     Args:
@@ -336,6 +403,7 @@ async def get_images_of_dataset(dataset_id: int, low_res: bool = False, limit: i
         low_res: Whether to return low resolution images (thumbnails).
         limit: Optional limit on the number of images to return. If not provided, all images will be returned.
         db: Database session dependency.
+        user (User): The current authenticated user.
 
     Returns:
         A dict mapping from image ID to base64 encoded image.
@@ -360,17 +428,17 @@ async def get_images_of_dataset(dataset_id: int, low_res: bool = False, limit: i
 
 
 @router.post("/upload_scan")
-async def upload_scan(dataset_id: int,
-                      files: list[UploadFile] = File(...),
-                      name: str = "Scan",
-                      scan_type: Literal["CT"] = "CT",
-                      description: str = "Scan description",
-                      #meta_data: dict = None,
-                      db: Session = Depends(get_session)):
+async def upload_scan(
+    dataset_id: int,
+    files: list[UploadFile] = File(...),
+    name: str = "Scan",
+    scan_type: Literal["CT"] = "CT",
+    description: str = "Scan description",
+    #meta_data: dict = None,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
     """Upload a scan file.
-    This endpoint allows uploading multiple image files that belong to a scan.
-    It creates a new scan entry in the database and associates the images with it.
-    > Warning: This is still in development and might not work!
 
     Args:
         dataset_id: ID of the dataset to which the scan belongs.
@@ -381,6 +449,8 @@ async def upload_scan(dataset_id: int,
         scan_type: Type of scan (e.g., "CT", "MRI"). Optional.
         description: Description of the scan. Optional.
         meta_data: Additional metadata about the scan. Optional.
+        db: Database session dependency.
+        user (User): The current authenticated user.
 
     Returns:
         A success message with the IDs of the uploaded images.
@@ -442,12 +512,13 @@ async def upload_scan(dataset_id: int,
 
 @router.post("/upload_scan_with_log_file")
 async def upload_scan_with_log_file(
-        dataset_id: int,
-        files: list[UploadFile] = File(...),
-        log_file: UploadFile = File(...),
-        scan_type: str = "CT",
-        description: str = "Scan description",
-        db: Session = Depends(get_session)
+    dataset_id: int,
+    files: list[UploadFile] = File(...),
+    log_file: UploadFile = File(...),
+    scan_type: str = "CT",
+    description: str = "Scan description",
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
 ):
     """
     Upload a scan file with logging. This endpoint allows uploading multiple image files that belong to a scan,
@@ -461,6 +532,7 @@ async def upload_scan_with_log_file(
         scan_type: Type of scan (e.g., "CT", "MRI"). Optional.
         description: Description of the scan. Optional.
         db: Database session dependency.
+        user (User): The current authenticated user.
 
     Returns:
         A success message with the IDs of the uploaded images.
@@ -482,11 +554,12 @@ async def upload_scan_with_log_file(
 
 @router.post("/upload_scan_from_zip")
 async def upload_scan_from_zip(
-        dataset_id: int,
-        zip_file: UploadFile = File(...),
-        scan_type: str = "CT",
-        description: str = "Scan description",
-        db: Session = Depends(get_session)
+    dataset_id: int,
+    zip_file: UploadFile = File(...),
+    scan_type: str = "CT",
+    description: str = "Scan description",
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
 ):
     """
     Upload a scan from a zip file. This endpoint extracts images from a zip file and uploads them as a scan.
@@ -499,6 +572,7 @@ async def upload_scan_from_zip(
         scan_type: Type of scan (e.g., "CT", "MRI"). Optional.
         description: Description of the scan. Optional.
         db: Database session dependency.
+        user (User): The current authenticated user.
 
     Returns:
         A success message with the IDs of the uploaded images.
@@ -562,8 +636,21 @@ async def upload_scan_from_zip(
 
 
 @router.delete("/delete_scan/{scan_id}")
-async def delete_scan(scan_id: int, db: Session = Depends(get_session)):
-    """Delete a scan and all its associated images."""
+async def delete_scan(
+    scan_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """Delete a scan and all its associated images.
+
+    Args:
+        scan_id: The ID of the scan to delete.
+        db: Database session dependency.
+        user (User): The current authenticated user.
+
+    Returns:
+        A dictionary indicating success and a message.
+    """
     try:
         # Get the scan and its associated images
         images = db.query(Images).filter_by(scan_id=scan_id).all()

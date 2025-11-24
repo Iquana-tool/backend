@@ -6,14 +6,29 @@ from app.database import get_session
 from app.database.labels import Labels
 from app.database.contours import Contours
 from app.schemas.labels import LabelHierarchy
-
+from app.schemas.user import User
+from app.services.auth import get_current_user
+ 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/labels", tags=["labels"])
 
 
 @router.get("/get_labels/{dataset_id}")
-async def get_labels(dataset_id: int, db: Session = Depends(get_session)):
-    """Retrieve all labels for a given dataset."""
+async def get_labels(
+    dataset_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """Retrieve all labels for a given dataset.
+
+    Args:
+        dataset_id (int): The ID of the dataset.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and the labels hierarchy.
+    """
     labels = db.query(Labels).filter_by(dataset_id=dataset_id)
     labels_hierarchy = LabelHierarchy.from_query(labels)
     return {
@@ -28,6 +43,7 @@ async def create_label(label_name: str,
                        dataset_id: int,
                        parent_label_id: int = None,
                        label_value: int = None,
+                       user: User = Depends(get_current_user),
                        db: Session = Depends(get_session)):
     """Create a new label for a dataset.
 
@@ -36,6 +52,7 @@ async def create_label(label_name: str,
         dataset_id (int): The ID of the dataset to which the label belongs.
         parent_label_id (int, optional): The ID of the parent label if this is a child label. Defaults to None.
         label_value (int, optional): The value of the label. If not provided, it will be set to the next available value.
+        user (User): The current authenticated user. Defaults to Depends(get_current_user).
         db (Session): The database session.
 
     Returns:
@@ -71,12 +88,15 @@ async def create_label(label_name: str,
 
 
 @router.delete("/delete_label/label={label_id}")
-async def delete_label(label_id: int, db: Session = Depends(get_session)):
+async def delete_label(label_id: int,
+                       user: User = Depends(get_current_user),
+                       db: Session = Depends(get_session)):
     """
     Delete a label, its children and all associated contours.
 
     Args:
         label_id (int): The ID of the label to delete.
+        user (User): The current authenticated user.
         db (Session): The database session.
 
     Returns:

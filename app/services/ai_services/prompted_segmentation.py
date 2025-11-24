@@ -29,7 +29,7 @@ async def check_backend():
         logger.error(f"Error checking prompted prompted_segmentation backend: {e}")
         return False
 
-async def upload_image(user_id: int, image_id: int):
+async def upload_image(user_id: str, image_id: int):
     """Upload an image to the prompted prompted_segmentation backend.
     :param user_id: The user id.
     :param image_id: The image id.
@@ -48,7 +48,7 @@ async def upload_image(user_id: int, image_id: int):
     return response.json()
 
 
-async def select_model(user_id: int, model_identifier: str):
+async def select_model(user_id: str, model_identifier: str):
     """
     Preload a model into the model cache
     Args:
@@ -87,7 +87,7 @@ async def focus_contour(user_id, contour_id):
         return await focus_crop(user_id, min_x, min_y, max_x, max_y)
 
 
-async def focus_crop(user_id: int, min_x: float, min_y: float, max_x: float, max_y: float):
+async def focus_crop(user_id: str, min_x: float, min_y: float, max_x: float, max_y: float):
     """Crop the uploaded image to the specified bounding box.
     Args:
         user_id (str): Unique identifier for the user.
@@ -104,7 +104,7 @@ async def focus_crop(user_id: int, min_x: float, min_y: float, max_x: float, max
         response.raise_for_status()
     return response.json()
 
-async def unfocus_crop(user_id: int):
+async def unfocus_crop(user_id: str):
     """Revert the cached image to the original uploaded image.
     Args:
         user_id (str): Unique identifier for the user.
@@ -117,7 +117,7 @@ async def unfocus_crop(user_id: int):
         response.raise_for_status()
     return response.json()
 
-async def close_image(user_id: int):
+async def close_image(user_id: str):
     """Clear the cached image for the specified user.
     Args:
         user_id (str): Unique identifier for the user.

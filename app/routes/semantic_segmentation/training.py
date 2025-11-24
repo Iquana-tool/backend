@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.labels import Labels
 from app.schemas.semantic_segmentation.training import TrainingRequest
+from app.schemas.user import User
+from app.services.auth import get_current_user
 from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)
@@ -16,7 +18,8 @@ router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation
 
 
 @router.get("/get_training_status/{model_id}")
-async def get_training_status(model_id: str):
+async def get_training_status(model_id: str,
+                     user: User = Depends(get_current_user)):
     """ Get the status of a training job by its ID. """
     url = f"{BASE_URL}/training/get_job_status/{model_id}"
     async with httpx.AsyncClient() as client:
@@ -26,7 +29,8 @@ async def get_training_status(model_id: str):
 
 
 @router.get("/cancel_training_of_model/{model_id}")
-async def cancel_training_of_model(model_id: str):
+async def cancel_training_of_model(model_id: str,
+                     user: User = Depends(get_current_user)):
     """ Cancel a training job by its ID."""
     try:
         url = f"{BASE_URL}/training/cancel_job/{model_id}"
@@ -42,12 +46,14 @@ async def cancel_training_of_model(model_id: str):
 
 
 @router.post("/start_training")
-async def start_training(request: TrainingRequest, db: Session = Depends(get_session)):
+async def start_training(request: TrainingRequest, db: Session = Depends(get_session),
+                     user: User = Depends(get_current_user)):
     """ Start training a model for automatic prompted_segmentation.
     This endpoint prepares the request with necessary parameters and forwards it to the Automatic Segmentation Service.
     Args:
         request (TrainingRequest): The training request containing dataset_id and other parameters.
         db (Session): The database session for querying labels.
+        user (User): The current authenticated user.
 
     Returns:
         JSONResponse: The response from the Automatic Segmentation Service.
