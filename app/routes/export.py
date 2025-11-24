@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
+from fastapi import status
 from sqlalchemy.orm import Session
 
 from app.database import get_session
@@ -49,12 +50,25 @@ async def get_mask_csv(
     return response
 
 
-@router.get("/get_dataset_csv/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}")
+@router.get("/get_object_level_quantifications/{dataset_id}_{label_id}")
+async def get_object_level_quantifications(
+        dataset_id: int,
+        label_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+
+
+@router.get("/get_dataset_quantification/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}&as_download={as_download}")
 async def get_dataset_csv(
     dataset_id: int,
     label_ids: list[int] = None,
     include_manual: bool = True,
     include_auto: bool = True,
+    as_download: bool = False,
     db: Session = Depends(get_session),
     user: User = Depends(get_current_user)
 ):
@@ -66,6 +80,7 @@ async def get_dataset_csv(
         label_ids (list[int], optional): List of label IDs to filter contours. Defaults to None.
         include_manual (bool, optional): Whether to include manual masks. Defaults to True.
         include_auto (bool, optional): Whether to include auto-generated masks. Defaults to True.
+        as_download (bool, optional): Whether to export as CSV. Defaults to False. If False, returns the data as a json.
         db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
         user (User): The current authenticated user.
 
@@ -73,6 +88,8 @@ async def get_dataset_csv(
         dict: A dictionary containing the success status and message if error, or a
         StreamingResponse with the CSV file.
     """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
     query = (db.query(Contours, Images.file_name, Masks.finished, Masks.generated)
                 .join(Masks, Masks.id == Contours.mask_id).join(Images, Images.id == Masks.image_id).filter(
                     Images.dataset_id == dataset_id
@@ -123,11 +140,18 @@ async def get_dataset_csv(
             "message": "No data found for the given dataset and filters."
         }
     else:
-        # Convert to CSV
-        csv_content = df.to_csv(index=False)
-        response = StreamingResponse(StringIO(csv_content), media_type="text/csv")
-        response.headers["Content-Disposition"] = f'attachment; filename="{dataset_name.replace(' ', '_')}_dataset.csv"'
-        return response
+        if as_download:
+            # Convert to CSV
+            csv_content = df.to_csv(index=False)
+            response = StreamingResponse(StringIO(csv_content), media_type="text/csv")
+            response.headers["Content-Disposition"] = f'attachment; filename="{dataset_name.replace(' ', '_')}_dataset.csv"'
+            return response
+        else:
+            return {
+                "success": True,
+                "message": "Successfully exported the dataset as json.",
+                "data": df.to_json(orient="records"),
+            }
 
 
 @router.get("/get_segmentation_mask_file/{mask_id}")
