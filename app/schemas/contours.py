@@ -322,3 +322,32 @@ class ContourHierarchy(BaseModel):
                     queue.extend(contour.children)
         # Return the filled array
         return canvas
+
+    def get_label_quantification(self, label_id):
+        # First get all relevant contours
+        contours = self.label_id_to_contours[label_id]
+
+        # Second track all relevant metrics
+        metrics = defaultdict(list)
+        child_counts = defaultdict(list)
+        for contour in contours:
+            # Get the quantifications from the quantification model
+            for quant_key, quant_value in contour.quantization.model_dump():
+                metrics[quant_key].append(quant_value)
+
+            # Count the children
+            _child_counts = defaultdict(lambda: 0)
+            for child_contour in contour.children:
+                _child_counts[child_contour.label_id] += 1
+
+            for label_id in _child_counts:
+                child_counts[label_id].append(_child_counts[label_id])
+        return {
+            "metrics": metrics,
+            "child_counts": child_counts,
+        }
+
+    def get_all_quantifications(self):
+        response = {}
+        for label in self.label_id_to_contours.keys():
+            response[label] = self.get_label_quantification(label)

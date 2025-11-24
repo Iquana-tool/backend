@@ -2,6 +2,7 @@ import io
 import json
 import os
 import zipfile
+from collections import defaultdict
 from io import StringIO
 from logging import getLogger
 
@@ -18,6 +19,7 @@ from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.masks import Masks
 from app.routes.contours import get_contours_of_mask
+from app.schemas.contours import ContourHierarchy
 from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path
 from app.schemas.user import User
@@ -63,7 +65,7 @@ async def get_object_level_quantifications(
 
 
 @router.get("/get_dataset_quantification/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}&as_download={as_download}")
-async def get_dataset_csv(
+async def get_dataset_quantification(
     dataset_id: int,
     label_ids: list[int] = None,
     include_manual: bool = True,
@@ -152,6 +154,33 @@ async def get_dataset_csv(
                 "message": "Successfully exported the dataset as json.",
                 "data": df.to_json(orient="records"),
             }
+
+
+@router.get("/get_dataset_object_summaries/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}")
+async def get_dataset_object_summaries(dataset_id: int,
+                                       include_manual: bool = True,
+                                       include_auto: bool = False,
+                                       db: Session = Depends(get_session),
+                                       user: User = Depends(get_current_user),
+                                       ):
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+    images = db.query(Images).filter(Images.dataset_id == dataset_id).all()
+    metrics_per_label = defaultdict(list)
+    child_counts_per_label = defaultdict(list)
+    for image in images:
+        mask = db.query(Masks).filter(Masks.image_id == image.id).first()  # Only one should exist
+        if not include_manual and mask.finished:
+            continue
+        elif not include_auto and mask.generated:
+            continue
+        contours = db.query(Contours).filter_by(mask_id=mask.id)
+        contour_hierarchy = ContourHierarchy.from_query(contours)
+        label_quants = contour_hierarchy.get_all_quantifications()
+        for label, quants in label_quants.items():
+            metrics_per_label[label].extend(quants)
+
+
 
 
 @router.get("/get_segmentation_mask_file/{mask_id}")
