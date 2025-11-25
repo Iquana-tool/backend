@@ -17,9 +17,11 @@ from app.database import get_session
 from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
+from app.database.labels import Labels
 from app.database.masks import Masks
 from app.routes.contours import get_contours_of_mask
 from app.schemas.contours import ContourHierarchy
+from app.schemas.labels import LabelHierarchy
 from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path
 from app.schemas.user import User
@@ -31,9 +33,9 @@ logger = getLogger(__name__)
 
 @router.get("/get_mask_csv/{mask_id}")
 async def get_mask_csv(
-    mask_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+        mask_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """
     Download quantification data for the given mask_id as a CSV file.
@@ -52,27 +54,16 @@ async def get_mask_csv(
     return response
 
 
-@router.get("/get_object_level_quantifications/{dataset_id}_{label_id}")
-async def get_object_level_quantifications(
+@router.get(
+    "/get_dataset_quantification/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}&as_download={as_download}")
+async def get_dataset_quantification(
         dataset_id: int,
-        label_id: int,
+        label_ids: list[int] = None,
+        include_manual: bool = True,
+        include_auto: bool = True,
+        as_download: bool = False,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
-):
-    if dataset_id not in user.available_datasets:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
-
-
-
-@router.get("/get_dataset_quantification/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}&as_download={as_download}")
-async def get_dataset_quantification(
-    dataset_id: int,
-    label_ids: list[int] = None,
-    include_manual: bool = True,
-    include_auto: bool = True,
-    as_download: bool = False,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
 ):
     """
     Export quantification data for the given dataset_id and labels.
@@ -93,16 +84,16 @@ async def get_dataset_quantification(
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
     query = (db.query(Contours, Images.file_name, Masks.finished, Masks.generated)
-                .join(Masks, Masks.id == Contours.mask_id).join(Images, Images.id == Masks.image_id).filter(
-                    Images.dataset_id == dataset_id
+    .join(Masks, Masks.id == Contours.mask_id).join(Images, Images.id == Masks.image_id).filter(
+        Images.dataset_id == dataset_id
     ))
     if include_manual and include_auto:
-        query = query.filter(Masks.finished == True, Masks.generated == True)
+        query = query.filter(Masks.finished == True or Masks.generated == True)
     else:
         if include_manual:
-            query = query.filter(Masks.finished == True, Masks.generated == False)
+            query = query.filter(Masks.finished == True and Masks.generated == False)
         elif include_auto:
-            query = query.filter(Masks.finished == False, Masks.generated == True)
+            query = query.filter(Masks.finished == False and Masks.generated == True)
         else:
             return {
                 "success": False,
@@ -146,7 +137,8 @@ async def get_dataset_quantification(
             # Convert to CSV
             csv_content = df.to_csv(index=False)
             response = StreamingResponse(StringIO(csv_content), media_type="text/csv")
-            response.headers["Content-Disposition"] = f'attachment; filename="{dataset_name.replace(' ', '_')}_dataset.csv"'
+            response.headers[
+                "Content-Disposition"] = f'attachment; filename="{dataset_name.replace(' ', '_')}_dataset.csv"'
             return response
         else:
             return {
@@ -156,13 +148,14 @@ async def get_dataset_quantification(
             }
 
 
-@router.get("/get_dataset_object_summaries/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}")
-async def get_dataset_object_summaries(dataset_id: int,
-                                       include_manual: bool = True,
-                                       include_auto: bool = False,
-                                       db: Session = Depends(get_session),
-                                       user: User = Depends(get_current_user),
-                                       ):
+@router.get(
+    "/get_dataset_object_quantifications/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}")
+async def get_dataset_object_quantifications(dataset_id: int,
+                                             include_manual: bool = True,
+                                             include_auto: bool = False,
+                                             db: Session = Depends(get_session),
+                                             user: User = Depends(get_current_user),
+                                             ):
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
     images = db.query(Images).filter(Images.dataset_id == dataset_id).all()
@@ -178,16 +171,28 @@ async def get_dataset_object_summaries(dataset_id: int,
         contour_hierarchy = ContourHierarchy.from_query(contours)
         label_quants = contour_hierarchy.get_all_quantifications()
         for label, quants in label_quants.items():
-            metrics_per_label[label].extend(quants)
-
-
+            metrics = quants["metrics"]
+            child_counts = quants["child_counts"]
+            for k, v in metrics.items():
+                metrics_per_label[k].extend(v)
+            for k, v in child_counts.items():
+                child_counts_per_label[k].extend(v)
+    labels = db.query(Labels).filter_by(dataset_id=dataset_id)
+    labels_hierarchy = LabelHierarchy.from_query(labels)
+    return {
+        "success": True,
+        "message": "Successfully exported the object quantifications of this dataset as json.",
+        "labels": labels_hierarchy.model_dump(),
+        "metrics_per_label_id": metrics_per_label,
+        "child_counts_per_label_id": child_counts_per_label,
+    }
 
 
 @router.get("/get_segmentation_mask_file/{mask_id}")
 async def get_segmentation_mask_file(
-    mask_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session)
+        mask_id: int,
+        user: User = Depends(get_current_user),
+        db: Session = Depends(get_session)
 ):
     """Download the prompted_segmentation mask file for the given mask_id."""
     mask = db.query(Masks).filter_by(id=mask_id).first()
@@ -216,11 +221,11 @@ async def get_segmentation_mask_file(
 
 @router.get("/get_segmentation_dataset/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}")
 async def get_segmentation_dataset(
-    dataset_id: int,
-    include_manual: bool = True,
-    include_auto: bool = True,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+        dataset_id: int,
+        include_manual: bool = True,
+        include_auto: bool = True,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """
     Download all images and masks as a ZIP file for the given dataset_id.
