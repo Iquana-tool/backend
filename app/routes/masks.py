@@ -265,7 +265,7 @@ async def delete_mask(
         raise HTTPException(status_code=404, detail="Mask not found.")
     root_contours = db.query(Contours).filter_by(mask_id=mask_id, parent_id=None).all()
     for contour in root_contours:
-        await delete_contour(contour.id, db)
+        await delete_contour(contour.id, user, db)
     db.delete(mask)
     db.commit()
     return {"success": True, "message": "Mask deleted successfully."}
