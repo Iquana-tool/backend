@@ -159,8 +159,8 @@ async def get_dataset_object_quantifications(dataset_id: int,
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
     images = db.query(Images).filter(Images.dataset_id == dataset_id).all()
-    metrics_per_label = defaultdict(list)
-    child_counts_per_label = defaultdict(list)
+    metrics_per_label = defaultdict(lambda: defaultdict(list))
+    child_counts_per_label = defaultdict(lambda: defaultdict(list))
     for image in images:
         mask = db.query(Masks).filter(Masks.image_id == image.id).first()  # Only one should exist
         if not include_manual and mask.finished:
@@ -170,13 +170,13 @@ async def get_dataset_object_quantifications(dataset_id: int,
         contours = db.query(Contours).filter_by(mask_id=mask.id)
         contour_hierarchy = ContourHierarchy.from_query(contours)
         label_quants = contour_hierarchy.get_all_quantifications()
-        for label, quants in label_quants.items():
+        for label, quants in label_quants.items(): 
             metrics = quants["metrics"]
             child_counts = quants["child_counts"]
             for k, v in metrics.items():
-                metrics_per_label[k].extend(v)
+                metrics_per_label[label][k].extend(v)
             for k, v in child_counts.items():
-                child_counts_per_label[k].extend(v)
+                child_counts_per_label[label][k].extend(v)
     labels = db.query(Labels).filter_by(dataset_id=dataset_id)
     labels_hierarchy = LabelHierarchy.from_query(labels)
     return {
