@@ -249,13 +249,13 @@ async def delete_dataset(
             return {"success": False, "message": "Dataset not found."}
         images = db.query(Images).filter_by(dataset_id=dataset_id).all()
         for image in images:
-            await delete_image(image.id, db)
+            await delete_image(image.id, db, user)
         # Delete disk directory
         shutil.rmtree(dataset.folder_path, ignore_errors=True)
         # Delete associated labels
         labels = db.query(Labels).filter_by(dataset_id=dataset_id).all()
         for label in labels:
-            await delete_label(label.id, db)
+            await delete_label(label.id, user, db)
         # Delete the dataset
         db.delete(dataset)
         db.commit()
