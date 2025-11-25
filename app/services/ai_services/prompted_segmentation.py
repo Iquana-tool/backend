@@ -1,18 +1,12 @@
 import json
-from typing import Union
-
+from logging import getLogger
 import httpx
-import numpy as np
-
-from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
-from app.services.util import extract_mask_from_response
-from paths import Paths
+from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
-from app.schemas.prompted_segmentation.prompts import Prompts
+from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
+from app.services.util import extract_mask_from_response
 from paths import PROMPTED_SEGMENTATION_BACKEND_URL as BASE_URL
-from app.database import get_context_session
-from logging import getLogger
 
 logger = getLogger(__name__)
 
