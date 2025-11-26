@@ -259,7 +259,6 @@ async def delete_temporary_contours_of_mask(mask_id: int,
 @router.post("/add_contours")
 async def add_contours(mask_id: int,
                        contours_to_add: list[Contour],
-                       temporary_list: list[bool],
                        user: User = Depends(get_current_user),
                        db: Session = Depends(get_session)):
     """
@@ -277,9 +276,9 @@ async def add_contours(mask_id: int,
     """
     failed = []
     added_ids = []
-    for contour_to_add, temporary in zip(contours_to_add, temporary_list):
+    for contour_to_add in contours_to_add:
         logger.info(f"Added {len(added_ids)} / {len(contours_to_add)} contours. Failed {len(failed)}")
-        result = await add_contour(mask_id, contour_to_add, user, temporary, db)
+        result = await add_contour(mask_id, contour_to_add, user, db)
         if not result["success"]:
             failed.append({
                 "contour": contour_to_add,
