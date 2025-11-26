@@ -16,7 +16,7 @@ class PromptedSegmentationService(BaseService):
     def __init__(self):
         super().__init__(BASE_URL)
 
-    async def segment_image_with_prompts(self, request: PromptedSegmentationWebsocketRequest):
+    async def inference(self, request: PromptedSegmentationWebsocketRequest):
         """Segment an image using 2D prompts.
         Args:
             request (PromptedSegmentationWebsocketRequest): Request object.
