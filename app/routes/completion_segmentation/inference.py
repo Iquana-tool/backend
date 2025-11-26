@@ -26,7 +26,7 @@ async def infer_completion(
     height, width = db.query(Images.height, Images.width).filter_by(id=request.image_id).first()
     seeds = []
     label = None
-    for contour_id in request.contour_ids:
+    for contour_id in request.seed_contours:
         contour_db = db.query(Contours).filter_by(id=contour_id).first()
         if contour_db is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Contour with id {contour_id} not found! "
