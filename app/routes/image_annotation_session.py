@@ -35,31 +35,22 @@ class Backends(StrEnum):
     SEMANTIC_SEGMENTATION = "semantic_segmentation"
 
 
-class AnnotationSessionState(BaseModel):
+class AnnotationSessionState:
     """ A class to track the state of the annotation session. """
-    image_id: int = Field(..., title="Image ID", description="The id of the image whose annotations are being done.")
-    user_id: str = Field(...,
-                         title="User ID",
-                         description="The id of the user who is annotating.")
-    awaiting_response: dict[str, ClientMessageType] = Field(default_factory=dict,
-                                                            title="Messages await responses",
-                                                            description="A dict mapping from message ids to the expected"
-                                                                        " client message. This is needed for prompting"
-                                                                        " user input and continuing the loop.")
-    conflicts: dict[int, List[int]] = Field(default_factory=dict,
-                                            title="Object conflicts",
-                                            description="A dict mapping from object ids to a list of "
-                                                    "object ids that are conflicting with it. This means"
-                                                    " that the object for example overlaps with another.")
-    focussed_contour_id: int | None = Field(default=None,
-                                            description="The id of the focussed contour.")
-    refinement_contour_id: int | None = Field(default=None,
-                                                description="The id of the contour being refined.")
-    running_backends: dict[str, BaseService] | None = Field(default_factory=dict,
-                                          description="A dict of running backends.")
-    failed_backends: dict[str, BaseService] | None = Field(default_factory=dict,
-                                         description="A dict of failed backends.")
 
+    def __init__(self,
+                 image_id: int,
+                 user_id: str,
+                 focussed_contour_id: int | None = None,
+                 refinement_contour_id: int | None = None,
+
+                 ):
+        self.image_id = image_id
+        self.user_id = user_id
+        self.focussed_contour_id = focussed_contour_id
+        self.refinement_contour_id = refinement_contour_id
+        self.running_backends: dict[str, BaseService] = {}
+        self.failed_backends: dict[str, BaseService] = {}
 
     @field_validator("image_id", mode="before")
     def validate_image_id(cls, value, values):
@@ -169,19 +160,18 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
         type=ServerMessageType.SESSION_INITIALIZED,
         success=len(state.failed_backends) == 0,
         message=f"Annotation session initialized."
-                f"\nRunning backends: {state.running_backends.keys()}"
-                f"\nFailed initializations: {state.failed_backends.keys()}",
+                f"\nRunning backends: {list(state.running_backends.keys())}"
+                f"\nFailed initializations: {list(state.failed_backends.keys())}",
         data={
-            "running": state.running_backends.keys(),
-            "failed": state.failed_backends.keys(),
+            "running": list(state.running_backends.keys()),
+            "failed": list(state.failed_backends.keys()),
             "objects": objects,
         }
     )
 
 
-
 @router.websocket("/ws/user={user_id}&image={image_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
+async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
     """WebSocket endpoint to handle real-time image annotation sessions. The image annotation session takes multiple
         messages from the user as input to start tasks in the background.
         Client sent messages should be structured as JSON and should look like this: \n
@@ -211,7 +201,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
     state = AnnotationSessionState(
         image_id=image_id,
         user_id=user_id,
-        annotation_completion_enabled=False,
     )
     try:
         # Call some functions on startup
@@ -280,6 +269,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
         except Exception:
             # Websocket might already be closed, ignore
             pass
+        finally:
+            raise e
     finally:
         # Only close if websocket is still open
         try:
@@ -288,7 +279,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, image_id: int):
         except Exception:
             # Websocket might already be closed, ignore
             pass
-
 
 
 async def handle_focus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -333,7 +323,9 @@ async def handle_unfocus_image(websocket: WebSocket, client_msg: ClientMessage, 
         data=None
     ))
 
-async def handle_select_refinement_object(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+
+async def handle_select_refinement_object(websocket: WebSocket, client_msg: ClientMessage,
+                                          state: AnnotationSessionState):
     """ Handle the client selecting an object for refinement."""
     refinement_contour_id = client_msg.data.get("contour_id")
     state.refinement_contour_id = refinement_contour_id
@@ -345,7 +337,9 @@ async def handle_select_refinement_object(websocket: WebSocket, client_msg: Clie
         data=None
     ))
 
-async def handle_unselect_refinement_object(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+
+async def handle_unselect_refinement_object(websocket: WebSocket, client_msg: ClientMessage,
+                                            state: AnnotationSessionState):
     """ Handle the client unselecting an object for refinement."""
     state.refinement_contour_id = None
     await send_msg(websocket, ServerMessage(
@@ -355,6 +349,7 @@ async def handle_unselect_refinement_object(websocket: WebSocket, client_msg: Cl
         message=f"Unselected contour for refinement.",
         data=None
     ))
+
 
 async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle adding an object to the mask."""
@@ -498,11 +493,11 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
 
     response_seg = await state.running_backends[Backends.PROMPTED_SEGMENTATION].inference(prompted_request)
     contour_model = get_contours_from_binary_mask(response_seg["mask"],
-                                                   only_return_biggest=True,
-                                                   limit=None,
-                                                   added_by=model_identifier,
-                                                   label_id=None,
-                                                   temporary=True)[0]
+                                                  only_return_biggest=True,
+                                                  limit=None,
+                                                  added_by=model_identifier,
+                                                  label_id=None,
+                                                  temporary=True)[0]
     with get_context_session() as session:
         response = await add_contour(
             mask_id=await state.mask_id(),
@@ -513,7 +508,8 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
         id=client_msg.id,
         type=message_type if response["success"] else ServerMessageType.ERROR,
         success=response["success"],
-        message=f"Successfully segmented object with confidence score {response_seg['score']:.1%}" if response["success"] else response["message"],
+        message=f"Successfully segmented object with confidence score {response_seg['score']:.1%}" if response[
+            "success"] else response["message"],
         data=response["added_contour"] if response["success"] else None,
     ))
     if state.running_backends[Backends.COMPLETION_SEGMENTATION].enabled:
@@ -525,7 +521,7 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
                 success=True,
                 data=CompletionMainAPIRequest(
                     image_id=state.image_id,
-                    model_key=state.model_key,
+                    model_key="dino_1000_cosine_he_max_agg",
                     seed_contour_ids=[response["added_contour"]["id"]],
                 ).model_dump()
             ),
@@ -533,8 +529,8 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
         )
 
 
-
-async def handle_completion_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_completion_select_model(websocket: WebSocket, client_msg: ClientMessage,
+                                         state: AnnotationSessionState):
     """ Handle the selection of a completion model. """
     if Backends.COMPLETION_SEGMENTATION in state.running_backends:
         model_identifier = client_msg.data.get("model_identifier")
@@ -610,11 +606,11 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
     )
     response_seg = await state.running_backends[Backends.COMPLETION_SEGMENTATION].inference(service_request)
     contour_models = get_contours_from_binary_mask(response_seg["mask"],
-                                                  only_return_biggest=False,
-                                                  limit=None,
-                                                  added_by=client_msg.data.get("model_key"),
-                                                  label_id=client_msg.data.get("label_id", None),
-                                                  temporary=True)
+                                                   only_return_biggest=False,
+                                                   limit=None,
+                                                   added_by=client_msg.data.get("model_key"),
+                                                   label_id=client_msg.data.get("label_id", None),
+                                                   temporary=True)
     with get_context_session() as session:
         response = await add_contours(
             mask_id=await state.mask_id(),
@@ -644,6 +640,7 @@ async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessa
     ))
 
 
-async def handle_object_conflict_resolve(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_object_conflict_resolve(websocket: WebSocket, client_msg: ClientMessage,
+                                         state: AnnotationSessionState):
     """ Handle how an object conflict should be resolved. """
     raise NotImplementedError("Method not implemented yet!")

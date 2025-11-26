@@ -277,7 +277,7 @@ async def add_contours(mask_id: int,
     """
     added = []
     for contour_to_add in contours_to_add:
-        logger.info(f"Added {len(added)} / {len(contours_to_add)} contours. Failed {len(failed)}")
+        logger.info(f"Added {len(added)} / {len(contours_to_add)} contours.")
         result = await add_contour(mask_id, contour_to_add, user, db)
         if result["success"]:
             added.append(result["added_contour"])

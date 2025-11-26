@@ -28,7 +28,7 @@ class CompletionService(BaseService):
 
         # Send the request to the backend
         async with httpx.AsyncClient(timeout=120) as client:
-            url = f"{self.backend_url}/infer_instances"
+            url = f"{self.backend_url}/annotation_session/infer_instances"
             # Only send the prompts in the body
             response = await client.post(url, json=request.model_dump(exclude_none=True))
 

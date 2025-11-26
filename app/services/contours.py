@@ -38,7 +38,11 @@ def get_contours_from_binary_mask(mask: np.ndarray,
                 contours = contours[:limit]
         models = []
         for contour in contours:
+            # Skip one dimensional contours
+            if contour.shape[0] <= 2:
+                continue
             # First dim of contour is x, but first dim of mask is height, so it needs to be switched!
+            contour = contour.astype(float)
             contour[..., 0] /= mask.shape[1]
             contour[..., 1] /= mask.shape[0]
             models.append(Contour.from_normalized_cv_contour(contour,
@@ -69,4 +73,5 @@ def contour_ids_to_indices(image_id, contour_ids, db):
                 raise HTTPException(status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
                                     detail="You are trying to run completion on contours of different labels. This is "
                                            "not allowed!")
-        seeds.append(np.argwhere(contour_model.to_binary_mask(height, width)).flatten())
+        seeds.append(np.argwhere(contour_model.to_binary_mask(height, width).flatten()))
+    return seeds
