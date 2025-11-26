@@ -116,7 +116,7 @@ async def delete_label(label_id: int,
         # Check if class has children
         children = db.query(Labels).filter_by(parent_id=label_id).all()
         for child in children:
-            await delete_label(child.id, db)
+            await delete_label(child.id, user, db)
 
         # Delete all contours with this label
         contours = db.query(Contours).filter_by(label=label_id).all()

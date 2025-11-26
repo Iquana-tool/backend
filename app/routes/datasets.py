@@ -41,8 +41,17 @@ async def create_dataset(name: str,
         dict: A dictionary containing the success status and message, or error details.
     """
     try:
-        dataset_path = os.path.join(Paths.datasets_dir, name)
-        os.makedirs(dataset_path)
+        # Check if dataset with the same name already exists
+        existing_dataset = db.query(Datasets).filter_by(name=name.strip()).first()
+        if existing_dataset:
+            return {"success": False,
+                    "message": f"Dataset with name '{name.strip()}' already exists.",
+                    "error": "Duplicate dataset name"}
+        
+        dataset_path = os.path.join(Paths.datasets_dir, name.strip())
+        # Use exist_ok=True to avoid FileExistsError if directory already exists
+        os.makedirs(dataset_path, exist_ok=True)
+        
         new_dataset = Datasets(
             name=name.strip(),
             description=description.strip(),
@@ -58,6 +67,8 @@ async def create_dataset(name: str,
                 "dataset_id": new_dataset.id
                 }
     except Exception as e:
+        logger.error(f"Error creating dataset: {str(e)}")
+        db.rollback()
         return {"success": False,
                 "message": "Error creating dataset.",
                 "error": str(e)}
@@ -249,13 +260,13 @@ async def delete_dataset(
             return {"success": False, "message": "Dataset not found."}
         images = db.query(Images).filter_by(dataset_id=dataset_id).all()
         for image in images:
-            await delete_image(image.id, db)
+            await delete_image(image.id, db, user)
         # Delete disk directory
         shutil.rmtree(dataset.folder_path, ignore_errors=True)
         # Delete associated labels
         labels = db.query(Labels).filter_by(dataset_id=dataset_id).all()
         for label in labels:
-            await delete_label(label.id, db)
+            await delete_label(label.id, user, db)
         # Delete the dataset
         db.delete(dataset)
         db.commit()
