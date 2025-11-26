@@ -1,10 +1,12 @@
 import json
 from logging import getLogger
+
 import httpx
+
 from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
-from app.schemas.completion_segmentation.inference import CompletionRequest
+from app.schemas.completion_segmentation.inference import CompletionBackendRequest
 from app.services.util import extract_mask_from_response
 from paths import COMPLETION_SEGMENTATION_BACKEND_URL as BASE_URL
 
@@ -125,7 +127,7 @@ async def close_image(user_id: str):
         response.raise_for_status()
     return response.json()
 
-async def infer_instances(request: CompletionRequest):
+async def infer_instances(request: CompletionBackendRequest):
     """Segment an image using 2D prompts.
     Args:
         request (PromptedSegmentationWebsocketRequest): Request object.
