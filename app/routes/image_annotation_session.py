@@ -608,6 +608,14 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
             contours_to_add=contour_models,
             db=session,
         )
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
+        success=response["success"],
+        message=f"Predicted {len(contour_models)} objects of the same type." if response[
+            "success"] else response["message"],
+        data=response["added_contours"] if response["success"] else None,
+    ))
 
 
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
