@@ -7,7 +7,8 @@ from app.database import get_session
 from app.database.contours import Contours
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.schemas.contours import Contour, ContourHierarchy
+from app.schemas.contours import Contour
+from app.schemas.contour_hierarchy import ContourHierarchy
 from app.schemas.user import User
 from app.services.auth import get_current_user
 

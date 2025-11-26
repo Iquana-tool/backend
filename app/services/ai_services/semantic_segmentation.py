@@ -3,7 +3,7 @@ import httpx
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.schemas.contours import ContourHierarchy
+from app.schemas.contour_hierarchy import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
 from app.schemas.user import System
 from app.services.util import extract_mask_from_response
