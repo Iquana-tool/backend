@@ -12,19 +12,18 @@ from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
-from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour, modify_contour
+from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour, modify_contour, \
+    add_contours
 from app.routes.masks import create_mask, finish_mask
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
+from app.schemas.completion_segmentation.inference import CompletionServiceRequest
 from app.schemas.contours import Contour
 from app.schemas.prompted_segmentation.prompts import Prompts
 from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
 from app.services.ai_services.base_service import BaseService
-from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.ai_services.completion_segmentation import CompletionService
-from app.services.ai_services.prompted_segmentation import select_model, segment_image_with_prompts, focus_contour, \
-    unfocus_crop
-from app.services.ai_services.semantic_segmentation import segment_image_with_semantic_model
-from app.services.contours import get_contours_from_binary_mask
+from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
+from app.services.contours import get_contours_from_binary_mask, contour_ids_to_indices
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
@@ -456,23 +455,13 @@ async def handle_semantic_select_model(websocket: WebSocket, client_msg: ClientM
 
 async def handle_semantic_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle prompted_segmentation using an automatic model. """
-    selected_model = client_msg.data.get("selected_model")
-    selected_image = client_msg.data.get("selected_image")
-    with get_context_session() as session:
-        response = await segment_image_with_semantic_model(selected_model, selected_image, db=session)
-    await send_msg(websocket, ServerMessage(
-        id=client_msg.id,
-        type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
-        success=response["success"],
-        message=response["message"],
-        data=response["contour_hierarchy"] if response["success"] else None,
-    ))
+    raise NotImplementedError("Method not implemented yet!")
 
 
 async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of a prompted model. """
     selected_model = client_msg.data.get("selected_model")
-    response = await select_model(state.user_id, selected_model)
+    response = await state.running_backends[Backends.PROMPTED_SEGMENTATION].select_model(state.user_id, selected_model)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
@@ -500,28 +489,20 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
         previous_mask = None
         message_type = ServerMessageType.OBJECT_ADDED
 
-    websocket_request = PromptedSegmentationWebsocketRequest(
+    prompted_request = PromptedSegmentationWebsocketRequest(
         user_id=str(state.user_id),
         model_identifier=model_identifier,
         previous_mask=previous_mask,
         prompts=prompts_model,
     )
 
-    response_seg = await segment_image_with_prompts(websocket_request)
-    contour = get_contours_from_binary_mask(response_seg["mask"], only_return_biggest=True).astype(float).squeeze()
-    
-    contour[..., 0] = contour[..., 0] / response_seg["mask"].shape[1]  
-    contour[..., 1] = contour[..., 1] / response_seg["mask"].shape[0] 
-    x = contour[..., 0].squeeze().tolist()
-    y = contour[..., 1].squeeze().tolist()
-    contour_model = Contour(x=x,
-                            y=y,
-                            label_id=None,
-                            added_by=model_identifier,
-                            temporary=True,
-                            parent_id=None,
-                            confidence=float(response_seg['score']),
-                            )
+    response_seg = await state.running_backends[Backends.PROMPTED_SEGMENTATION].inference(prompted_request)
+    contour_model = get_contours_from_binary_mask(response_seg["mask"],
+                                                   only_return_biggest=True,
+                                                   limit=None,
+                                                   added_by=model_identifier,
+                                                   label_id=None,
+                                                   temporary=True)[0]
     with get_context_session() as session:
         response = await add_contour(
             mask_id=await state.mask_id(),
@@ -535,6 +516,8 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
         message=f"Successfully segmented object with confidence score {response_seg['score']:.1%}" if response["success"] else response["message"],
         data=response["added_contour"] if response["success"] else None,
     ))
+    if state.running_backends[Backends.COMPLETION_SEGMENTATION].enabled:
+        await handle
 
 
 
@@ -600,6 +583,31 @@ async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMess
             message="Failed to disable annotation completion. Backend is not running.",
             data=None
         ))
+
+
+async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+    """ Handle the completion of a completion model. """
+    seed_contour_ids = client_msg.data.get("seed_contour_ids")
+    with get_context_session() as session:
+        seeds = contour_ids_to_indices(state.image_id, seed_contour_ids, session)
+    service_request = CompletionServiceRequest(
+        model_key=client_msg.data.get("model_key"),
+        user_id=state.user_id,
+        seeds=seeds,
+    )
+    response_seg = await state.running_backends[Backends.COMPLETION_SEGMENTATION].inference(service_request)
+    contour_models = get_contours_from_binary_mask(response_seg["mask"],
+                                                  only_return_biggest=False,
+                                                  limit=None,
+                                                  added_by=client_msg.data.get("model_key"),
+                                                  label_id=client_msg.data.get("label_id", None),
+                                                  temporary=True)
+    with get_context_session() as session:
+        response = await add_contours(
+            mask_id=await state.mask_id(),
+            contours_to_add=contour_models,
+            db=session,
+        )
 
 
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
