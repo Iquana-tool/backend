@@ -6,7 +6,7 @@ import httpx
 from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
-from app.schemas.completion_segmentation.inference import CompletionBackendRequest
+from app.schemas.completion_segmentation.inference import CompletionServiceRequest
 from app.services.ai_services.base_service import BaseService
 from app.services.util import extract_mask_from_response
 from paths import COMPLETION_SEGMENTATION_BACKEND_URL as BASE_URL
@@ -18,7 +18,7 @@ class CompletionService(BaseService):
     def __init__(self):
         super().__init__(BASE_URL)
 
-    async def infer_instances(self, request: CompletionBackendRequest):
+    async def inference(self, request: CompletionServiceRequest):
         """Segment an image using 2D prompts.
         Args:
             request (PromptedSegmentationWebsocketRequest): Request object.
@@ -159,7 +159,7 @@ async def close_image(user_id: str):
         response.raise_for_status()
     return response.json()
 
-async def infer_instances(request: CompletionBackendRequest):
+async def infer_instances(request: CompletionServiceRequest):
     """Segment an image using 2D prompts.
     Args:
         request (PromptedSegmentationWebsocketRequest): Request object.
