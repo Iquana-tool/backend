@@ -8,7 +8,7 @@ from app.schemas.labels import LabelHierarchy
 from app.schemas.user import System
 from app.services.util import extract_mask_from_response
 from app.routes import contours
-from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
+from paths import SEMANTIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from logging import getLogger
 
 
