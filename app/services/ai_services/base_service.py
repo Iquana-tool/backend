@@ -10,7 +10,7 @@ from app.database.images import Images
 logger = getLogger(__name__)
 
 
-class BaseService:
+class BaseService(ABC):
     """Base class for all service classes."""
     def __init__(self, backend_url):
         self.backend_url = backend_url
@@ -35,7 +35,6 @@ class BaseService:
             logger.error(f"Error checking prompted prompted_segmentation backend: {e}")
             return False
 
-    @abstractmethod
     async def upload_image(self, user_id: str, image_id: int):
         """Upload an image to the prompted prompted_segmentation backend.
         :param user_id: The user id.
@@ -132,3 +131,8 @@ class BaseService:
             response = await client.get(url)
             response.raise_for_status()
         return response.json()
+
+    @abstractmethod
+    async def inference(self, request):
+        """ The inference endpoint of each service. Is specific to the service. """
+        pass
