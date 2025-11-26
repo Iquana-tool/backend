@@ -16,7 +16,7 @@ from app.routes.contours import add_contour, get_contours_of_mask, finalise, del
     add_contours
 from app.routes.masks import create_mask, finish_mask
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
-from app.schemas.completion_segmentation.inference import CompletionServiceRequest
+from app.schemas.completion_segmentation.inference import CompletionServiceRequest, CompletionMainAPIRequest
 from app.schemas.contours import Contour
 from app.schemas.prompted_segmentation.prompts import Prompts
 from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
@@ -517,7 +517,20 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
         data=response["added_contour"] if response["success"] else None,
     ))
     if state.running_backends[Backends.COMPLETION_SEGMENTATION].enabled:
-        await handle
+        await handle_completion(
+            websocket,
+            ClientMessage(
+                id=client_msg.id,
+                type=client_msg.type,
+                success=True,
+                data=CompletionMainAPIRequest(
+                    image_id=state.image_id,
+                    model_key=state.model_key,
+                    seed_contour_ids=[response["added_contour"]["id"]],
+                ).model_dump()
+            ),
+            state
+        )
 
 
 
