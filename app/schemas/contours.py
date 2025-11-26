@@ -249,19 +249,17 @@ class ContourHierarchy(BaseModel):
 
             # First: Extract the mask for the current label and create Contour Models
             mask_label = postprocess_binary_mask((np_mask == label.value).astype(np.uint8))
-            contours = get_contours_from_binary_mask(mask_label, only_return_biggest=False)
+            contour_models = get_contours_from_binary_mask(mask_label,
+                                                           only_return_biggest=False,
+                                                           limit=None,
+                                                           added_by=added_by,
+                                                           label_id=label.id,
+                                                           temporary=True,
+                                                           )
 
-            contour_models = []
             contour_entries = []
             # Second: Add them to the database to get an id for each contour
-            for contour in contours:
-                # Normalize to [0, 1] coords
-                contour[..., 0] /= width
-                contour[..., 1] /= height
-                contour_model = Contour.from_normalized_cv_contour(contour,
-                                                                   label,
-                                                                   added_by,
-                                                                   True)
+            for contour_model in contour_models:
                 entry = contour_model.to_db_entry(mask_id)
                 db.add(entry)
                 db.flush()
