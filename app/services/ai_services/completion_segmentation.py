@@ -4,9 +4,9 @@ import httpx
 from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
-from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
+from app.schemas.completion_segmentation.inference import CompletionRequest
 from app.services.util import extract_mask_from_response
-from paths import PROMPTED_SEGMENTATION_BACKEND_URL as BASE_URL
+from paths import COMPLETION_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)
 
@@ -30,7 +30,7 @@ async def upload_image(user_id: str, image_id: int):
     :param image_id: The image id.
     :returns dict: A dictionary containing the success status and message.
     """
-    url = f"{BASE_URL}/annotation_session/open_image/user_uid={user_id}"
+    url = f"{BASE_URL}/open_image/user_uid={user_id}"
     with get_context_session() as session:
         image_path = session.query(Images.file_path).filter_by(id=image_id).first()
         image_path = image_path[0]
@@ -53,7 +53,7 @@ async def select_model(user_id: str, model_identifier: str):
     Returns:
         Response message indicating success.
     """
-    url = f"{BASE_URL}/models/select_model/{model_identifier}"
+    url = f"{BASE_URL}/select_model/{model_identifier}"
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.get(url)
         response.raise_for_status()
@@ -62,7 +62,7 @@ async def select_model(user_id: str, model_identifier: str):
 
 async def get_models():
     """ List all available models."""
-    url = f"{BASE_URL}/models/available"
+    url = f"{BASE_URL}/available"
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.get(url)
         response.raise_for_status()
@@ -125,7 +125,7 @@ async def close_image(user_id: str):
         response.raise_for_status()
     return response.json()
 
-async def segment_image_with_prompts(request: PromptedSegmentationWebsocketRequest):
+async def infer_instances(request: CompletionRequest):
     """Segment an image using 2D prompts.
     Args:
         request (PromptedSegmentationWebsocketRequest): Request object.
@@ -135,7 +135,7 @@ async def segment_image_with_prompts(request: PromptedSegmentationWebsocketReque
 
      # Send the request to the backend
     async with httpx.AsyncClient(timeout=120) as client:
-        url = f"{BASE_URL}/annotation_session/segment_image_with_prompts"
+        url = f"{BASE_URL}/infer_instances"
         # Only send the prompts in the body
         response = await client.post(url, json=request.model_dump(exclude_none=True))
 
