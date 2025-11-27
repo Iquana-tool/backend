@@ -498,20 +498,7 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
                                                   added_by=model_identifier,
                                                   label_id=None,
                                                   temporary=True)[0]
-    with get_context_session() as session:
-        response = await add_contour(
-            mask_id=await state.mask_id(),
-            contour_to_add=contour_model,
-            db=session,
-        )
-    await send_msg(websocket, ServerMessage(
-        id=client_msg.id,
-        type=message_type if response["success"] else ServerMessageType.ERROR,
-        success=response["success"],
-        message=f"Successfully segmented object with confidence score {response_seg['score']:.1%}" if response[
-            "success"] else response["message"],
-        data=response["added_contour"] if response["success"] else None,
-    ))
+    response = await add_object(contour_model, websocket, client_msg, state)
     if state.running_backends[Backends.COMPLETION_SEGMENTATION].enabled:
         await handle_completion(
             websocket,
@@ -611,20 +598,26 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
                                                    added_by=client_msg.data.get("model_key"),
                                                    label_id=client_msg.data.get("label_id", None),
                                                    temporary=True)
+    for contour_model in contour_models:
+        await add_object(contour_model, websocket, client_msg, state)
+
+
+async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     with get_context_session() as session:
-        response = await add_contours(
+        response = await add_contour(
             mask_id=await state.mask_id(),
-            contours_to_add=contour_models,
+            contour_to_add=object_to_add,
             db=session,
         )
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
-        type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
+        type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
         success=response["success"],
-        message=f"Predicted {len(contour_models)} objects of the same type." if response[
+        message=f"Successfully segmented object with confidence score {object_to_add.confidence:.1%}" if response[
             "success"] else response["message"],
-        data=response["added_contours"] if response["success"] else None,
+        data=object_to_add.model_dump() if response["success"] else None,
     ))
+    return response
 
 
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
