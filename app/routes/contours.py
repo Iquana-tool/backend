@@ -205,39 +205,23 @@ async def delete_contour(contour_id: int,
     Delete a contour and all its descendants (via CASCADE).
     Returns the list of deleted contour IDs.
     """
-    try:
-        # Fetch the contour and all descendants in one query
-        contour = (
-            db.query(Contours)
-            .options(joinedload(Contours.children))
-            .filter_by(id=contour_id)
-            .first()
-        )
-        if not contour:
-            raise HTTPException(status_code=404, detail="Contour not found.")
+    # Fetch the contour and all descendants in one query
+    contour = (
+        db.query(Contours)
+        .filter_by(id=contour_id)
+        .first()
+    )
+    if not contour:
+        raise HTTPException(status_code=404, detail="Contour not found.")
 
-        # Collect all descendant IDs (including the root)
-        deleted_ids = []
-        stack = [contour]
-        while stack:
-            current = stack.pop()
-            deleted_ids.append(current.id)
-            if current.children:  # Add children to the stack if they exist
-                stack.extend(current.children)
+    # Delete the root contour (CASCADE will handle the rest)
+    db.delete(contour)
+    db.commit()
 
-        # Delete the root contour (CASCADE will handle the rest)
-        db.delete(contour)
-        db.commit()
-
-        return {
-            "success": True,
-            "message": "Contour and descendants deleted successfully.",
-            "deleted_contours": deleted_ids,
-        }
-    except Exception as e:
-        logger.error(f"Error deleting contour: {e}")
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Error deleting contour.")
+    return {
+        "success": True,
+        "message": "Contour and descendants deleted successfully.",
+    }
 
 
 @router.delete("/delete_unreviewed_contours_of_mask/{mask_id}")

@@ -131,9 +131,6 @@ async def delete_image(
         image = db.query(Images).filter_by(id=image_id).first()
         if not image:
             raise HTTPException(status_code=404, detail="Image not found")
-        masks = db.query(Masks).filter_by(image_id=image_id).all()
-        for mask in masks:
-            await delete_mask(mask.id, db, user)
         if os.path.exists(image.file_path):
             os.remove(image.file_path)  # Remove the original image file
         if os.path.exists(image.thumbnail_file_path):
