@@ -1,6 +1,15 @@
-from sqlalchemy import Column, Integer, ForeignKey, Float, JSON, Boolean, String
+from sqlalchemy import Column, Integer, ForeignKey, Float, JSON, Boolean, String, Table
 from sqlalchemy.orm import relationship
 from app.database import database
+
+
+reviewer_contour_association = Table('reviewer_contour_association',
+                                     database.metadata,
+                                     Column('reviewer_id', Integer,
+                                            ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+                                     Column('contour_id', Integer,
+                                            ForeignKey('contours.id', ondelete='CASCADE'), primary_key=True),
+                                     )
 
 
 class Contours(database):
@@ -23,4 +32,4 @@ class Contours(database):
     y = Column(JSON, nullable=False)
     # Easy access to children, this makes accessing children much faster
     children = relationship("Contours", backref="parent", remote_side=[id], single_parent=True)
-
+    reviewed_by = relationship("Users", secondary=reviewer_contour_association, back_populates="reviewed_objects")

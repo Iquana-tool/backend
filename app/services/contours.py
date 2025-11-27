@@ -15,15 +15,13 @@ def get_contours_from_binary_mask(mask: np.ndarray,
                                   only_return_biggest=False,
                                   limit=None,
                                   added_by: str = "system",
-                                  label_id: int = None,
-                                  temporary: bool = True) -> list[Contour]:
+                                  label_id: int = None,) -> list[Contour]:
     """ Get contour models from a binary mask
     :param mask: A binary mask in the form of a numpy array
     :param only_return_biggest: If true, only return the biggest contour.
     :param limit: Number of contours to return. If None, return all contours.
     :param added_by: Author of this contour, by default "system".
     :param label_id: Contour label id. If None, no label is given to the contour.
-    :param temporary: Sets the contour to temporary.
     :return: List of contour models
     """
     logger.debug("Computing contours for mask.")
@@ -47,8 +45,7 @@ def get_contours_from_binary_mask(mask: np.ndarray,
             contour[..., 1] /= mask.shape[0]
             models.append(Contour.from_normalized_cv_contour(contour,
                                                              label=label_id,
-                                                             added_by=added_by,
-                                                             temporary=temporary)
+                                                             added_by=added_by)
                           )
         return models
     else:

@@ -12,9 +12,9 @@ from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
-from app.routes.contours import add_contour, get_contours_of_mask, finalise, delete_contour, modify_contour, \
+from app.routes.contours import add_contour, get_contours_of_mask, mark_as_reviewed, delete_contour, modify_contour, \
     add_contours
-from app.routes.masks import create_mask, finish_mask
+from app.routes.masks import create_mask, mark_as_fully_annotated
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from app.schemas.completion_segmentation.inference import CompletionServiceRequest, CompletionMainAPIRequest
 from app.schemas.contours import Contour
@@ -384,7 +384,7 @@ async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage
     """
     contour_id = client_msg.data.get("contour_id")
     with get_context_session() as session:
-        response = await finalise(contour_id, db=session)
+        response = await mark_as_reviewed(contour_id, db=session)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
@@ -497,8 +497,7 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
                                                   only_return_biggest=True,
                                                   limit=None,
                                                   added_by=model_identifier,
-                                                  label_id=None,
-                                                  temporary=True)[0]
+                                                  label_id=None,)[0]
     response = await add_object(contour_model, websocket, client_msg, state)
     if state.running_backends[Backends.COMPLETION_SEGMENTATION].enabled:
         await handle_completion(
@@ -597,8 +596,7 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
                                                    only_return_biggest=False,
                                                    limit=None,
                                                    added_by=client_msg.data.get("model_key"),
-                                                   label_id=client_msg.data.get("label_id", None),
-                                                   temporary=True)
+                                                   label_id=client_msg.data.get("label_id", None),)
     for contour_model in contour_models:
         await add_object(contour_model, websocket, client_msg, state)
 
@@ -624,7 +622,7 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle marking a mask as finished. """
     with get_context_session() as session:
-        response = await finish_mask(await state.mask_id(), db=session)
+        response = await mark_as_fully_annotated(await state.mask_id(), db=session)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,

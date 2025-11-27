@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, ForeignKey, String, JSON, Boolean
 
 from app.database import database
 from app.database.datasets import dataset_user_association
+from app.database.contours import reviewer_contour_association
 from sqlalchemy.orm import relationship
 
 class Users(database):
@@ -16,3 +17,6 @@ class Users(database):
     accessible_datasets = relationship("Datasets",
                                        secondary=dataset_user_association,
                                        back_populates="shared_with")
+    reviewed_objects = relationship("Contours",
+                                    secondary=reviewer_contour_association,
+                                    back_populates="reviewed_by")

@@ -106,7 +106,6 @@ class ContourHierarchy(BaseModel):
                                                            limit=None,
                                                            added_by=added_by,
                                                            label_id=label.id,
-                                                           temporary=True,
                                                            )
 
             contour_entries = []
@@ -127,7 +126,7 @@ class ContourHierarchy(BaseModel):
             if parent is not None:
                 for contour, entry in zip(contour_models, contour_entries):
                     # For each contour, that we found, we check:
-                    for parent_contour in self.label_id_to_contours[parent.value]:
+                    for parent_contour in label_id_to_contours[parent.value]:
                         # Does any parent label contour exist, in which the contour lies
                         # Depending on the nesting, this can take quite a while
                         if contour in parent_contour:

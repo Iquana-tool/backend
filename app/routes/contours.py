@@ -77,7 +77,7 @@ async def modify_contour(contour_id,
         return {
             "success": True,
             "message": "Contour edited successfully.",
-            "contour_id": existing_contour.id
+            "contour": Contour.from_db(existing_contour)
         }
     except Exception as e:
         logger.error(f"Error modifying contour: {e}")
@@ -104,13 +104,15 @@ async def change_contour_label(contour_id: int, new_label_id: int,
     return await modify_contour(contour_id, label=new_label_id, db=db)
 
 
-@router.get("/finalise/{contour_id}")
-async def finalise(contour_id: int,
-                   user: User = Depends(get_current_user),
-                   db: Session = Depends(get_session)):
+@router.get("/mark_as_reviewed/{contour_id}")
+async def mark_as_reviewed(contour_id: int,
+                           user: User = Depends(get_current_user),
+                           db: Session = Depends(get_session)):
     """ Mark a temporary contour as not temporary."""
     contour = db.query(Contours).filter_by(id=contour_id).first()
-    contour.temporary = False
+    if contour is None:
+        raise HTTPException(status_code=404, detail="Contour not found.")
+    contour.reviewed_by.append(user)
     db.commit()
     return {
         "success": True,
@@ -137,7 +139,6 @@ async def add_contour(mask_id: int,
     """
     try:
         parent_contour_id = contour_to_add.parent_id
-
         # Check parents
         expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label_id).first())
         should_have_parent = expected_parent_label is not None
@@ -239,13 +240,13 @@ async def delete_contour(contour_id: int,
         raise HTTPException(status_code=500, detail="Error deleting contour.")
 
 
-@router.delete("/delete_temporary_contours_of_mask/{mask_id}")
-async def delete_temporary_contours_of_mask(mask_id: int,
-                                            user: User = Depends(get_current_user),
-                                            db: Session = Depends(get_session)):
+@router.delete("/delete_unreviewed_contours_of_mask/{mask_id}")
+async def delete_unreviewed_contours_of_mask(mask_id: int,
+                                             user: User = Depends(get_current_user),
+                                             db: Session = Depends(get_session)):
     """ Deletes all temporary contours of a mask. """
     try:
-        contours = db.query(Contours).filter_by(mask_id=mask_id, temporary=True).delete()
+        contours = db.query(Contours).filter(Contours.mask_id == mask_id, ~Contours.reviewed_by.any()).delete()
         db.commit()
         return {
             "success": True,
@@ -304,8 +305,7 @@ async def delete_all_contours_of_mask(mask_id: int,
     """ Deletes all contours of a mask. """
     db.query(Contours).filter_by(mask_id=mask_id).delete()
     mask = db.query(Masks).filter_by(id=mask_id).first()
-    mask.generated = False
-    mask.finished = False
+    mask.fully_annotated = False
     db.commit()
     return {
         "success": True,

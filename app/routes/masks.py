@@ -1,23 +1,20 @@
 import logging
- 
+
 import numpy as np
 from fastapi import APIRouter, HTTPException, Depends, File, UploadFile
 from sqlalchemy.orm import Session
- 
+
 from app.database import get_session
 from app.database.contours import Contours
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.routes.contours import delete_contour, add_contours
-from app.routes.semantic_segmentation.upload_data import proxy_upload_file
 from app.schemas.contour_hierarchy import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
-from app.schemas.prompted_segmentation.segmentations import SemanticSegmentationMask
-from app.services.database_access import save_array_to_disk
 from app.schemas.user import User
 from app.services.auth import get_current_user
- 
+from app.services.database_access import save_array_to_disk
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
 
@@ -61,8 +58,8 @@ async def create_mask(
         raise HTTPException(status_code=500, detail="Error creating mask.")
 
 
-@router.post("/finish_mask/{mask_id}")
-async def finish_mask(
+@router.post("/mark_as_fully_annotated/{mask_id}")
+async def mark_as_fully_annotated(
     mask_id: int,
     db: Session = Depends(get_session),
     user: User = Depends(get_current_user)
@@ -81,12 +78,12 @@ async def finish_mask(
     existing_mask = db.query(Masks).filter_by(id=mask_id).first()
     if not existing_mask:
         raise HTTPException(status_code=404, detail="Mask not found.")
-    print(f"Finishing this mask: {existing_mask}")
+    logger.info(f"Finishing this mask: {existing_mask}")
     # Check if the mask is already finished
-    if bool(existing_mask.finished):
+    if bool(existing_mask.fully_annotated):
         return {
             "success": True,
-            "message": "Mask is already marked as finished.",
+            "message": "Mask is already marked as fully annotated.",
             "mask_id": existing_mask.id
         }
     image = db.query(Images).filter_by(id=existing_mask.image_id).first()
@@ -102,31 +99,8 @@ async def finish_mask(
                        is_mask=True,
                        new_filename=image.file_name)
     # Mark the mask as finished
-    existing_mask.finished = True
+    existing_mask.fully_annotated = True
     db.commit()
-    # Upload the image and mask to the AI external service
-    file_name, extension = image.file_name.rsplit(".", maxsplit=1)  # Get the file name without extension
-    with open(image.file_path, "rb") as img_file:
-        img_upload = UploadFile(file=img_file,
-                                filename=file_name,
-                                headers={"Content-Type": f'image/{extension}'})
-        img_response = await proxy_upload_file(
-            dataset_id=image.dataset_id,
-            is_image=True,
-            file=img_upload,
-            filename=file_name
-        )
- 
-    with open(mask_path, "rb") as mask_file:
-        mask_upload = UploadFile(file=mask_file,
-                                 filename=file_name,
-                                 headers={"Content-Type": f'image/{extension}'})
-        mask_response = await proxy_upload_file(
-            dataset_id=image.dataset_id,
-            is_image=False,
-            file=mask_upload,
-            filename=file_name
-        )
     return {
         "success": True,
         "message": "Mask marked as finished successfully.",
@@ -134,8 +108,8 @@ async def finish_mask(
     }
 
 
-@router.post("/unfinish_mask/{mask_id}")
-async def unfinish_mask(
+@router.post("/unmark_as_fully_annotated/{mask_id}")
+async def unmark_as_fully_annotated(
     mask_id: int,
     db: Session = Depends(get_session),
     user: User = Depends(get_current_user)
@@ -151,24 +125,23 @@ async def unfinish_mask(
     Returns:
         dict: A dictionary containing the success status and mask ID.
     """
-    # TODO: Implement deletion of mask image file and removal from AI external service.
     # Check if mask exists
     existing_mask = db.query(Masks).filter_by(id=mask_id).first()
     if not existing_mask:
         raise HTTPException(status_code=404, detail="Mask not found.")
     # Check if the mask is already unfinished
-    if not existing_mask.finished:
+    if not existing_mask.fully_annotated:
         return {
             "success": True,
-            "message": "Mask is not marked as finished.",
+            "message": "Mask is not marked as fully annotated.",
             "mask_id": existing_mask.id
         }
     # Mark the mask as unfinished
-    existing_mask.finished = False
+    existing_mask.fully_annotated = False
     db.commit()
     return {
         "success": True,
-        "message": "Mask marked as unfinished successfully.",
+        "message": "Mask marked as not fully annotated successfully.",
         "mask_id": existing_mask.id
     }
 
@@ -216,32 +189,36 @@ async def get_mask_annotation_status(
     """
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
-        raise HTTPException(status_code=404, detail="Mask not found.")
- 
-    # Check if the mask is finished
-    if mask.finished:
+        raise HTTPException(status_code=404, detail="Mask does not exist.")
+    contours = db.query(Contours).filter_by(mask_id=mask.id).all()
+    if len(contours) == 0:
+        # Zero annotated objects means we have not started annotating yet
         return {
             "success": True,
-            "message": "Mask is finished.",
-            "status": "manually_annotated",
-            "mask_id": mask.id
+            "message": "Mask status: Not started.",
+            "status": "not_started",
         }
- 
-    # Check if the mask is generated
-    if mask.generated:
+    elif not mask.fully_annotated:
+        # The mask has not been marked as fully annotated, so annotation must still be in progress
         return {
             "success": True,
-            "message": "Mask is generated but not finished.",
-            "status": "auto_annotated",
-            "mask_id": mask.id
+            "message": "Mask status: In progress.",
+            "status": "in_progress",
         }
- 
-    return {
-        "success": True,
-        "message": "Mask is neither finished nor generated.",
-        "status": "missing",
-        "mask_id": mask.id
-    }
+    elif np.any(len(contour.reviewed_by) == 0 for contour in contours):
+        # Mask has been marked as fully annotated, but we still have contours without reviewers, so the mask is reviewable
+        return {
+            "success": True,
+            "message": "Mask status: Reviewable.",
+            "status": "reviewable",
+        }
+    else:
+        # Mask marked as fully annotated and each contour has at least one reviewer, the mask is finished.
+        return {
+            "success": True,
+            "message": "Mask status: Finished.",
+            "status": "finished",
+        }
 
 
 @router.delete("/delete_mask/{mask_id}")
@@ -262,20 +239,22 @@ async def delete_mask(
     """
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
-        raise HTTPException(status_code=404, detail="Mask not found.")
-    root_contours = db.query(Contours).filter_by(mask_id=mask_id, parent_id=None).all()
-    for contour in root_contours:
-        await delete_contour(contour.id, user, db)
+        return {
+            "success": True,
+            "message": "Mask does not exist.",
+        }
     db.delete(mask)
     db.commit()
-    return {"success": True, "message": "Mask deleted successfully."}
+    return {
+        "success": True,
+        "message": "Mask deleted successfully."
+    }
 
 
-@router.post("/post_mask/mask_id={mask_id}&added_by={added_by}&temporary={temporary}", deprecated=True)
+@router.post("/post_mask/mask_id={mask_id}&added_by={added_by}", deprecated=True)
 async def post_mask(
     mask_id: int,
     added_by: str,
-    temporary: bool,
     mask: UploadFile = File(...),
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user)
@@ -309,46 +288,10 @@ async def post_mask(
         mask_array,
         label_hierarchy,
         added_by,
-        temporary,
         session
     )
     return {
         "success": True,
         "message": "Converted mask object to contour hierarchy and added it to the database.",
         "result": contour_hierarchy.model_dump_json()
-    }
-
-
-
-async def create_masks_and_add_contours_for_images(image_ids: list[int],
-                                                   mask_responses: list[SemanticSegmentationMask],
-                                                   db: Session = Depends(get_session)):
-    """
-    Create masks for a list of image IDs and add contours to them.
-
-    Args:
-        image_ids (list[int]): List of image IDs for which to create masks.
-        mask_responses (list[SemanticSegmentationMask]): List of prompted_segmentation mask responses containing contours.
-        db (Session): The database session.
-
-    Returns:
-        dict: A dictionary containing the success status, message, and responses for each image.
-    """
-    if len(image_ids) != len(mask_responses):
-        raise ValueError(
-            f"Number of image_ids does not match number of mask_responses."
-        )
-    responses = []
-    for image_id, mask_response in zip(image_ids, mask_responses):
-        mask = db.query(Masks).filter_by(image_id=image_id).first()
-        if not mask:
-            response = await create_mask(image_id, db)
-            mask = db.query(Masks).filter_by(image_id=image_id).first()
-        responses.append(await add_contours(mask.id, mask_response.contours, None, db))
-        mask.generated = True
-        db.commit()
-    return {
-        "success": True,
-        "message": f"Created and added masks for {len(image_ids)} images.",
-        "responses": responses
     }

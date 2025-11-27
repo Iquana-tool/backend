@@ -8,6 +8,4 @@ class Masks(database):
     id = Column(Integer, primary_key=True, autoincrement=True)
     image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'),
                       nullable=False)
-    finished = Column(Boolean, default=False, nullable=False)  # True if the mask is finished
-    generated = Column(Boolean, default=False, nullable=False)  # True if the mask was generated
-    reviewed = Column(Boolean, default=False, nullable=False)  # True if the generated mask was reviewed
+    fully_annotated = Column(Boolean, default=False, nullable=False)  # Users can mark a mask as fully annotated indicating that all objects are there.

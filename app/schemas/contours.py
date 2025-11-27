@@ -17,6 +17,7 @@ class Contour(BaseModel):
     parent_id: int | None = Field(default=None, description="ID of the parent contour. None if the contour has "
                                                                     "no parent")
     children: list["Contour"] = Field(default=[], description="List of objects represented by their contours.")
+    reviewed_by: list[str] = Field(default=[], description="List of users who reviewed the contour.")
 
     x: list[float] = Field(default_factory=list, description="X-coordinates of the contour.")
     y: list[float] = Field(default_factory=list, description="Y-coordinates of the contour.")
@@ -24,7 +25,6 @@ class Contour(BaseModel):
 
     added_by: str = Field(default_factory=str, description="ID of the user or model who added this contour.")
     confidence: float = Field(default=1., description="Confidence score of the contour.")
-    temporary: bool = Field(default=False, description="Whether or not this contour is temporarily added (eg. if a model added it).")
     quantification: QuantificationModel | None = Field(default=None, description="Quantification of the contour. Does "
                                                                                  "not need to be provided.")
 
@@ -108,7 +108,7 @@ class Contour(BaseModel):
         )
 
     @classmethod
-    def from_normalized_cv_contour(cls, normalized_cv_contour, label, added_by, temporary):
+    def from_normalized_cv_contour(cls, normalized_cv_contour, label, added_by):
         x_coords = normalized_cv_contour[..., 0].flatten()
         y_coords = normalized_cv_contour[..., 1].flatten()
         return cls(
@@ -116,11 +116,10 @@ class Contour(BaseModel):
             y=y_coords.tolist(),
             label_id=label,
             added_by=added_by,
-            temporary=temporary,
         )
 
     @classmethod
-    def from_db(cls, contour: Contours, image_width: int | None = None, image_height: int | None = None):
+    def from_db(cls, contour: Contours | type[Contours], image_width: int | None = None, image_height: int | None = None):
         contour_obj = cls(
             id=contour.id,
             parent_id=contour.parent_id,
@@ -128,7 +127,7 @@ class Contour(BaseModel):
             x=json.loads(contour.x),
             y=json.loads(contour.y),
             added_by=contour.added_by,
-            temporary=contour.temporary,
+            reviewed_by=[user.username for user in contour.reviewed_by],
             quantification=QuantificationModel(
                 area=contour.area,
                 perimeter=contour.perimeter,

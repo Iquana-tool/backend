@@ -1,5 +1,7 @@
 import shutil
+from collections import defaultdict
 
+from app.routes.masks import get_mask_annotation_status
 from app.schemas.user import User
 from app.services.auth import get_current_user
 from logging import getLogger
@@ -176,31 +178,16 @@ async def get_annotation_progress(dataset_id: int,
     if not dataset:
         return {"success": False, "message": "Dataset not found."}
     images = db.query(Images).filter_by(dataset_id=dataset_id).all()
-    manually_annotated = 0
-    auto_annotated_with_review = 0
-    auto_annotated_without_review = 0
-    missing = 0
+    status_dict = defaultdict(lambda: 0)
     for image in images:
         mask = db.query(Masks).filter_by(image_id=image.id, finished=True).first()
-        if mask:
-            if mask.finished:
-                manually_annotated += 1
-            elif mask.generated:
-                if mask.reviewed:
-                    auto_annotated_with_review += 1
-                else:
-                    auto_annotated_without_review += 1
-            else:
-                missing += 1
-
+        status_response = await get_mask_annotation_status(mask.id, db, user)
+        status_dict[status_response["status"]] += 1
     return {
         "success": True,
         "message": "Annotation progress retrieved successfully.",
-        "manually_annotated": manually_annotated,
-        "auto_annotated_reviewed": auto_annotated_with_review,
-        "auto_annotated_without_review": auto_annotated_without_review,
-        "missing": len(images) - (manually_annotated + auto_annotated_with_review + auto_annotated_without_review),
         "total_images": len(images),
+        "num_masks_with_status": status_dict,
     }
 
 
