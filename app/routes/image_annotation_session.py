@@ -270,6 +270,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
             # Websocket might already be closed, ignore
             pass
         finally:
+            # This will throw an error, which is better for debugging, but should be removed when deployed.
             raise e
     finally:
         # Only close if websocket is still open
