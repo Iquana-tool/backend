@@ -6,7 +6,7 @@ from app.database import database
 reviewer_contour_association = Table('reviewer_contour_association',
                                      database.metadata,
                                      Column('reviewer_id', Integer,
-                                            ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+                                            ForeignKey('users.username', ondelete='CASCADE'), primary_key=True),
                                      Column('contour_id', Integer,
                                             ForeignKey('contours.id', ondelete='CASCADE'), primary_key=True),
                                      )
