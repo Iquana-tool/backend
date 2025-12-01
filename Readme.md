@@ -32,12 +32,24 @@ main.py              # Entry point to start the Fastapi application
 ---
 ## 🛠️ Installation & Setup
 ### Option 1: Using Docker Compose
-#### 1. Build and Run the Project
+#### 1. Build and Run the Project (Production Mode)
 Ensure you have Docker and Docker Compose installed on your system. Then, use the following command to build and run the project:
 ```sh
 docker-compose up --build
 ```
 This command will build the Docker image as specified in the `Dockerfile` and start the service defined in the `docker-compose.yml` file.
+
+#### 2. Development Mode with Hot Reload
+For development with automatic code reloading (no need to rebuild on code changes), use the development compose file:
+```sh
+docker-compose -f docker-compose.dev.yml up --build
+```
+This will:
+- Mount your source code as volumes, so changes are reflected immediately
+- Enable uvicorn's `--reload` flag for automatic server restart on code changes
+- Keep all your data, logs, and weights persisted between restarts
+
+**Note:** After the initial build, you can use `docker-compose -f docker-compose.dev.yml up` (without `--build`) for faster startup. The container will automatically restart when you modify any Python files in the `app/` directory or other source files.
 
 ### Option 2: Using Podman
 Install podman and build the image using
