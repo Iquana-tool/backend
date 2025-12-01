@@ -189,7 +189,7 @@ async def list_images(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/list_scans/{dataset_id}")
+@router.get("/list_scans/{dataset_id}", deprecated=True)
 async def list_scans(
     dataset_id: int,
     db: Session = Depends(get_session),
@@ -205,41 +205,7 @@ async def list_scans(
     Returns:
         A dictionary containing the success status and the list of scans.
     """
-    try:
-        dataset = db.query(Datasets).filter_by(id=dataset_id).first()
-        if dataset.dataset_type == "image":
-            raise HTTPException(status_code=400, detail="This endpoint is not available for image datasets. "
-                                                        "Use /list_images instead.")
-        scans = db.query(Scans).filter_by(dataset_id=dataset_id).all()
-        scan_responses = []
-        for scan in scans:
-            # Get the annotation progress per scan
-            manually_annotated = (db.query(Images.scan_id, Masks.generated, Masks.finished)
-                                  .filter(Images.scan_id == scan.id,
-                                          Masks.finished == True)
-                                  .count())
-            automatically_annotated = (db.query(Images.scan_id, Masks.generated, Masks.finished)
-                                        .filter(Images.scan_id == scan.id,
-                                                Masks.generated == True,
-                                                Masks.finished == False)
-                                        .count())
-            image_ids = (db.query(Images.id)
-                            .filter(Images.scan_id == scan.id)
-                            .sort_by(Images.index_in_scan)
-                            .all())
-            scan_responses.append({
-                **scan.__dict__,
-                "manually_annotated": manually_annotated,
-                "automatically_annotated": automatically_annotated,
-                "image_ids": [img.id for img in image_ids]
-            })
-        return {
-            "success": True,
-            "scans": scan_responses
-        }
-    except Exception as e:
-        logger.error(f"List images error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    raise NotImplementedError
 
 
 @router.get("/list_images_with_annotation_status/{dataset_id}&status={status}")
