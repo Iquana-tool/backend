@@ -17,7 +17,7 @@ from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.scans import Scans
-from app.routes.masks import delete_mask, create_mask
+from app.routes.masks import delete_mask, create_mask, get_mask_annotation_status
 from app.schemas.image import Image
 from app.services.database_access import parse_log_file, get_height_width_of_image, save_as_low_res_image_to_disk
 from app.services.database_access import save_image_to_disk_and_db
@@ -167,7 +167,7 @@ async def list_images(
             raise HTTPException(status_code=400, detail="This endpoint is not available for scan datasets. "
                                                         "Use /list_scans instead.")
         images = (
-            db.query(Images, Masks.finished, Masks.generated)
+            db.query(Images, Masks)
             .join(Masks, Images.id == Masks.image_id)
             .filter(Images.dataset_id == dataset_id)
             .all()
@@ -175,12 +175,10 @@ async def list_images(
         image_response = []
         for entry in images:
             image = entry[0]
-            finished = entry[1]
-            generated = entry[2]
+            mask = entry[1]
             image_response.append({
                 **image.__dict__,
-                "finished": finished,
-                "generated": generated
+                "status": await get_mask_annotation_status(mask.id)
             })
         return {
             "success": True,
