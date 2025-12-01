@@ -178,7 +178,7 @@ async def list_images(
             mask = entry[1]
             image_response.append({
                 **image.__dict__,
-                "status": await get_mask_annotation_status(mask.id)
+                "status": await get_mask_annotation_status(mask.id, db, user)
             })
         return {
             "success": True,
