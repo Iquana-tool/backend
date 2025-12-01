@@ -55,12 +55,12 @@ async def get_mask_csv(
 
 
 @router.get(
-    "/get_dataset_quantification/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}&as_download={as_download}")
+    "/get_dataset_quantification/{dataset_id}&exclude_unreviewed_objects={exclude_unreviewed_objects}&exclude_not_fully_annotated={exclude_not_fully_annotated}&as_download={as_download}")
 async def get_dataset_quantification(
         dataset_id: int,
         label_ids: list[int] = None,
-        include_manual: bool = True,
-        include_auto: bool = True,
+        exclude_unreviewed_objects: bool = False,
+        exclude_not_fully_annotated: bool = False,
         as_download: bool = False,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
@@ -71,8 +71,10 @@ async def get_dataset_quantification(
     Args:
         dataset_id (int): The ID of the dataset to export.
         label_ids (list[int], optional): List of label IDs to filter contours. Defaults to None.
-        include_manual (bool, optional): Whether to include manual masks. Defaults to True.
-        include_auto (bool, optional): Whether to include auto-generated masks. Defaults to True.
+        exclude_unreviewed_objects (bool): Whether to exclude unreviewed objects. Defaults to False.
+        exclude_not_fully_annotated (bool): Whether to exclude non fully annotated masks. Defaults to False.
+            If both this and exclude_unreviewed_objects are set to True, you will only get objects from finished masks
+            (fully annotated and reviewed).
         as_download (bool, optional): Whether to export as CSV. Defaults to False. If False, returns the data as a json.
         db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
         user (User): The current authenticated user.
@@ -83,22 +85,14 @@ async def get_dataset_quantification(
     """
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
-    query = (db.query(Contours, Images.file_name, Masks.finished, Masks.generated)
+    query = (db.query(Contours, Images.file_name)
     .join(Masks, Masks.id == Contours.mask_id).join(Images, Images.id == Masks.image_id).filter(
         Images.dataset_id == dataset_id
     ))
-    if include_manual and include_auto:
-        query = query.filter(Masks.finished == True or Masks.generated == True)
-    else:
-        if include_manual:
-            query = query.filter(Masks.finished == True and Masks.generated == False)
-        elif include_auto:
-            query = query.filter(Masks.finished == False and Masks.generated == True)
-        else:
-            return {
-                "success": False,
-                "message": "At least one of include_manual or include_auto must be True."
-            }
+    if exclude_not_fully_annotated:
+        query = query.filter(Masks.fully_annotated == True)
+    if exclude_unreviewed_objects:
+        query = query.filter(Contours.reviewed_by.any())
     if label_ids:
         query = query.filter(Contours.label.in_(label_ids))
 
@@ -149,10 +143,9 @@ async def get_dataset_quantification(
 
 
 @router.get(
-    "/get_dataset_object_quantifications/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}")
+    "/get_dataset_object_quantifications/{dataset_id}&exclude_unreviewed_objects={exclude_unreviewed_objects}",)
 async def get_dataset_object_quantifications(dataset_id: int,
-                                             include_manual: bool = True,
-                                             include_auto: bool = False,
+                                             exclude_unreviewed_objects: bool = False,
                                              db: Session = Depends(get_session),
                                              user: User = Depends(get_current_user),
                                              ):
@@ -163,11 +156,10 @@ async def get_dataset_object_quantifications(dataset_id: int,
     child_counts_per_label = defaultdict(lambda: defaultdict(list))
     for image in images:
         mask = db.query(Masks).filter(Masks.image_id == image.id).first()  # Only one should exist
-        if not include_manual and mask.finished:
-            continue
-        elif not include_auto and mask.generated:
-            continue
         contours = db.query(Contours).filter_by(mask_id=mask.id)
+        if exclude_unreviewed_objects:
+            # Excludes contours that have no reviewer
+            contours = contours.filter(Contours.reviewed_by.any())
         contour_hierarchy = ContourHierarchy.from_query(contours)
         label_quants = contour_hierarchy.get_all_quantifications()
         for label, quants in label_quants.items(): 
@@ -201,10 +193,10 @@ async def get_segmentation_mask_file(
             "success": False,
             "message": "Mask not found."
         }
-    elif not mask.finished:
+    elif not mask.fully_annotated:
         return {
             "success": False,
-            "message": "Cannot download mask that is not finished."
+            "message": "Cannot download mask that is not fully annotated."
         }
 
     image = db.query(Images).filter_by(id=mask.image_id).first()
@@ -219,11 +211,10 @@ async def get_segmentation_mask_file(
     )
 
 
-@router.get("/get_segmentation_dataset/{dataset_id}&include_manual={include_manual}&include_auto={include_auto}")
+@router.get("/get_segmentation_dataset/{dataset_id}&exclude_unreviewed_annotations={exclude_unreviewed_annotations}")
 async def get_segmentation_dataset(
         dataset_id: int,
-        include_manual: bool = True,
-        include_auto: bool = True,
+        exclude_unreviewed_annotations: bool = False,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
@@ -232,8 +223,7 @@ async def get_segmentation_dataset(
 
     Args:
         dataset_id (int): The ID of the dataset.
-        include_manual (bool): Whether to include manual masks.
-        include_auto (bool): Whether to include auto-generated masks.
+        exclude_unreviewed_annotations (bool): Whether to exclude unreviewed annotations.
         db (Session): The database session.
         user (User): The current authenticated user.
 
@@ -246,16 +236,10 @@ async def get_segmentation_dataset(
 
     masks_query = db.query(Images.file_path).join(Masks).filter(Images.dataset_id == dataset_id)
 
-    if include_manual and include_auto:
-        masks = masks_query.filter(Masks.finished == True, Masks.generated == True).all()
+    if exclude_unreviewed_annotations:
+        masks = masks_query.filter(Masks.fully_annotated == True, Masks.contours.any(Contours.reviewed_by.any())).all()
     else:
-        if include_manual:
-            masks = masks_query.filter(Masks.finished == True, Masks.generated == False).all()
-        elif include_auto:
-            masks = masks_query.filter(Masks.finished == False, Masks.generated == True).all()
-        else:
-            raise HTTPException(status_code=400, detail="At least one of include_manual or include_auto must be True.")
-
+        masks = masks_query.filter(Masks.fully_annotated == True).all()
     if not masks:
         raise HTTPException(status_code=404, detail="No finished masks found for this dataset.")
 

@@ -12,6 +12,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
  
 from app.database import get_session
+from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.masks import Masks
@@ -246,7 +247,7 @@ async def list_scans(
 @router.get("/list_images_with_annotation_status/{dataset_id}&status={status}")
 async def list_images_with_annotation_status(
     dataset_id: int,
-    status: Literal["finished", "generated", "missing"],
+    status: str,
     db: Session = Depends(get_session),
     user: User = Depends(get_current_user)
 ):
@@ -254,59 +255,32 @@ async def list_images_with_annotation_status(
 
     Args:
         dataset_id: Dataset ID to retrieve images from.
-        status: The status of the masks to filter by. Can be "finished", "generated", or "missing".
+        status: The status of the masks to filter by.
         db: Database session dependency.
         user (User): The current authenticated user.
 
     Returns:
         A list of image IDs.
     """
-    try:
-        if status == "finished":
-            image_ids = (
-                db.query(Images.id)
-                .join(Masks, Images.id == Masks.image_id)
-                .filter(
-                    Images.dataset_id == dataset_id,
-                    Masks.finished == True
-                )
-                .distinct()
-                .all()
+    match status:
+        case "not_started":
+            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(~Masks.contours.any()).all()
+        case "in_progress":
+            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(Masks.contours.any(), ~Masks.fully_annotated).all()
+        case "reviewable":
+            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(
+                            Masks.fully_annotated, Masks.contours.any(~Contours.reviewed_by.any())).all()
+        case "finished":
+            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(
+                Masks.fully_annotated, ~Masks.contours.any(~Contours.reviewed_by.any())
             )
-        elif status == "generated":
-            image_ids = (
-                db.query(Images.id)
-                .join(Masks, Images.id == Masks.image_id)
-                .filter(
-                    Images.dataset_id == dataset_id,
-                    Masks.generated == True
-                )
-                .distinct()
-                .all()
-            )
-        elif status == "missing":
-            image_ids = (
-                db.query(Images.id)
-                .join(Masks, Images.id == Masks.image_id)
-                .filter(
-                    Images.dataset_id == dataset_id,
-                    Masks.generated == False,
-                    Masks.finished == False
-                )
-                .distinct()
-                .all()
-            )
-        else:
-            raise HTTPException(status_code=400, detail="Invalid status. Use 'finished', 'generated', or 'missing'.")
-        return {
-            "success": True,
-            "message": f"Found {len(image_ids)} images with status '{status}' in dataset {dataset_id}.",
-            "images": [id_object.id for id_object in image_ids],
-        }
-    except Exception as e:
-        logger.error(f"Get image with finished masks error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        case _:
+            raise HTTPException(status_code=403, detail="Unknown status.")
+    return {
+        "success": True,
+        "message": "Retrieved images with status successfully.",
+        "image_ids": [img.id for img in images]
+    }
 
 @router.get("/get_image/{image_id}&{low_res}")
 async def get_image(

@@ -180,7 +180,7 @@ async def get_annotation_progress(dataset_id: int,
     images = db.query(Images).filter_by(dataset_id=dataset_id).all()
     status_dict = defaultdict(lambda: 0)
     for image in images:
-        mask = db.query(Masks).filter_by(image_id=image.id, finished=True).first()
+        mask = db.query(Masks).filter_by(image_id=image.id).first()
         status_response = await get_mask_annotation_status(mask.id, db, user)
         status_dict[status_response["status"]] += 1
     return {

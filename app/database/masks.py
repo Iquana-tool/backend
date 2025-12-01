@@ -1,4 +1,6 @@
 from sqlalchemy import Column, Integer, ForeignKey, Boolean
+from sqlalchemy.orm import relationship
+
 from . import database
 
 
@@ -9,3 +11,4 @@ class Masks(database):
     image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'),
                       nullable=False)
     fully_annotated = Column(Boolean, default=False, nullable=False)  # Users can mark a mask as fully annotated indicating that all objects are there.
+    contours = relationship("Contours", backref="mask")
