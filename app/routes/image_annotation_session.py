@@ -497,7 +497,7 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
                                                   added_by=model_identifier,
                                                   label_id=None,)[0]
     response = await add_object(contour_model, websocket, client_msg, state)
-    if state.running_backends[Backends.COMPLETION_SEGMENTATION.value].enabled:
+    if Backends.COMPLETION_SEGMENTATION.value in state.running_backends and state.running_backends[Backends.COMPLETION_SEGMENTATION.value].enabled:
         await handle_completion(
             websocket,
             ClientMessage(
