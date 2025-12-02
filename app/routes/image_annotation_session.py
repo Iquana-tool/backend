@@ -407,9 +407,7 @@ async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, 
         type=ServerMessageType.OBJECT_REMOVED if response["success"] else ServerMessageType.ERROR,
         success=response["success"],
         message=response["message"],
-        data={
-            "deleted_contours": response["deleted_contours"],
-        } if response["success"] else None,
+        data=None,
     ))
 
 
