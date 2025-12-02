@@ -98,7 +98,6 @@ class Contour(BaseModel):
             y=json.dumps(self.y),
             label=self.label_id,
             parent_id=self.parent_id,
-            temporary=self.temporary,
             added_by=self.added_by,
             confidence_score=self.confidence,
             area=self.quantification.area,
