@@ -457,7 +457,7 @@ async def handle_semantic_segmentation(websocket: WebSocket, client_msg: ClientM
 async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of a prompted model. """
     selected_model = client_msg.data.get("selected_model")
-    response = await state.running_backends[Backends.PROMPTED_SEGMENTATION].select_model(state.user_id, selected_model)
+    response = await state.running_backends[Backends.PROMPTED_SEGMENTATION.value].select_model(state.user_id, selected_model)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
@@ -492,14 +492,14 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
         prompts=prompts_model,
     )
 
-    response_seg = await state.running_backends[Backends.PROMPTED_SEGMENTATION].inference(prompted_request)
+    response_seg = await state.running_backends[Backends.PROMPTED_SEGMENTATION.value].inference(prompted_request)
     contour_model = get_contours_from_binary_mask(response_seg["mask"],
                                                   only_return_biggest=True,
                                                   limit=None,
                                                   added_by=model_identifier,
                                                   label_id=None,)[0]
     response = await add_object(contour_model, websocket, client_msg, state)
-    if state.running_backends[Backends.COMPLETION_SEGMENTATION].enabled:
+    if state.running_backends[Backends.COMPLETION_SEGMENTATION.value].enabled:
         await handle_completion(
             websocket,
             ClientMessage(
@@ -519,9 +519,9 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
 async def handle_completion_select_model(websocket: WebSocket, client_msg: ClientMessage,
                                          state: AnnotationSessionState):
     """ Handle the selection of a completion model. """
-    if Backends.COMPLETION_SEGMENTATION in state.running_backends:
+    if Backends.COMPLETION_SEGMENTATION.value in state.running_backends:
         model_identifier = client_msg.data.get("model_identifier")
-        await state.running_backends[Backends.COMPLETION_SEGMENTATION].select_model(state.user_id, model_identifier)
+        await state.running_backends[Backends.COMPLETION_SEGMENTATION.value].select_model(state.user_id, model_identifier)
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.SUCCESS,
@@ -541,8 +541,8 @@ async def handle_completion_select_model(websocket: WebSocket, client_msg: Clien
 
 async def handle_completion_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle enabling of completion model. Leads to a state change. """
-    if Backends.COMPLETION_SEGMENTATION in state.running_backends:
-        state.running_backends[Backends.COMPLETION_SEGMENTATION].enable()
+    if Backends.COMPLETION_SEGMENTATION.value in state.running_backends:
+        state.running_backends[Backends.COMPLETION_SEGMENTATION.value].enable()
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.SUCCESS,
@@ -562,8 +562,8 @@ async def handle_completion_enable(websocket: WebSocket, client_msg: ClientMessa
 
 async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle disabling of completion model. Leads to a state change. """
-    if Backends.COMPLETION_SEGMENTATION in state.running_backends:
-        state.running_backends[Backends.COMPLETION_SEGMENTATION].disable()
+    if Backends.COMPLETION_SEGMENTATION.value in state.running_backends:
+        state.running_backends[Backends.COMPLETION_SEGMENTATION.value].disable()
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.SUCCESS,
@@ -591,7 +591,7 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
         user_id=state.user_id,
         seeds=seeds,
     )
-    response_seg = await state.running_backends[Backends.COMPLETION_SEGMENTATION].inference(service_request)
+    response_seg = await state.running_backends[Backends.COMPLETION_SEGMENTATION.value].inference(service_request)
     contour_models = get_contours_from_binary_mask(response_seg["mask"],
                                                    only_return_biggest=False,
                                                    limit=None,
