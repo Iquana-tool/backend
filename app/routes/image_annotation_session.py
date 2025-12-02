@@ -143,8 +143,8 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
     """
     # Check for running backends
     # await state.check_and_register_backend(S, "semantic_service")
-    await state.check_and_register_backend(PromptedSegmentationService(), Backends.PROMPTED_SEGMENTATION)
-    await state.check_and_register_backend(CompletionService(), Backends.COMPLETION_SEGMENTATION)
+    await state.check_and_register_backend(PromptedSegmentationService(), Backends.PROMPTED_SEGMENTATION.value)
+    await state.check_and_register_backend(CompletionService(), Backends.COMPLETION_SEGMENTATION.value)
 
     # Upload the image to all running backends
     await state.upload_image()
