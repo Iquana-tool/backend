@@ -392,9 +392,7 @@ async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage
         success=response["success"],
         data={
             "contour_id": contour_id,
-            "fields_to_be_updated": {
-                "temporary": False
-            } if response["success"] else None,
+            "reviewed_by": state.user_id,
         }
     ))
 
