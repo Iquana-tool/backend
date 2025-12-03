@@ -145,6 +145,19 @@ async def unmark_as_fully_annotated(
         "mask_id": existing_mask.id
     }
 
+@router.get("/get_mask_for_image/{image_id}")
+async def get_mask_for_image(image_id: int,
+                             db: Session = Depends(get_session),
+                             user: User = Depends(get_current_user)):
+    """ Get the mask image for a given image. """
+    mask = db.query(Masks).filter_by(image_id=image_id).first()
+    if mask is None:
+        raise HTTPException(status_code=404, detail=f"No mask for image {image_id} found.")
+    return {
+        "success": True,
+        "mask": mask
+    }
+
 
 @router.get("/get_mask/{mask_id}")
 async def get_mask(
