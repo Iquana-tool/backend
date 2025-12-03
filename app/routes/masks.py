@@ -88,8 +88,8 @@ async def mark_as_fully_annotated(
         }
     image = db.query(Images).filter_by(id=existing_mask.image_id).first()
     # Generate the mask from contours
-    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
-    contours_hierarchy = ContourHierarchy.from_contours(contours)
+    contours = db.query(Contours).filter_by(mask_id=mask_id)
+    contours_hierarchy = ContourHierarchy.from_query(contours)
     semantic_mask = contours_hierarchy.to_semantic_mask(image.height, image.width)
  
     logging.debug(f"Generated mask with the following labels: {np.unique(semantic_mask).tolist()}")
