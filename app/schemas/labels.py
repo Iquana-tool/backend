@@ -41,6 +41,10 @@ class LabelHierarchy(BaseModel):
                                                                 "dataset only (ie datasets can have labels with the same "
                                                                 "value but not with the same id.")
 
+    @property
+    def id_to_value_map(self) -> dict[int, int]:
+        return {id: label.value for id, label in self.id_to_label_object.items()}
+
     @classmethod
     def from_query(cls, query: "Query[type[Labels]]"):
         # Fetch all root labels (parent_id is None)
