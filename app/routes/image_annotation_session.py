@@ -243,6 +243,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                     await handle_completion_enable(websocket, client_msg, state)
                 case ClientMessageType.COMPLETION_DISABLE:
                     await handle_completion_disable(websocket, client_msg, state)
+                case ClientMessageType.COMPLETION_INFERENCE:
+                    await handle_completion(websocket, client_msg, state)
                 case ClientMessageType.FINISH_ANNOTATION:
                     await handle_finish_annotation(websocket, client_msg, state)
                 case ClientMessageType.OBJECT_CONFLICT_RESOLUTION:

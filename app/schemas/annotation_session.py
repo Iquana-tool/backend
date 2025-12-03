@@ -15,6 +15,7 @@ class ClientMessageType(StrEnum):
     COMPLETION_SELECT_MODEL = "completion_select_model"  # Select a model for mask completion
     COMPLETION_ENABLE = "completion_enable"  # Enable mask completion
     COMPLETION_DISABLE = "completion_disable"  # Disable mask completion
+    COMPLETION_INFERENCE = "completion_inference"
     OBJECT_ADD_MANUAL = "object_add_manual"  # Add a new object to the annotation session, if it was manually created
     OBJECT_FINALISE = "object_finalise"  # Mark a temporary object as not temporary anymore.
     OBJECT_DELETE = "object_delete"  # Delete an object from the annotation session
