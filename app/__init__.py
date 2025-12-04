@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 import paths
 from app.routes.prompted_segmentation.image_segmentation import router as prompted_segmentation_router
-
+from app.routes.completion_segmentation import router as completion_segmentation_router
 from app.routes.semantic_segmentation import router as automatic_general_router
 from app.routes.semantic_segmentation.inference import router as automatic_inference_router
 from app.routes.semantic_segmentation.training import router as automatic_training_router
@@ -73,6 +73,7 @@ def create_app():
     app.include_router(dataset_router)
     app.include_router(image_router)
     app.include_router(prompted_segmentation_router)
+    app.include_router(completion_segmentation_router)
     app.include_router(automatic_general_router)
     app.include_router(automatic_training_router)
     app.include_router(automatic_inference_router)

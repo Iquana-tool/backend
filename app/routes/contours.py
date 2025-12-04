@@ -7,6 +7,7 @@ from app.database import get_session
 from app.database.contours import Contours
 from app.database.labels import Labels
 from app.database.masks import Masks
+from app.database.users import Users
 from app.schemas.contours import Contour
 from app.schemas.contour_hierarchy import ContourHierarchy
 from app.schemas.user import User
@@ -71,7 +72,20 @@ async def modify_contour(contour_id,
                     # The user wants to change the label of a contour. Here we need to check its children and its parents,
                     # whether that change is possible.
                     pass
-                setattr(existing_contour, key, value)
+                elif key == "reviewed_by":
+                    # Handle reviewed_by
+                    if value is not None:
+                        # Convert list of usernames to User instances
+                        user_instances = []
+                        for username in value:
+                            user = db.query(Users).filter_by(username=username).first()
+                            if user:
+                                user_instances.append(user)
+                            else:
+                                logger.warning(f"User {username} not found when adding to reviewed_by")
+                        existing_contour.reviewed_by = user_instances
+                else:
+                    setattr(existing_contour, key, value)
 
         db.commit()
         return {

@@ -427,6 +427,14 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
             success=False,
             data=None
         ))
+    
+    #  actual authenticated username
+    if "reviewed_by" in fields_to_be_updated and fields_to_be_updated["reviewed_by"]:
+        fields_to_be_updated["reviewed_by"] = [
+            state.user_id if username == "current_user" else username
+            for username in fields_to_be_updated["reviewed_by"]
+        ]
+    
     if fields_to_be_updated:
         with get_context_session() as session:
             response = await modify_contour(contour_id, db=session, **fields_to_be_updated)
