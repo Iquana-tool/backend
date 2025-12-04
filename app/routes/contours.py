@@ -104,7 +104,7 @@ async def change_contour_label(contour_id: int, new_label_id: int,
                                user: User = Depends(get_current_user),
                                db: Session = Depends(get_session)):
     """
-    Edit the label of a contour.
+    Edit the label of a contour and automatically mark it as reviewed by the current user.
 
     Args:
         contour_id (int): The ID of the contour to edit.
@@ -115,22 +115,38 @@ async def change_contour_label(contour_id: int, new_label_id: int,
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
-    return await modify_contour(contour_id, label=new_label_id, db=db)
+    # Get existing contour to check current reviewers
+    existing_contour = db.query(Contours).filter_by(id=contour_id).first()
+    if not existing_contour:
+        raise HTTPException(status_code=404, detail="Contour not found.")
+    
+    # Get current reviewed_by users and add the current user if not already there
+    reviewed_by_usernames = [u.username for u in existing_contour.reviewed_by]
+    if user.username not in reviewed_by_usernames:
+        reviewed_by_usernames.append(user.username)
+    
+    # Update both label and reviewed_by
+    return await modify_contour(contour_id, label=new_label_id, reviewed_by=reviewed_by_usernames, db=db)
 
 
 @router.get("/mark_as_reviewed/{contour_id}")
 async def mark_as_reviewed(contour_id: int,
                            user: User = Depends(get_current_user),
                            db: Session = Depends(get_session)):
-    """ Mark a temporary contour as not temporary."""
+    """ Mark a contour as reviewed by adding the current user to reviewed_by list."""
     contour = db.query(Contours).filter_by(id=contour_id).first()
     if contour is None:
         raise HTTPException(status_code=404, detail="Contour not found.")
-    contour.reviewed_by.append(user)
-    db.commit()
+    
+    # Only add user if not already in reviewed_by list
+    if user not in contour.reviewed_by:
+        contour.reviewed_by.append(user)
+        db.commit()
+    
     return {
         "success": True,
-        "message": f"Contour {contour_id} finalised successfully.",
+        "message": f"Contour {contour_id} marked as reviewed successfully.",
+        "reviewed_by": [u.username for u in contour.reviewed_by],
     }
 
 
