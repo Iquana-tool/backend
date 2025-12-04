@@ -3,7 +3,7 @@ from app.services.ai_services import completion_segmentation as completion_servi
 from app.schemas.user import User
 from app.services.auth import get_current_user
 
-router = APIRouter(prefix="completion_segmentation", tags=["completion_segmentation"])
+router = APIRouter(prefix="/completion_segmentation", tags=["completion_segmentation"])
 
 
 @router.get("/health")

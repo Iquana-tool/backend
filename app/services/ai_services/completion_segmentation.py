@@ -96,7 +96,7 @@ async def select_model(user_id: str, model_identifier: str):
 
 async def get_models():
     """ List all available models."""
-    url = f"{BASE_URL}/available"
+    url = f"{BASE_URL}/get_available_models"
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.get(url)
         response.raise_for_status()
