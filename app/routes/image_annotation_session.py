@@ -206,7 +206,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
         # Call some functions on startup
         print(f"Calling on startup for user {user_id} and image {image_id}")
         response = await on_startup(state)
-        print(f"Startup response: {response}")
+        print(f"Startup response: {response.message}")
         # Send a message about startup
         await send_msg(websocket, response)
         while True:
@@ -590,12 +590,12 @@ async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMess
 async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the completion of a completion model. """
     seed_contour_ids = client_msg.data.get("seed_contour_ids")
-    with get_context_session() as session:
-        seeds = contour_ids_to_indices(state.image_id, seed_contour_ids, session)
+    contours = [Contour.from_id(contour_id).to_binary_mask(1000, 1000).tolist() for contour_id in seed_contour_ids]
+
     service_request = CompletionServiceRequest(
-        model_key=client_msg.data.get("model_key"),
+        model_key=client_msg.data.get('model_key'),
         user_id=state.user_id,
-        seeds=seeds,
+        seeds=contours,
     )
     response_seg = await state.running_backends[Backends.COMPLETION_SEGMENTATION.value].inference(service_request)
     contour_models = get_contours_from_binary_mask(response_seg["mask"],

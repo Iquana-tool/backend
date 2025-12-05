@@ -25,9 +25,9 @@ from logging import getLogger
 
 
 logger = getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 def create_app():
+    logger.setLevel(logging.DEBUG)
     logger.debug("Creating FastAPI application")
     # Load environment variables
     load_dotenv()

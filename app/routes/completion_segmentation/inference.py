@@ -24,12 +24,12 @@ async def infer_completion(
     # First upload the image
     await completion_service.upload_image(user.username, request.image_id)
 
-    seeds = contour_ids_to_indices(request.image_id, request.seed_contour_ids, db)
+    contours = [Contour.from_id(contour_id).model_dump(include=["x", "y"]) for contour_id in request.seed_contour_ids]
 
     service_request = CompletionServiceRequest(
         model_key=request.model_key,
         user_id=user.username,
-        seeds=seeds,
+        contours=contours,
     )
     # Finally add the result to the db
     response = await completion_service.infer_instances(service_request)

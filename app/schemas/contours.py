@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from pydantic import BaseModel, field_validator, Field, model_validator
 
+from app.database import get_context_session
 from app.database.contours import Contours
 from app.schemas.quantification import QuantificationModel
 
@@ -77,12 +78,14 @@ class Contour(BaseModel):
     def to_binary_mask(self, height, width) -> np.ndarray:
         """ Return a binary mask given the height and width. """
         binary_mask = np.zeros((height, width), dtype=np.uint8)
-        cv2.drawContours(binary_mask,
-                         self.to_rescaled_contour(height, width),
-                         -1,  # -1 means fill the contour
-                         1,
-                         thickness=cv2.FILLED)
-        return binary_mask
+        binary_mask = cv2.drawContours(
+            image=binary_mask,
+            contours=[self.to_rescaled_contour(height, width)],
+            contourIdx=-1,  # -1 means fill the contour
+            color=1,
+            thickness=cv2.FILLED
+        )
+        return binary_mask.astype(bool)
 
     def to_rescaled_contour(self, height, width):
         """ Return a rescaled contour given the height and width. """
@@ -138,6 +141,11 @@ class Contour(BaseModel):
         if image_width is not None and image_height is not None:
             contour_obj.compute_path(image_width, image_height)
         return contour_obj
+
+    @classmethod
+    def from_id(cls, id: int):
+        with get_context_session() as session:
+            return cls.from_db(session.query(Contours).filter_by(id=id).first())
 
     def __in__(self, other):
         """

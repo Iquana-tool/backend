@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Any
 
 import numpy as np
 from fastapi import HTTPException, status
@@ -18,6 +18,4 @@ class CompletionMainAPIRequest(BaseModel):
 class CompletionServiceRequest(BaseModel):
     model_key: str = Field(..., description="The key of the model.")
     user_id: str = Field(..., description="The user id of the model.")
-    seeds: List[List[int]] = Field(..., description="Seeds is a list of lists of indices that specify which pixels "
-                                                    "should be used as a seed. Each list in the list represents one "
-                                                    "object.")
+    seeds: list[list[list[bool]]] = Field(..., description="Seeds is a list of binary masks")

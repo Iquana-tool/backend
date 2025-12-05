@@ -25,8 +25,13 @@ def get_contours_from_binary_mask(mask: np.ndarray,
     :return: List of contour models
     """
     logger.debug("Computing contours for mask.")
-    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if mask.dtype == bool:
+        mask = mask.astype(np.uint8) * 255
+    elif mask.dtype != np.uint8:
+        mask = mask.astype(np.uint8)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:  # check if any contours found
+        logger.info(f"Found {len(contours)} contours.")
         if only_return_biggest:
             contours = [max(contours, key=cv2.contourArea)]
         else:
@@ -49,6 +54,7 @@ def get_contours_from_binary_mask(mask: np.ndarray,
                           )
         return models
     else:
+        logger.info(f"No contours found for mask: {mask}")
         return np.array([])
 
 
