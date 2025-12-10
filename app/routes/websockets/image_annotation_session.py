@@ -11,10 +11,11 @@ from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
-from app.routes.general.contours import add_contour, get_contours_of_mask, mark_as_reviewed, delete_contour, modify_contour
+from app.routes.general.contours import add_contour, get_contours_of_mask, mark_as_reviewed, delete_contour, \
+    modify_contour, replace_contour
 from app.routes.general.masks import create_mask, mark_as_fully_annotated
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
-from app.schemas.completion_segmentation.inference import CompletionServiceRequest, CompletionMainAPIRequest
+from app.schemas.completion_segmentation.inference import CompletionServiceRequest
 from app.schemas.contours import Contour
 from app.schemas.prompted_segmentation.prompts import Prompts, BoxPrompt
 from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
@@ -41,7 +42,6 @@ class AnnotationSessionState:
                  user_id: str,
                  focussed_contour_id: int | None = None,
                  refinement_contour_id: int | None = None,
-
                  ):
         self.image_id = image_id
         self.user_id = user_id
@@ -481,18 +481,16 @@ async def handle_prompted_segmentation(
     model_identifier = client_msg.data.get("model_identifier")
     prompts_data = client_msg.data.get("prompts")
     prompts_model = Prompts.model_validate(prompts_data)
-
-    if state.refinement_contour_id is not None:
+    using_refinement = state.refinement_contour_id is not None
+    if using_refinement:
         # Get the contour to refine
         with get_context_session() as session:
             contour = session.query(Contours).filter_by(id=state.refinement_contour_id).first()
             contour_model = Contour.from_db(contour)
         previous_mask = contour_model.to_binary_mask(250, 250)
         logger.debug(f"Using contour {state.refinement_contour_id} as previous mask for refinement.")
-        message_type = ServerMessageType.OBJECT_MODIFIED
     else:
         previous_mask = None
-        message_type = ServerMessageType.OBJECT_ADDED
 
     prompted_request = PromptedSegmentationWebsocketRequest(
         user_id=str(state.user_id),
@@ -507,25 +505,10 @@ async def handle_prompted_segmentation(
                                                   limit=None,
                                                   added_by=model_identifier,
                                                   label_id=None,)[0]
-    response = await add_object(contour_model, websocket, client_msg, state)
-    if (Backends.COMPLETION_SEGMENTATION.value in state.running_backends and
-        state.running_backends[Backends.COMPLETION_SEGMENTATION.value].enabled and
-        not override_completion_disable
-    ):
-        await handle_completion(
-            websocket,
-            ClientMessage(
-                id=client_msg.id,
-                type=client_msg.type,
-                success=True,
-                data=CompletionMainAPIRequest(
-                    image_id=state.image_id,
-                    model_key="dino_1000_cosine_he_max_agg",
-                    seed_contour_ids=[response["added_contour"]["id"]],
-                ).model_dump()
-            ),
-            state
-        )
+    if using_refinement:
+        await replace_object(state.refinement_contour_id, contour_model, websocket, client_msg, state)
+    else:
+        await add_object(contour_model, websocket, client_msg, state)
 
 
 async def handle_completion_select_model(websocket: WebSocket, client_msg: ClientMessage,
@@ -639,9 +622,27 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
         id=client_msg.id,
         type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
         success=response["success"],
-        message=f"Successfully segmented object with confidence score {object_to_add.confidence:.1%}" if response[
+        message=f"Successfully added object with confidence score {object_to_add.confidence:.1%}" if response[
             "success"] else response["message"],
         data=object_to_add.model_dump() if response["success"] else None,
+    ))
+    return response
+
+
+async def replace_object(old_object_id, new_object: Contour, websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+    with get_context_session() as session:
+        response = await replace_contour(
+            contour_id=old_object_id,
+            new_contour=new_object,
+            db=session,
+        )
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
+        success=response["success"],
+        message=f"Successfully modified object." if response[
+            "success"] else response["message"],
+        data=new_object.model_dump() if response["success"] else None,
     ))
     return response
 
