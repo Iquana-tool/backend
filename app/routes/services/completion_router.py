@@ -1,18 +1,34 @@
-import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.database.contours import Contours
-from app.database.images import Images
+from app.database import get_session
 from app.schemas.completion_segmentation.inference import CompletionMainAPIRequest, CompletionServiceRequest
 from app.schemas.contours import Contour
 from app.schemas.user import User
-from app.services.auth import get_current_user
-from app.database import get_session
 from app.services.ai_services import completion_segmentation as completion_service
-from app.services.contours import contour_ids_to_indices
+from app.services.auth import get_current_user
 
 router = APIRouter(prefix="/completion_segmentation", tags=["Completion Segmentation"])
+
+
+@router.get("/models")
+async def get_available_models(user: User = Depends(get_current_user)):
+    """Retrieve the list of available prompted segmentation models from the backend."""
+    models = await completion_service.get_models()
+    return {
+        "success": True,
+        "message": "Retrieved available prompted segmentation models.",
+        "available_models": models
+    }
+
+
+@router.post("/upload_image")
+async def upload_image(image_id: int, user: User = Depends(get_current_user)):
+    await completion_service.upload_image(user.username, image_id)
+    return {
+        "success": True,
+        "message": "Image upload successful"
+    }
 
 
 @router.post("/infer/image_id={image_id}")

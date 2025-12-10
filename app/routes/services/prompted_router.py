@@ -1,14 +1,15 @@
 from logging import getLogger
+
 from fastapi import APIRouter, Depends
+
 from app.database import get_context_session
 from app.database.contours import Contours
-from app.routes.prompted_segmentation.util import convert_numpy_masks_to_segmentation_mask_models
 from app.schemas.contours import Contour
-from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationHTTPRequest, SegmentationResponse, \
-    PromptedSegmentationWebsocketRequest
+from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationHTTPRequest, \
+    PromptedSegmentationWebsocketRequest, SegmentationResponse
 from app.schemas.user import User
-from app.services.auth import get_current_user
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
+from app.services.auth import get_current_user
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/prompted_segmentation", tags=["prompted_segmentation"])
@@ -60,6 +61,7 @@ async def segment_image(request: PromptedSegmentationHTTPRequest,
         SegmentationResponse: The response object containing the prompted_segmentation results. When using cropping,
         the contours will be remapped to the original image size.
     """
+    logger.error("This method is deprecated! It will not work!")
     # Check if the backend is running
     if not await PromptedSegmentationService().check_backend():
         return {
@@ -122,7 +124,7 @@ async def segment_image(request: PromptedSegmentationHTTPRequest,
     score = response["score"]
 
     # Convert to response object
-    masks_response = await convert_numpy_masks_to_segmentation_mask_models([mask * request.label], [score])
+    asks_response = await convert_numpy_masks_to_segmentation_mask_models([mask * request.label], [score])
     return {
         "success": True,
         "message": "Prompted prompted_segmentation completed successfully.",

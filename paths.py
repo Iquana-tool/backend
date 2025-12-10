@@ -11,7 +11,7 @@ class Paths:
     """ This class contains the paths to the project directories. It can be used to access the paths from
     any file in the project.
     Attributes:
-        base_dir (str): The base directory of the project.
+        base_dir (str): The general directory of the project.
         data_dir (str): The data directory of the project.
         meso_dir (str): The directory of the meso-scale images of corals.
         micro_dir (str): The directory of the micro-scale CT Scans of corals.

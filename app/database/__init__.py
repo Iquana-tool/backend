@@ -9,7 +9,7 @@ from paths import Paths
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# Define the declarative base
+# Define the declarative general
 database = declarative_base()
 
 # Create an engine

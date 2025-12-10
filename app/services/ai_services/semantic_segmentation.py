@@ -1,16 +1,17 @@
 import os
+from logging import getLogger
+
 import httpx
+
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
+from app.routes.general import contours
 from app.schemas.contour_hierarchy import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
 from app.schemas.user import System
 from app.services.util import extract_mask_from_response
-from app.routes import contours
 from paths import SEMANTIC_SEGMENTATION_BACKEND_URL as BASE_URL
-from logging import getLogger
-
 
 logger = getLogger(__name__)
 

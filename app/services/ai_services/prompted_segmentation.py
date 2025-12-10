@@ -1,6 +1,8 @@
 import json
 from logging import getLogger
+
 import httpx
+
 from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images

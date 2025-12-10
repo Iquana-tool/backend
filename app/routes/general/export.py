@@ -19,7 +19,7 @@ from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.routes.contours import get_contours_of_mask
+from app.routes.general.contours import get_contours_of_mask
 from app.schemas.contour_hierarchy import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
 from app.services.labels import get_hierarchical_label_name

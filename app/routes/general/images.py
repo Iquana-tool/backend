@@ -5,8 +5,7 @@ import os.path
 import shutil
 import zipfile
 from typing import Literal
- 
-import cv2
+
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
@@ -17,12 +16,11 @@ from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.scans import Scans
-from app.routes.masks import delete_mask, create_mask, get_mask_annotation_status
+from app.routes.general.masks import create_mask, get_mask_annotation_status
 from app.schemas.image import Image
-from app.services.database_access import parse_log_file, get_height_width_of_image, save_as_low_res_image_to_disk
+from app.services.database_access import parse_log_file, get_height_width_of_image
 from app.services.database_access import save_image_to_disk_and_db
 from app.services.util import extract_numbers
-from paths import Paths
 from app.schemas.user import User
 from app.services.auth import get_current_user
  

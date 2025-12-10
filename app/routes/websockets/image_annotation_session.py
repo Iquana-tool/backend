@@ -1,10 +1,9 @@
 from enum import StrEnum
 from logging import getLogger
-from typing import List
 
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
-from pydantic import BaseModel, Field, field_validator
+from pydantic import field_validator
 from pydantic_core import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
@@ -12,18 +11,17 @@ from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
-from app.routes.contours import add_contour, get_contours_of_mask, mark_as_reviewed, delete_contour, modify_contour, \
-    add_contours
-from app.routes.masks import create_mask, mark_as_fully_annotated
+from app.routes.general.contours import add_contour, get_contours_of_mask, mark_as_reviewed, delete_contour, modify_contour
+from app.routes.general.masks import create_mask, mark_as_fully_annotated
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from app.schemas.completion_segmentation.inference import CompletionServiceRequest, CompletionMainAPIRequest
 from app.schemas.contours import Contour
-from app.schemas.prompted_segmentation.prompts import Prompts
+from app.schemas.prompted_segmentation.prompts import Prompts, BoxPrompt
 from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
 from app.services.ai_services.base_service import BaseService
 from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
-from app.services.contours import get_contours_from_binary_mask, contour_ids_to_indices
+from app.services.contours import get_contours_from_binary_mask
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
@@ -473,7 +471,12 @@ async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientM
     ))
 
 
-async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_prompted_segmentation(
+        websocket: WebSocket,
+        client_msg: ClientMessage,
+        state: AnnotationSessionState,
+        override_completion_disable=False,
+):
     """ Handle prompted_segmentation using a prompted model. """
     model_identifier = client_msg.data.get("model_identifier")
     prompts_data = client_msg.data.get("prompts")
@@ -505,7 +508,10 @@ async def handle_prompted_segmentation(websocket: WebSocket, client_msg: ClientM
                                                   added_by=model_identifier,
                                                   label_id=None,)[0]
     response = await add_object(contour_model, websocket, client_msg, state)
-    if Backends.COMPLETION_SEGMENTATION.value in state.running_backends and state.running_backends[Backends.COMPLETION_SEGMENTATION.value].enabled:
+    if (Backends.COMPLETION_SEGMENTATION.value in state.running_backends and
+        state.running_backends[Backends.COMPLETION_SEGMENTATION.value].enabled and
+        not override_completion_disable
+    ):
         await handle_completion(
             websocket,
             ClientMessage(
@@ -598,13 +604,28 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
         seeds=contours,
     )
     response_seg = await state.running_backends[Backends.COMPLETION_SEGMENTATION.value].inference(service_request)
-    contour_models = get_contours_from_binary_mask(response_seg["mask"],
-                                                   only_return_biggest=False,
-                                                   limit=None,
-                                                   added_by=client_msg.data.get("model_key"),
-                                                   label_id=client_msg.data.get("label_id", None),)
-    for contour_model in contour_models:
-        await add_object(contour_model, websocket, client_msg, state)
+    print(response_seg)
+    boxes = response_seg["boxes"]
+    for box in boxes:
+        prompted_seg_msg = ClientMessage(
+            success=True,
+            type=ClientMessageType.PROMPTED_SEGMENTATION,
+            id="completion",
+            message=None,
+            data={
+                "model_identifier": "",
+                "prompts": Prompts(
+                    point_prompts=[],
+                    box_prompt=BoxPrompt(
+                        min_x=box[0],
+                        min_y=box[1],
+                        max_x=box[2],
+                        max_y=box[3],
+                    ),
+                )
+            }
+        )
+        await handle_prompted_segmentation(websocket, prompted_seg_msg, state, override_completion_disable=True)
 
 
 async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
