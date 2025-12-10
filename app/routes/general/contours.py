@@ -98,6 +98,24 @@ async def modify_contour(contour_id,
         raise e
 
 
+@router.post("/replace_contour/{contour_id}")
+async def replace_contour(contour_id,
+                          new_contour: Contour,
+                          user: User = Depends(get_current_user),
+                          db: Session = Depends(get_session)):
+    """ Replace a contour with a new one. """
+    new_contour.id = contour_id
+    mask_id = db.query(Contours).filter_by(id=contour_id).first().mask_id
+    new_contour_db = new_contour.to_db_entry(mask_id)
+    db.query(Contours).filter_by(id=contour_id).delete()
+    db.add(new_contour_db)
+    db.commit()
+    return {
+        "success": True,
+        "message": "Successfully replaced contour.",
+    }
+
+
 @router.post("/change_contour_label/{contour_id}&new_label_id={new_label_id}")
 async def change_contour_label(contour_id: int, new_label_id: int,
                                user: User = Depends(get_current_user),
