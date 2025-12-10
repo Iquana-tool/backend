@@ -2,23 +2,21 @@ from logging import getLogger
 
 from fastapi import APIRouter, Depends
 
-from app.database import get_context_session
-from app.database.contours import Contours
-from app.schemas.contours import Contour
 from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationHTTPRequest, \
-    PromptedSegmentationWebsocketRequest, SegmentationResponse
+    SegmentationResponse
 from app.schemas.user import User
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.auth import get_current_user
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/prompted_segmentation", tags=["prompted_segmentation"])
+service = PromptedSegmentationService()
 
 
 @router.get("/health")
 async def health_check(user: User = Depends(get_current_user)):
     """Health check endpoint to verify if the prompted prompted_segmentation backend is reachable."""
-    if await PromptedSegmentationService().check_backend():
+    if await service.check_backend():
         return {
             "success": True,
             "message": "Prompted prompted_segmentation backend is reachable.",
@@ -35,7 +33,7 @@ async def health_check(user: User = Depends(get_current_user)):
 @router.get("/models")
 async def get_available_models(user: User = Depends(get_current_user)):
     """Retrieve the list of available prompted segmentation models from the backend."""
-    models = await PromptedSegmentationService().get_models()
+    models = await service.get_models()
     return {
         "success": True,
         "message": "Retrieved available prompted segmentation models.",
