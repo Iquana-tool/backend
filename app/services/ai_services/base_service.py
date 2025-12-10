@@ -134,5 +134,6 @@ class BaseService(ABC):
 
     @abstractmethod
     async def inference(self, request):
-        """ The inference endpoint of each service. Is specific to the service. """
+        """ The inference endpoint of each service. Is specific to the service. Should call a Post to  API_BASE/inference with
+         specific type of request. """
         pass
