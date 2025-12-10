@@ -147,6 +147,21 @@ class Contour(BaseModel):
         with get_context_session() as session:
             return cls.from_db(session.query(Contours).filter_by(id=id).first())
 
+    @classmethod
+    def from_binary_mask(cls,
+                         binary_mask: np.ndarray,
+                         label,
+                         added_by):
+        contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contour = contours[0]
+        contour[..., 0]  = contour[..., 0] / binary_mask.shape[1]
+        contour[..., 1] = contour[..., 1] / binary_mask.shape[0]
+        return cls.from_normalized_cv_contour(
+            normalized_cv_contour=contour,
+            label=label,
+            added_by=added_by,
+        )
+
     def __in__(self, other):
         """
         Is this contour contained in another contour. Checks whether all points in this contour are inside another.

@@ -1,6 +1,7 @@
 from enum import StrEnum
 from logging import getLogger
 
+import numpy as np
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
 from pydantic import field_validator
@@ -586,29 +587,39 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
         user_id=state.user_id,
         seeds=contours,
     )
-    response_seg = await state.running_backends[Backends.COMPLETION_SEGMENTATION.value].inference(service_request)
-    print(response_seg)
-    boxes = response_seg["boxes"]
-    for box in boxes:
-        prompted_seg_msg = ClientMessage(
-            success=True,
-            type=ClientMessageType.PROMPTED_SEGMENTATION,
-            id="completion",
-            message=None,
-            data={
-                "model_identifier": "",
-                "prompts": Prompts(
-                    point_prompts=[],
-                    box_prompt=BoxPrompt(
-                        min_x=box[0],
-                        min_y=box[1],
-                        max_x=box[2],
-                        max_y=box[3],
-                    ),
-                )
-            }
-        )
-        await handle_prompted_segmentation(websocket, prompted_seg_msg, state, override_completion_disable=True)
+    response = await state.running_backends[Backends.COMPLETION_SEGMENTATION.value].inference(service_request)
+    response_data = response["response"]
+    type = response_data["type"]
+    if type == "instance_masks":
+        for mask in response_data["masks"]:
+            mask = np.array(mask, dtype=bool)
+            contour = Contour.from_binary_mask(mask,
+                                               label=client_msg.get('label', None),
+                                               added_by=client_msg.get('model_key')
+                                               )
+            await add_object(contour, websocket, client_msg, state)
+    elif type == "bboxes":
+        boxes = response_data["boxes"]
+        for box in boxes:
+            prompted_seg_msg = ClientMessage(
+                success=True,
+                type=ClientMessageType.PROMPTED_SEGMENTATION,
+                id="completion",
+                message=None,
+                data={
+                    "model_identifier": client_msg.get('model_key'),
+                    "prompts": Prompts(
+                        point_prompts=[],
+                        box_prompt=BoxPrompt(
+                            min_x=box[0],
+                            min_y=box[1],
+                            max_x=box[2],
+                            max_y=box[3],
+                        ),
+                    )
+                }
+            )
+            await handle_prompted_segmentation(websocket, prompted_seg_msg, state, override_completion_disable=True)
 
 
 async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
