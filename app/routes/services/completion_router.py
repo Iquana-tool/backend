@@ -5,20 +5,22 @@ from app.database import get_session
 from app.schemas.completion_segmentation.inference import CompletionMainAPIRequest, CompletionServiceRequest
 from app.schemas.contours import Contour
 from app.schemas.user import User
-from app.services.ai_services import completion_segmentation as completion_service
+from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.auth import get_current_user
 
+
+completion_service = CompletionService()
 router = APIRouter(prefix="/completion_segmentation", tags=["Completion Segmentation"])
 
 
 @router.get("/models")
 async def get_available_models(user: User = Depends(get_current_user)):
     """Retrieve the list of available prompted segmentation models from the backend."""
-    models = await completion_service.get_models()
+    response = await completion_service.get_models()
     return {
         "success": True,
         "message": "Retrieved available prompted segmentation models.",
-        "available_models": models
+        "response": response
     }
 
 
@@ -31,7 +33,7 @@ async def upload_image(image_id: int, user: User = Depends(get_current_user)):
     }
 
 
-@router.post("/infer/image_id={image_id}")
+@router.post("/inference/image_id={image_id}")
 async def infer_completion(
         request: CompletionMainAPIRequest,
         user: User = Depends(get_current_user),
