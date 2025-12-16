@@ -593,13 +593,16 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
     if type == "instance_masks":
         for mask in response_data["masks"]:
             mask = np.array(mask, dtype=bool)
-            contour = Contour.from_binary_mask(mask,
-                                               label=client_msg.get('label', None),
-                                               added_by=client_msg.get('model_key')
-                                               )
-            await add_object(contour, websocket, client_msg, state)
+            try:
+                contour = Contour.from_binary_mask(mask,
+                                                   label=client_msg.data.get('label', None),
+                                                   added_by=client_msg.data.get('model_key')
+                                                   )
+                await add_object(contour, websocket, client_msg, state)
+            except ValidationError:
+                print(f"Failed to add mask-")
     elif type == "bboxes":
-        boxes = response_data["boxes"]
+        boxes = response_data["bboxes"]
         for box in boxes:
             prompted_seg_msg = ClientMessage(
                 success=True,
@@ -607,7 +610,7 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
                 id="completion",
                 message=None,
                 data={
-                    "model_identifier": client_msg.get('model_key'),
+                    "model_identifier": client_msg.data.get('model_key'),
                     "prompts": Prompts(
                         point_prompts=[],
                         box_prompt=BoxPrompt(

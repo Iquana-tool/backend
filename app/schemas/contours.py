@@ -152,8 +152,10 @@ class Contour(BaseModel):
                          binary_mask: np.ndarray,
                          label,
                          added_by):
+        if binary_mask.dtype != np.uint8:
+            binary_mask = binary_mask.astype(np.uint8)
         contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contour = contours[0]
+        contour = max(contours, key=cv2.contourArea).astype(float)
         contour[..., 0]  = contour[..., 0] / binary_mask.shape[1]
         contour[..., 1] = contour[..., 1] / binary_mask.shape[0]
         return cls.from_normalized_cv_contour(
