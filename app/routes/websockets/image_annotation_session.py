@@ -7,7 +7,7 @@ from fastapi.websockets import WebSocket
 from pydantic import field_validator
 from pydantic_core import ValidationError
 from starlette.websockets import WebSocketDisconnect
-
+from pycocotools import mask as maskUtils
 from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
@@ -588,11 +588,18 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
         seeds=contours,
     )
     response = await state.running_backends[Backends.COMPLETION_SEGMENTATION.value].inference(service_request)
+    await send_msg(websocket, ServerMessage(
+        success=response["success"],
+        id=client_msg.id,
+        type=ServerMessageType.SUCCESS,
+        message=response["message"],
+        data=None
+    ))
     response_data = response["response"]
     type = response_data["type"]
     if type == "instance_masks":
-        for mask in response_data["masks"]:
-            mask = np.array(mask, dtype=bool)
+        for rle_mask in response_data["masks"]:
+            mask = maskUtils.decode(rle_mask)
             try:
                 contour = Contour.from_binary_mask(mask,
                                                    label=client_msg.data.get('label', None),
