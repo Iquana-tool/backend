@@ -1,7 +1,7 @@
 import os
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 import httpx
-from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
+from paths import SEMANTIC_SEGMENTATION_BACKEND_URL as BASE_URL
 from app.database import get_session
 from sqlalchemy.orm import Session
 from logging import getLogger

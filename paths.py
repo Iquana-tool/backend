@@ -2,8 +2,9 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-AUTOMATIC_SEGMENTATION_BACKEND_URL = os.environ.get("AUTOMATIC_SEGMENTATION_BACKEND_URL", "http://coral-automatic-segmentation-cpu:7000")
+SEMANTIC_SEGMENTATION_BACKEND_URL = os.environ.get("AUTOMATIC_SEGMENTATION_BACKEND_URL", "http://coral-automatic-segmentation-cpu:7000")
 PROMPTED_SEGMENTATION_BACKEND_URL = os.environ.get("PROMPTED_SEGMENTATION_BACKEND_URL", "http://coral-prompted-segmentation-cpu:7001")
+COMPLETION_SEGMENTATION_BACKEND_URL = os.environ.get("COMPLETION_SEGMENTATION_BACKEND_URL", "http://coral-completion-segmentation-cpu:7002")
 SECRET_KEY = os.environ.get("SECRET_KEY", "supersecretkey")
 
 class Paths:

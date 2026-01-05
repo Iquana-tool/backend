@@ -7,7 +7,8 @@ from app.database import get_session
 from app.database.contours import Contours
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.schemas.contours import Contour, ContourHierarchy
+from app.schemas.contours import Contour
+from app.schemas.contour_hierarchy import ContourHierarchy
 from app.schemas.user import User
 from app.services.auth import get_current_user
 
@@ -259,7 +260,6 @@ async def delete_temporary_contours_of_mask(mask_id: int,
 @router.post("/add_contours")
 async def add_contours(mask_id: int,
                        contours_to_add: list[Contour],
-                       temporary_list: list[bool],
                        user: User = Depends(get_current_user),
                        db: Session = Depends(get_session)):
     """
@@ -275,33 +275,25 @@ async def add_contours(mask_id: int,
     Returns:
         dict: A dictionary containing the success status, message, and lists of added and failed contour IDs.
     """
-    failed = []
-    added_ids = []
-    for contour_to_add, temporary in zip(contours_to_add, temporary_list):
-        logger.info(f"Added {len(added_ids)} / {len(contours_to_add)} contours. Failed {len(failed)}")
-        result = await add_contour(mask_id, contour_to_add, user, temporary, db)
-        if not result["success"]:
-            failed.append({
-                "contour": contour_to_add,
-                "error": result["message"]
-            })
-        else:
-            added_ids.append(result["contour_id"])
-    if failed:
+    added = []
+    for contour_to_add in contours_to_add:
+        logger.info(f"Added {len(added)} / {len(contours_to_add)} contours.")
+        result = await add_contour(mask_id, contour_to_add, user, db)
+        if result["success"]:
+            added.append(result["added_contour"])
+    if len(added) < len(contours_to_add):
         return {
             "success": False,
-            "message": f"Added {len(added_ids)} contours. Failed to add {len(failed)} contours.",
+            "message": f"Added {len(added)} contours. Failed to add all {len(contours_to_add)} contours.",
             "mask_id": mask_id,
-            "failed": failed,
-            "added_ids": added_ids
+            "added_contours": added,
         }
     else:
         return {
             "success": True,
             "message": "All contours added successfully.",
             "mask_id": mask_id,
-            "added_ids": added_ids,
-            "failed": []
+            "added_contours": added,
         }
 
 

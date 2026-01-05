@@ -11,7 +11,7 @@ from app.database.labels import Labels
 from app.schemas.semantic_segmentation.training import TrainingRequest
 from app.schemas.user import User
 from app.services.auth import get_current_user
-from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
+from paths import SEMANTIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])

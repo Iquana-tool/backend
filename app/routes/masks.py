@@ -11,7 +11,7 @@ from app.database.labels import Labels
 from app.database.masks import Masks
 from app.routes.contours import delete_contour, add_contours
 from app.routes.semantic_segmentation.upload_data import proxy_upload_file
-from app.schemas.contours import ContourHierarchy
+from app.schemas.contour_hierarchy import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
 from app.schemas.prompted_segmentation.segmentations import SemanticSegmentationMask
 from app.services.database_access import save_array_to_disk

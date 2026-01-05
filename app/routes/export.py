@@ -20,7 +20,7 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.routes.contours import get_contours_of_mask
-from app.schemas.contours import ContourHierarchy
+from app.schemas.contour_hierarchy import ContourHierarchy
 from app.schemas.labels import LabelHierarchy
 from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path

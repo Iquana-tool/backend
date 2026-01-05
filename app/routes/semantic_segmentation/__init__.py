@@ -5,7 +5,7 @@ import httpx
 
 from app.schemas.user import User
 from app.services.auth import get_current_user
-from paths import AUTOMATIC_SEGMENTATION_BACKEND_URL as BASE_URL
+from paths import SEMANTIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 
 logger = getLogger(__name__)
