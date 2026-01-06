@@ -18,12 +18,14 @@ from app.routes.general.masks import create_mask, mark_as_fully_annotated
 from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from app.schemas.completion_segmentation.inference import CompletionServiceRequest
 from app.schemas.contours import Contour
+from app.schemas.labels import Label
 from app.schemas.prompted_segmentation.prompts import Prompts, BoxPrompt
 from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
 from app.services.ai_services.base_service import BaseService
 from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.contours import get_contours_from_binary_mask
+from app.services.database_access import get_height_width_of_image
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
@@ -580,12 +582,19 @@ async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMess
 async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the completion of a completion model. """
     seed_contour_ids = client_msg.data.get("seed_contour_ids")
-    contours = [Contour.from_id(contour_id).to_binary_mask(1000, 1000).tolist() for contour_id in seed_contour_ids]
+    contours = [Contour.from_id(contour_id) for contour_id in seed_contour_ids]
+    height, width = get_height_width_of_image(state.image_id)
+    contours_rles = [contour.to_rle_encoding(height, width) for contour in contours]
 
+    # Find out the concept
+    contour_labels = {contour.label_id for contour in contours if contour.label_id is not None}  # Creates a set of contours
+    label_id = contour_labels.pop() if len(contour_labels) == 1 else None  # If only one label is present we take it as a concept, otherwise we ignore it
+    concept = Label.from_id(label_id).name if label_id is not None else None
     service_request = CompletionServiceRequest(
         model_key=client_msg.data.get('model_key'),
         user_id=state.user_id,
-        seeds=contours,
+        seeds=contours_rles, #contours_rles,
+        concept=concept,
     )
     response = await state.running_backends[Backends.COMPLETION_SEGMENTATION.value].inference(service_request)
     await send_msg(websocket, ServerMessage(

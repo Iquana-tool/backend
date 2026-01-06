@@ -1,7 +1,7 @@
 from logging import getLogger
 
 import httpx
-
+from fastapi.encoders import jsonable_encoder
 from app.schemas.completion_segmentation.inference import CompletionServiceRequest
 from app.services.ai_services.base_service import BaseService
 from paths import COMPLETION_SEGMENTATION_BACKEND_URL as BASE_URL
@@ -24,8 +24,7 @@ class CompletionService(BaseService):
         # Send the request to the backend
         async with httpx.AsyncClient(timeout=120) as client:
             url = f"{self.backend_url}/annotation_session/infer_instances"
-            # Only send the prompts in the body
-            response = await client.post(url, json=request.model_dump(exclude_none=True))
+            response = await client.post(url, json=jsonable_encoder(request.model_dump(exclude_none=True)))
 
             response.raise_for_status()
 

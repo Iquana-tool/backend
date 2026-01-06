@@ -3,7 +3,7 @@ from logging import getLogger
 import cv2
 import numpy as np
 from pydantic import BaseModel, field_validator, Field, model_validator
-
+from pycocotools import mask as maskUtils
 from app.database import get_context_session
 from app.database.contours import Contours
 from app.schemas.quantification import QuantificationModel
@@ -86,6 +86,10 @@ class Contour(BaseModel):
             thickness=cv2.FILLED
         )
         return binary_mask.astype(bool)
+
+    def to_rle_encoding(self, height, width):
+        bin_mask = self.to_binary_mask(height, width)
+        return maskUtils.encode(np.asfortranarray(bin_mask.astype(np.uint8)))
 
     def to_rescaled_contour(self, height, width):
         """ Return a rescaled contour given the height and width. """

@@ -18,4 +18,5 @@ class CompletionMainAPIRequest(BaseModel):
 class CompletionServiceRequest(BaseModel):
     model_key: str = Field(..., description="The key of the model.")
     user_id: str = Field(..., description="The user id of the model.")
-    seeds: list[list[list[bool]]] = Field(..., description="Seeds is a list of binary masks")
+    seeds: list[dict] = Field(..., description="Seeds is a list of rle encoded binary masks")
+    concept: str | None = Field(default=None, description="Optional str describing the concept of the objects to be detected.")

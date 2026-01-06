@@ -3,6 +3,7 @@ from collections import deque
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Query
 
+from app.database import get_context_session
 from app.database.labels import Labels
 
 
@@ -25,6 +26,15 @@ class Label(BaseModel):
             parent_id=label.parent_id,
             children=[]
         )
+
+    @classmethod
+    def from_id(cls, label_id: int):
+        with get_context_session() as session:
+            label = session.query(Labels).filter(Labels.id == label_id).one_or_none()
+            if label is None:
+                return None
+            else:
+                return cls.from_db(label)
     
     def add_child(self, child):
         self.children.append(child)
