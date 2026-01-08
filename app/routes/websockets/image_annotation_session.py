@@ -508,6 +508,11 @@ async def handle_prompted_segmentation(
                                                   limit=None,
                                                   added_by=model_identifier,
                                                   label_id=None,)[0]
+    
+    # Get image dimensions and compute SVG path before sending
+    height, width = get_height_width_of_image(state.image_id)
+    contour_model.compute_path(width, height)
+    
     if using_refinement:
         await replace_object(state.refinement_contour_id, contour_model, websocket, client_msg, state)
     else:
