@@ -589,7 +589,8 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
     # Find out the concept
     contour_labels = {contour.label_id for contour in contours if contour.label_id is not None}  # Creates a set of contours
     label_id = contour_labels.pop() if len(contour_labels) == 1 else None  # If only one label is present we take it as a concept, otherwise we ignore it
-    concept = Label.from_id(label_id).name if label_id is not None else None
+    label = Label.from_id(label_id) if label_id is not None else None
+    concept = label.name if label is not None else None
     service_request = CompletionServiceRequest(
         model_key=client_msg.data.get('model_key'),
         user_id=state.user_id,
@@ -611,7 +612,7 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
             mask = maskUtils.decode(rle_mask)
             try:
                 contour = Contour.from_binary_mask(mask,
-                                                   label=client_msg.data.get('label', None),
+                                                   label_id=label_id,
                                                    added_by=client_msg.data.get('model_key')
                                                    )
                 await add_object(contour, websocket, client_msg, state)
