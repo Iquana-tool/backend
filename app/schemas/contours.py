@@ -114,13 +114,13 @@ class Contour(BaseModel):
         )
 
     @classmethod
-    def from_normalized_cv_contour(cls, normalized_cv_contour, label, added_by):
+    def from_normalized_cv_contour(cls, normalized_cv_contour, label_id, added_by):
         x_coords = normalized_cv_contour[..., 0].flatten()
         y_coords = normalized_cv_contour[..., 1].flatten()
         return cls(
             x=x_coords.tolist(),
             y=y_coords.tolist(),
-            label_id=label,
+            label_id=label_id,
             added_by=added_by,
         )
 
@@ -154,7 +154,7 @@ class Contour(BaseModel):
     @classmethod
     def from_binary_mask(cls,
                          binary_mask: np.ndarray,
-                         label,
+                         label_id,
                          added_by):
         if binary_mask.dtype != np.uint8:
             binary_mask = binary_mask.astype(np.uint8)
@@ -164,7 +164,7 @@ class Contour(BaseModel):
         contour[..., 1] = contour[..., 1] / binary_mask.shape[0]
         return cls.from_normalized_cv_contour(
             normalized_cv_contour=contour,
-            label=label,
+            label_id=label_id,
             added_by=added_by,
         )
 

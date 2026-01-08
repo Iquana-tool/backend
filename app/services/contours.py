@@ -49,7 +49,7 @@ def get_contours_from_binary_mask(mask: np.ndarray,
             contour[..., 0] /= mask.shape[1]
             contour[..., 1] /= mask.shape[0]
             models.append(Contour.from_normalized_cv_contour(contour,
-                                                             label=label_id,
+                                                             label_id=label_id,
                                                              added_by=added_by)
                           )
         return models
