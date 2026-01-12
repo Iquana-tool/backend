@@ -627,7 +627,7 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
                 id="completion",
                 message=None,
                 data={
-                    "model_identifier": client_msg.data.get('model_key'),
+                    "model_identifier": "sam2.1_tiny",
                     "prompts": Prompts(
                         point_prompts=[],
                         box_prompt=BoxPrompt(
