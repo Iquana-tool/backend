@@ -23,7 +23,7 @@ COPY . .
 RUN uv sync
 
 # Create necessary directories for data and database
-RUN chmod -R 777 data
+RUN mkdir -p data && chmod -R 777 data
 
 # Expose the port the app runs on
 EXPOSE 8000
