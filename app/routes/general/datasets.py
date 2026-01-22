@@ -111,6 +111,38 @@ async def share_dataset(
     return {"success": True, "message": f"Dataset shared with {share_with_username}"}
 
 
+@router.get("/all")
+async def get_all_datasets(
+    db: Session = Depends(get_session),
+    user: "User" = Depends(get_current_user)
+):
+    """Get all datasets owned by or shared with the current user.
+
+    Args:
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and the list of datasets.
+    """
+    available_datasets = user.available_datasets
+    datasets = db.query(Datasets).filter(
+        Datasets.id.in_(available_datasets)
+    ).all()
+    return {"success": True, "datasets": [
+        {
+            "id": ds.id,
+            "name": ds.name,
+            "description": ds.description,
+            "dataset_type": ds.dataset_type,
+            "folder_path": ds.folder_path,
+            "created_by": ds.created_by,
+            "shared_with": [u.id for u in ds.shared_with]
+        }
+        for ds in datasets
+    ]}
+
+
 @router.get("/{dataset_id}")
 async def get_dataset(
     dataset_id: int,
@@ -194,38 +226,6 @@ async def get_annotation_progress(dataset_id: int,
     }
 
 
-@router.get("/all")
-async def get_all_datasets(
-    db: Session = Depends(get_session),
-    user: "User" = Depends(get_current_user)
-):
-    """Get all datasets owned by or shared with the current user.
-
-    Args:
-        db (Session): The database session.
-        user (User): The current authenticated user.
-
-    Returns:
-        dict: A dictionary containing the success status and the list of datasets.
-    """
-    available_datasets = user.available_datasets
-    datasets = db.query(Datasets).filter(
-        Datasets.id.in_(available_datasets)
-    ).all()
-    return {"success": True, "datasets": [
-        {
-            "id": ds.id,
-            "name": ds.name,
-            "description": ds.description,
-            "dataset_type": ds.dataset_type,
-            "folder_path": ds.folder_path,
-            "created_by": ds.created_by,
-            "shared_with": [u.id for u in ds.shared_with]
-        }
-        for ds in datasets
-    ]}
-
-
 @router.delete("/{dataset_id}")
 async def delete_dataset(
     dataset_id: int,
@@ -263,43 +263,7 @@ async def delete_dataset(
 @router.get("/{dataset_id}/images")
 async def list_images(
     dataset_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """List all uploaded image ids in an image dataset.
-
-    Args:
-        dataset_id: ID of the dataset to retrieve images from.
-        db: Database session dependency.
-        user (User): The current authenticated user.
-
-    Returns:
-        A dictionary containing the success status and the list of images.
-    """
-    images = (
-        db.query(Images, Masks)
-        .join(Masks, Images.id == Masks.image_id)
-        .filter(Images.dataset_id == dataset_id)
-        .all()
-    )
-    image_response = []
-    for entry in images:
-        image = entry[0]
-        mask = entry[1]
-        image_response.append({
-            **image.__dict__,
-            "status": await get_mask_annotation_status(mask.id, db, user)
-        })
-    return {
-        "success": True,
-        "images": image_response
-    }
-
-
-@router.get("/{dataset_id}/images?status={status}")
-async def list_images_with_annotation_status(
-    dataset_id: int,
-    status: Literal["not_started", "in_progress", "reviewable", "finished"],
+    filter_for_status: Literal["not_started", "in_progress", "reviewable", "finished"] | None = None,
     db: Session = Depends(get_session),
     user: User = Depends(get_current_user)
 ):
@@ -307,31 +271,38 @@ async def list_images_with_annotation_status(
 
     Args:
         dataset_id: Dataset ID to retrieve images from.
-        status: The status of the masks to filter by.
+        filter_for_status: The status of the masks to filter by.
         db: Database session dependency.
         user (User): The current authenticated user.
 
     Returns:
         A list of image IDs.
     """
-    match status:
-        case "not_started":
-            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(~Masks.contours.any()).all()
-        case "in_progress":
-            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(Masks.contours.any(), ~Masks.fully_annotated).all()
-        case "reviewable":
-            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(
-                            Masks.fully_annotated, Masks.contours.any(~Contours.reviewed_by.any())).all()
-        case "finished":
-            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(
-                Masks.fully_annotated, ~Masks.contours.any(~Contours.reviewed_by.any())
-            )
-        case _:
-            raise HTTPException(status_code=403, detail="Unknown status.")
+    query = db.query(Images, Masks).join(Masks, Images.id == Masks.image_id).filter(Images.dataset_id == dataset_id)
+    if filter_for_status:
+        match filter_for_status:
+            case "not_started":
+                query = query.filter(Masks.status == "not_started")
+            case "in_progress":
+                query = query.filter(Masks.status == "in_progress")
+            case "reviewable":
+                query = query.filter(Masks.status == "reviewable")
+            case "finished":
+                query = query.filter(Masks.status == "finished")
+            case _:
+                raise HTTPException(status_code=403, detail="Unknown status.")
+    result = query.all()
+    image_data = [
+        {
+            "image_id": img.id,
+            "mask_id": mask.id,
+            "status": mask.status
+        } for img, mask in result
+    ]
     return {
         "success": True,
-        "message": "Retrieved images with status successfully.",
-        "image_ids": [img.id for img in images]
+        "message": "Retrieved images successfully.",
+        "image_data": image_data
     }
 
 

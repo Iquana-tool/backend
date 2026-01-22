@@ -1,5 +1,6 @@
 from schemas.contours import Contour
 from sqlalchemy import Column, Integer, ForeignKey, Float, JSON, Boolean, String, Table
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
 
 from app.database import database
@@ -34,6 +35,10 @@ class Contours(database):
     # Easy access to children, this makes accessing children much faster
     children = relationship("Contours", backref="parent", remote_side=[id], single_parent=True)
     reviewed_by = relationship("Users", secondary=reviewer_contour_association, back_populates="reviewed_objects")
+
+    @hybrid_property
+    def reviewed(self) -> bool:
+        return self.reviewed_by is not None
 
     @classmethod
     def from_schema(cls, model_schema: Contour, mask_id: int):

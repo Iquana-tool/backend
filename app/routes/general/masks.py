@@ -63,37 +63,11 @@ async def get_mask_annotation_status(
         dict: A dictionary containing the annotation status.
     """
     mask = db.query(Masks).filter_by(id=mask_id).first()
-    if mask is None:
-        raise HTTPException(status_code=404, detail="Mask does not exist.")
-    contours = db.query(Contours).filter_by(mask_id=mask.id).all()
-    if len(contours) == 0:
-        # Zero annotated objects means we have not started annotating yet
-        return {
-            "success": True,
-            "message": "Mask status: Not started.",
-            "status": "not_started",
-        }
-    elif not mask.fully_annotated:
-        # The mask has not been marked as fully annotated, so annotation must still be in progress
-        return {
-            "success": True,
-            "message": "Mask status: In progress.",
-            "status": "in_progress",
-        }
-    elif np.any(len(contour.reviewed_by) == 0 for contour in contours):
-        # Mask has been marked as fully annotated, but we still have contours without reviewers, so the mask is reviewable
-        return {
-            "success": True,
-            "message": "Mask status: Reviewable.",
-            "status": "reviewable",
-        }
-    else:
-        # Mask marked as fully annotated and each contour has at least one reviewer, the mask is finished.
-        return {
-            "success": True,
-            "message": "Mask status: Finished.",
-            "status": "finished",
-        }
+    return {
+        "success": True,
+        "message": "Mask status retrieved successfully.",
+        "status": mask.status
+    }
 
 
 @router.delete("/{mask_id}")
