@@ -8,7 +8,9 @@ from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from schemas.contour_hierarchy import ContourHierarchy
 from schemas.image import Image
+from schemas.labels import LabelHierarchy
 from schemas.user import User
 from sqlalchemy.orm import Session
 
@@ -16,9 +18,11 @@ from app.database import get_session
 from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
+from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.scans import Scans
-from app.routes.general.masks import create_mask, get_mask_annotation_status
+from app.routes.general.masks import router, logger
+from app.schemas.user import User
 from app.services.auth import get_current_user
 from app.services.database_access import parse_log_file, get_height_width_of_image
 from app.services.database_access import save_image_to_disk_and_db
@@ -28,12 +32,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
 
 
-@router.post("/upload_image")
+@router.post("/upload")
 async def upload_image(
-    dataset_id: int,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+        dataset_id: int,
+        file: UploadFile = File(...),
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """Upload an image file.
 
@@ -51,7 +55,7 @@ async def upload_image(
         if image_id is None:
             raise HTTPException(status_code=400, detail="Invalid file or upload failed")
         # Also create a mask for the image
-        await create_mask(image_id, db)
+        await create_new_mask_for_image(image_id, db)
         return {
             "success": True,
             "image_id": image_id,
@@ -63,12 +67,12 @@ async def upload_image(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/upload_images")
+@router.post("/upload_multi")
 async def upload_images(
-    dataset_id: int,
-    files: list[UploadFile] = File(...),
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+        dataset_id: int,
+        files: list[UploadFile] = File(...),
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """Upload multiple image files.
 
@@ -107,14 +111,14 @@ async def upload_images(
         "failed_count": len(failed_files),
         "failed_files": failed_files,
         "message": message,
-        }
+    }
 
 
-@router.delete("/delete_image/{image_id}")
+@router.delete("/{image_id}")
 async def delete_image(
-    image_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+        image_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """Delete an image and its associated masks.
 
@@ -143,113 +147,11 @@ async def delete_image(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/list_images/{dataset_id}")
-async def list_images(
-    dataset_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """List all uploaded image ids in an image dataset.
-
-    Args:
-        dataset_id: ID of the dataset to retrieve images from.
-        db: Database session dependency.
-        user (User): The current authenticated user.
-
-    Returns:
-        A dictionary containing the success status and the list of images.
-    """
-    try:
-        dataset = db.query(Datasets).filter_by(id=dataset_id).first()
-        if dataset.dataset_type == "scan":
-            raise HTTPException(status_code=400, detail="This endpoint is not available for scan datasets. "
-                                                        "Use /list_scans instead.")
-        images = (
-            db.query(Images, Masks)
-            .join(Masks, Images.id == Masks.image_id)
-            .filter(Images.dataset_id == dataset_id)
-            .all()
-        )
-        image_response = []
-        for entry in images:
-            image = entry[0]
-            mask = entry[1]
-            image_response.append({
-                **image.__dict__,
-                "status": await get_mask_annotation_status(mask.id, db, user)
-            })
-        return {
-            "success": True,
-            "images": image_response
-        }
-    except Exception as e:
-        logger.error(f"List images error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/list_scans/{dataset_id}", deprecated=True)
-async def list_scans(
-    dataset_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """ List all uploaded scans in a scan dataset.
-
-    Args:
-        dataset_id: ID of the dataset to retrieve scans from.
-        db: Database session dependency.
-        user (User): The current authenticated user.
-
-    Returns:
-        A dictionary containing the success status and the list of scans.
-    """
-    raise NotImplementedError
-
-
-@router.get("/list_images_with_annotation_status/{dataset_id}&status={status}")
-async def list_images_with_annotation_status(
-    dataset_id: int,
-    status: str,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """List all images with masks of certain status for a given image ID.
-
-    Args:
-        dataset_id: Dataset ID to retrieve images from.
-        status: The status of the masks to filter by.
-        db: Database session dependency.
-        user (User): The current authenticated user.
-
-    Returns:
-        A list of image IDs.
-    """
-    match status:
-        case "not_started":
-            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(~Masks.contours.any()).all()
-        case "in_progress":
-            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(Masks.contours.any(), ~Masks.fully_annotated).all()
-        case "reviewable":
-            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(
-                            Masks.fully_annotated, Masks.contours.any(~Contours.reviewed_by.any())).all()
-        case "finished":
-            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(
-                Masks.fully_annotated, ~Masks.contours.any(~Contours.reviewed_by.any())
-            )
-        case _:
-            raise HTTPException(status_code=403, detail="Unknown status.")
-    return {
-        "success": True,
-        "message": "Retrieved images with status successfully.",
-        "image_ids": [img.id for img in images]
-    }
-
-@router.get("/get_image/{image_id}&{low_res}")
-async def get_image(
-    image_id: int,
-    low_res: bool = False,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+@router.get("/{image_id}/b64")
+async def get_base64_image(
+        image_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """Get images via ids.
 
@@ -262,29 +164,48 @@ async def get_image(
     Returns:
         A dict mapping from image ID to base64 encoded image.
     """
-    try:
-        image_query = db.query(Images).filter_by(id=image_id).first()
-        image = Image.from_db(image_query)
-        if low_res:
-            b64_str = image.load_thumbnail(as_base64=True)
-        else:
-            b64_str = image.load_image(as_base64=True)
-        return {
-            "success": True,
-            "message": f"Successfully retrieved image {image_id}.",
-            image_id: b64_str
-        }
-    except Exception as e:
-        logger.error(f"Get image error: {str(e)}")
-        raise e
+    image_query = db.query(Images).filter_by(id=image_id).first()
+    image = Image.from_db(image_query)
+    b64_str = image.load_image(as_base64=True)
+    return {
+        "success": True,
+        "message": f"Successfully retrieved image {image_id}.",
+        image_id: b64_str
+    }
 
 
-@router.post("/get_images")
-async def get_images(
-    image_ids: str,
-    low_res: bool = False,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+@router.get("/{image_id}/thumbnail")
+async def get_base64_thumbnail(
+        image_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """Get images via ids.
+
+    Args:
+        image_id (int): Image ID to retrieve.
+        low_res (bool): Whether to return low resolution images (thumbnails). Defaults to False.
+        db (Session): Database session dependency.
+        user (User): The current authenticated user.
+
+    Returns:
+        A dict mapping from image ID to base64 encoded image.
+    """
+    image_query = db.query(Images).filter_by(id=image_id).first()
+    image = Image.from_db(image_query)
+    b64_str = image.load_thumbnail(as_base64=True)
+    return {
+        "success": True,
+        "message": f"Successfully retrieved image {image_id}.",
+        image_id: b64_str
+    }
+
+
+@router.get("/ids/b64")
+async def get_base64_images(
+        image_ids: str,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """Get images via a list of image IDs. This gets the images in batches to avoid sending too many requests at once.
 
@@ -307,10 +228,7 @@ async def get_images(
         images_query = db.query(Images).filter(Images.id.in_(image_ids)).all()
         images = [Image.from_db(img) for img in images_query]
         for img in images:
-            if low_res:
-                response[img.id] = img.load_thumbnail(as_base64=True)
-            else:
-                response[img.id] = img.load_image(as_base64=True)
+            response[img.id] = img.load_image(as_base64=True)
         return {
             "success": True,
             "message": f"Successfully retrieved {len(image_ids)} images.",
@@ -321,286 +239,128 @@ async def get_images(
         raise e
 
 
-@router.get("/get_images_of_dataset/{dataset_id}")
-async def get_images_of_dataset(
-    dataset_id: int,
-    low_res: bool = False,
-    limit: int = None,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+@router.get("/ids/thumbnails")
+async def get_base64_thumbnails(
+        image_ids: str,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
-    """Get all images of a dataset.
+    """Get images via a list of image IDs. This gets the images in batches to avoid sending too many requests at once.
 
     Args:
-        dataset_id: ID of the dataset to retrieve images from.
-        low_res: Whether to return low resolution images (thumbnails).
-        limit: Optional limit on the number of images to return. If not provided, all images will be returned.
-        db: Database session dependency.
+        image_ids (str): JSON string containing a list of image IDs to retrieve.
+        low_res (bool): Whether to return low resolution images (thumbnails). Defaults to False.
+        db (Session): Database session dependency.
         user (User): The current authenticated user.
 
     Returns:
-        A dict mapping from image ID to base64 encoded image.
+        A dictionary mapping from image ID to base64 encoded image.
     """
-    try:
-        response = {}
-        images_query = db.query(Images).filter_by(dataset_id=dataset_id).limit(limit).all()
-        images = [Image.from_db(img) for img in images_query]
-        for img in images:
-            if low_res:
-                response[id] = img.load_thumbnail(as_base64=True)
-            else:
-                response[id] = img.load_image(as_base64=True)
+    # Parse image_ids from JSON string
+    image_ids = json.loads(image_ids)
+    if not isinstance(image_ids, list):
+        raise HTTPException(status_code=400, detail="image_ids must be a list")
+
+    response = {}
+    images_query = db.query(Images).filter(Images.id.in_(image_ids)).all()
+    images = [Image.from_db(img) for img in images_query]
+    for img in images:
+        response[img.id] = img.load_thumbnail(as_base64=True)
+    return {
+        "success": True,
+        "message": f"Successfully retrieved {len(image_ids)} images.",
+        "images": response
+    }
+
+
+@router.post("/{image_id}/masks/create")
+async def create_new_mask_for_image(
+        image_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """ Create a new mask for the given image ID. Only one mask can exist per image.
+
+    Args:
+        image_id (int): The ID of the image.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and mask ID.
+    """
+    # Check if mask already exists for the image
+    existing_mask = db.query(Masks).filter_by(image_id=image_id).first()
+    if existing_mask:
         return {
-            "success": True,
-            "message": f"Successfully retrieved {len(images)} images from dataset {dataset_id}.",
-            "images": response
+            "success": False,
+            "message": "Mask already exists for this image.",
+            "mask_id": existing_mask.id
         }
-    except Exception as e:
-        logger.error(f"Get all images of dataset error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/upload_scan")
-async def upload_scan(
-    dataset_id: int,
-    files: list[UploadFile] = File(...),
-    name: str = "Scan",
-    scan_type: Literal["CT"] = "CT",
-    description: str = "Scan description",
-    #meta_data: dict = None,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """Upload a scan file.
-
-    Args:
-        dataset_id: ID of the dataset to which the scan belongs.
-        files: List of image files to upload. The filenames must include the slice index or number. This number must
-        be present as the last number in the filename to correctly associate the images with the scan. For example:
-        "scan_slice_1.png", "scan_slice_2.png", etc. "Slice_1_scan_19.png" will be associated with index 19.
-        name: Name of the scan.
-        scan_type: Type of scan (e.g., "CT", "MRI"). Optional.
-        description: Description of the scan. Optional.
-        meta_data: Additional metadata about the scan. Optional.
-        db: Database session dependency.
-        user (User): The current authenticated user.
-
-    Returns:
-        A success message with the IDs of the uploaded images.
-    """
-    # First create a new scan entry in the database
-    # Then save each image file to disk and the database
-    # and associate them with the scan entry
-    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
-    if not dataset or dataset.dataset_type != "scan":
-        raise HTTPException(status_code=404, detail="Dataset not found or is not a scan dataset")
-    new_scan = Scans(
-        dataset_id=dataset_id,
-        name=name.strip(),
-        type=scan_type.strip(),
-        description=description.strip(),
-        folder_path=os.path.join(dataset.folder_path, name),
-        number_of_slices=len(files),
-        #meta_data=meta_data
-    )
-    db.add(new_scan)
+    # Create a new mask
+    new_mask = Masks(image_id=image_id)
+    db.add(new_mask)
     db.commit()
-    height, width = None, None
-    try:
-        image_ids = []
-        scan_indices = [extract_numbers(file.filename)[-1] for file in files]
-        reset_indices = np.argsort(scan_indices)
-        files = np.array(files)[reset_indices]
-        for i, file in enumerate(files):
-            # Save the image to disk and the database
-            image_id = await save_image_to_disk_and_db(file,
-                                                       dataset_id,
-                                                       new_scan.id,
-                                                       index_in_scan=i,
-                                                       convert_to="JPEG")
-            if height is None or width is None:
-                height, width = get_height_width_of_image(image_id)
-            else:
-                # Validate that the image dimensions match the first image
-                current_height, current_width = get_height_width_of_image(image_id)
-                if current_height != height or current_width != width:
-                    raise HTTPException(status_code=400, detail=f"Image {file.filename} has different dimensions "
-                                                                f"({current_height}x{current_width}) than the first "
-                                                                f"image ({height}x{width}). All images of a scan must "
-                                                                f"have the same dimensions.")
-            if image_id is None:
-                raise HTTPException(status_code=400, detail="Invalid file or upload failed")
-            image_ids.append(image_id)
-
-        return {
-            "success": True,
-            "image_ids": image_ids,
-            "message": f"Successfully uploaded {len(files)} images belonging to scan {new_scan.id}. "
-                       f"Assigned image ids {image_ids}"
-        }
-    except Exception as e:
-        logger.error(f"Upload error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "success": True,
+        "message": "Mask created successfully.",
+        "mask_id": new_mask.id
+    }
 
 
-@router.post("/upload_scan_with_log_file")
-async def upload_scan_with_log_file(
-    dataset_id: int,
-    files: list[UploadFile] = File(...),
-    log_file: UploadFile = File(...),
-    scan_type: str = "CT",
-    description: str = "Scan description",
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+@router.get("/{image_id}/masks")
+async def get_mask_for_image(image_id: int,
+                             db: Session = Depends(get_session),
+                             user: User = Depends(get_current_user)):
+    """ Get the mask image for a given image. """
+    masks = db.query(Masks).filter_by(image_id=image_id).all()
+    if masks is None:
+        raise HTTPException(status_code=404, detail=f"No mask for image {image_id} found.")
+    return {
+        "success": True,
+        "masks": masks
+    }
+
+
+@router.post("/{image_id}/masks/upload/semantic_mask")
+async def post_semantic_mask_to_image(
+        image_id: int,
+        mask: UploadFile = File(...),
+        session: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """
-    Upload a scan file with logging. This endpoint allows uploading multiple image files that belong to a scan,
-    along with a log file that contains metadata about the scan.
-    > Warning: This is still in development and might not work!
+    Upload a mask to a mask id. Compute the contours for each label in the mask, build the hierarchy and add
+    them to the database.
 
     Args:
-        dataset_id: ID of the dataset to which the scan belongs.
-        files: List of image files to upload. The filenames must include the slice index or number.
-        log_file: Log file containing metadata about the scan.
-        scan_type: Type of scan (e.g., "CT", "MRI"). Optional.
-        description: Description of the scan. Optional.
-        db: Database session dependency.
+        image_id (int): The ID of the image.
+        mask (UploadFile): The mask file.
+        session (Session): The database session.
         user (User): The current authenticated user.
 
     Returns:
-        A success message with the IDs of the uploaded images.
+        dict: A dictionary containing the success status and result.
     """
-    # First create a new scan entry in the database
-    # Then save each image file to disk and the database
-    # and associate them with the scan entry
-    log_data = parse_log_file(log_file.file.read())
-    return await upload_scan(
-        dataset_id=dataset_id,
-        files=files,
-        name=log_data["Filename Prefix"],
-        scan_type=scan_type,
-        description=description,
-        #meta_data=log_data,
-        db=db
+    mask_array = np.frombuffer(mask.file.read(), dtype=np.uint8)
+    image = session.query(Images, Masks.id).join(Masks, Images.id == Masks.image_id).filter(Images.id == image_id).first()
+    labels = session.query(Labels).filter_by(dataset_id=image.dataset_id)
+    label_hierarchy = LabelHierarchy.from_query(labels)
+
+    # Create an initial hierarchy of already added contours
+    contour_hierarchy = ContourHierarchy.from_query(
+        session.query(Contours).filter_by(mask_id=image.mask_id).all(),
+        height=image.height,
+        width=image.width,
     )
-
-
-@router.post("/upload_scan_from_zip")
-async def upload_scan_from_zip(
-    dataset_id: int,
-    zip_file: UploadFile = File(...),
-    scan_type: str = "CT",
-    description: str = "Scan description",
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """
-    Upload a scan from a zip file. This endpoint extracts images from a zip file and uploads them as a scan.
-    > Warning: This is still in development and might not work!
-
-    Args:
-        dataset_id: ID of the dataset to which the scan belongs.
-        zip_file: The zip file containing the scan images. The zip file should contain nothing but the slices and
-        optionally a log file.
-        scan_type: Type of scan (e.g., "CT", "MRI"). Optional.
-        description: Description of the scan. Optional.
-        db: Database session dependency.
-        user (User): The current authenticated user.
-
-    Returns:
-        A success message with the IDs of the uploaded images.
-    """
-
-    # Create a new scan entry in the database
-    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
-    if not dataset or dataset.dataset_type != "scan":
-        raise HTTPException(status_code=404, detail="Dataset not found or is not a scan dataset")
-
-    new_scan = Scans(
-        dataset_id=dataset_id,
-        name=os.path.splitext(zip_file.filename)[0],
-        type=scan_type.strip(),
-        description=description.strip(),
-        folder_path=os.path.join(dataset.folder_path, os.path.splitext(zip_file.filename)[0]),
-        number_of_slices=0,
-        #meta_data={}
+    # Add new contours from the mask
+    contour_hierarchy = await contour_hierarchy.from_semantic_mask(
+        mask_array,
+        label_hierarchy,
+        user.username,
     )
-    db.add(new_scan)
-    db.commit()
-
-    try:
-        image_ids = []
-        with zipfile.ZipFile(io.BytesIO(zip_file.file.read())) as zf:
-            for i, file_info in enumerate(zf.infolist()):
-                if not file_info.is_dir():
-                    if file_info.filename.endswith('.log'):
-                        # If a log file is found, parse it and update the scan metadata
-                        log_data = parse_log_file(zf.open(file_info).read())
-                        # new_scan.meta_data = log_data
-                        # TO BE DONE: ADD functionality for the log file to update the scan metadata
-                        db.commit()
-                        continue
-                    with zf.open(file_info) as file:
-                        # Extract numbers from the filename. The last number will be used as the index in the scan.
-                        numbers_in_filename = extract_numbers(file_info.filename)
-                        index_in_scan = i if not numbers_in_filename else numbers_in_filename[-1]
-
-                        # Save the image to disk and the database
-                        image_id = await save_image_to_disk_and_db(file,
-                                                                   dataset_id,
-                                                                   new_scan.id,
-                                                                   index_in_scan=index_in_scan)
-                        if image_id is None:
-                            raise HTTPException(status_code=400, detail="Invalid file or upload failed")
-                        image_ids.append(image_id)
-
-        new_scan.number_of_slices = len(image_ids)
-        db.commit()
-
-        return {
-            "success": True,
-            "image_ids": image_ids,
-            "message": f"Successfully uploaded {len(image_ids)} images belonging to scan {new_scan.id}. "
-                       f"Assigned image ids {image_ids}"
-        }
-    except Exception as e:
-        logger.error(f"Upload error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/delete_scan/{scan_id}")
-async def delete_scan(
-    scan_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """Delete a scan and all its associated images.
-
-    Args:
-        scan_id: The ID of the scan to delete.
-        db: Database session dependency.
-        user (User): The current authenticated user.
-
-    Returns:
-        A dictionary indicating success and a message.
-    """
-    try:
-        # Get the scan and its associated images
-        images = db.query(Images).filter_by(scan_id=scan_id).all()
-
-        # Delete the scan and its associated images
-        for image in images:
-            await delete_image(image.id)
-
-        scan = db.query(Scans).filter_by(id=scan_id).first()
-        if not scan:
-            return {"success": True, "message": "Scan not found."}
-        if os.path.exists(scan.folder_path):
-            # Remove the folder containing the scan images
-            shutil.rmtree(scan.folder_path)
-        db.delete(scan)
-        db.commit()
-        return {"success": True, "message": f"Deleted scan {scan_id} and its associated images."}
-    except Exception as e:
-        logger.error(f"Delete scan error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "success": True,
+        "message": "Converted mask object to contour hierarchy and added it to the database.",
+        "result": contour_hierarchy.model_dump_json()
+    }

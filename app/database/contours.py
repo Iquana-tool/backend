@@ -1,10 +1,8 @@
-import json
-
 from schemas.contours import Contour
 from sqlalchemy import Column, Integer, ForeignKey, Float, JSON, Boolean, String, Table
 from sqlalchemy.orm import relationship
-from app.database import database
 
+from app.database import database
 
 reviewer_contour_association = Table('reviewer_contour_association',
                                      database.metadata,
@@ -38,7 +36,7 @@ class Contours(database):
     reviewed_by = relationship("Users", secondary=reviewer_contour_association, back_populates="reviewed_objects")
 
     @classmethod
-    def from_schema(cls, model_schema: "Contour", mask_id: int):
+    def from_schema(cls, model_schema: Contour, mask_id: int):
         """
         Creates a Contours DB instance from a Pydantic Contour schema.
         Assumes model_schema.quantification is already populated by your validator.

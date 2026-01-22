@@ -1,17 +1,19 @@
 import logging
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Depends, File, UploadFile
+from fastapi import APIRouter, HTTPException, Depends
 from schemas.contour_hierarchy import ContourHierarchy
+from schemas.contours import Contour
 from schemas.labels import LabelHierarchy
-from schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.database.contours import Contours
+from app.database.contours import Contours, save_contour_tree
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
+from app.routes.general.contours import logger
+from app.schemas.user import User
 from app.services.auth import get_current_user
 from app.services.database_access import save_array_to_disk
 
@@ -19,149 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
 
 
-@router.put("/create_mask/{image_id}")
-async def create_mask(
-    image_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """ Create a new mask for the given image ID. Only one mask can exist per image.
-
-    Args:
-        image_id (int): The ID of the image.
-        db (Session): The database session.
-        user (User): The current authenticated user.
-
-    Returns:
-        dict: A dictionary containing the success status and mask ID.
-    """
-    try:
-        # Check if mask already exists for the image
-        existing_mask = db.query(Masks).filter_by(image_id=image_id).first()
-        if existing_mask:
-            return {
-                "success": False,
-                "message": "Mask already exists for this image.",
-                "mask_id": existing_mask.id
-            }
-        # Create a new mask
-        new_mask = Masks(image_id=image_id)
-        db.add(new_mask)
-        db.commit()
-        return {
-            "success": True,
-            "message": "Mask created successfully.",
-            "mask_id": new_mask.id
-        }
-    except Exception as e:
-        logger.error(f"Error creating mask: {e}")
-        raise HTTPException(status_code=500, detail="Error creating mask.")
-
-
-@router.post("/mark_as_fully_annotated/{mask_id}")
-async def mark_as_fully_annotated(
-    mask_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """ Mark a mask as finished, generate it as an image file and upload it to the AI external service.
-
-    Args:
-        mask_id (int): The ID of the mask.
-        db (Session): The database session.
-        user (User): The current authenticated user.
-
-    Returns:
-        dict: A dictionary containing the success status and mask ID.
-    """
-    # Check if mask exists
-    existing_mask = db.query(Masks).filter_by(id=mask_id).first()
-    if not existing_mask:
-        raise HTTPException(status_code=404, detail="Mask not found.")
-    logger.info(f"Finishing this mask: {existing_mask}")
-    # Check if the mask is already finished
-    if bool(existing_mask.fully_annotated):
-        return {
-            "success": True,
-            "message": "Mask is already marked as fully annotated.",
-            "mask_id": existing_mask.id
-        }
-    image = db.query(Images).filter_by(id=existing_mask.image_id).first()
-    # Generate the mask from contours
-    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
-    contours_hierarchy = ContourHierarchy.from_query(contours, image.width, image.height)
-    labels = db.query(Labels).filter_by(dataset_id=image.dataset_id)
-    labels_hierarchy = LabelHierarchy.from_query(labels)
-    semantic_mask = contours_hierarchy.to_semantic_mask(image.height, image.width, labels_hierarchy.id_to_value_map)
- 
-    logging.debug(f"Generated mask with the following labels: {np.unique(semantic_mask).tolist()}")
-    mask_path = save_array_to_disk(semantic_mask,
-                       image.dataset_id,
-                       image.scan_id,
-                       is_mask=True,
-                       new_filename=image.file_name)
-    # Mark the mask as finished
-    existing_mask.fully_annotated = True
-    db.commit()
-    return {
-        "success": True,
-        "message": "Mask marked as finished successfully.",
-        "mask_id": existing_mask.id
-    }
-
-
-@router.post("/unmark_as_fully_annotated/{mask_id}")
-async def unmark_as_fully_annotated(
-    mask_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """ Remove the finished status from a mask, allowing it to be edited again. This will also delete the mask image
-        file and remove it from the AI external service.
-
-    Args:
-        mask_id (int): The ID of the mask.
-        db (Session): The database session.
-        user (User): The current authenticated user.
-
-    Returns:
-        dict: A dictionary containing the success status and mask ID.
-    """
-    # Check if mask exists
-    existing_mask = db.query(Masks).filter_by(id=mask_id).first()
-    if not existing_mask:
-        raise HTTPException(status_code=404, detail="Mask not found.")
-    # Check if the mask is already unfinished
-    if not existing_mask.fully_annotated:
-        return {
-            "success": True,
-            "message": "Mask is not marked as fully annotated.",
-            "mask_id": existing_mask.id
-        }
-    # Mark the mask as unfinished
-    existing_mask.fully_annotated = False
-    db.commit()
-    return {
-        "success": True,
-        "message": "Mask marked as not fully annotated successfully.",
-        "mask_id": existing_mask.id
-    }
-
-@router.get("/get_mask_for_image/{image_id}")
-async def get_mask_for_image(image_id: int,
-                             db: Session = Depends(get_session),
-                             user: User = Depends(get_current_user)):
-    """ Get the mask image for a given image. """
-    mask = db.query(Masks).filter_by(image_id=image_id).first()
-    if mask is None:
-        raise HTTPException(status_code=404, detail=f"No mask for image {image_id} found.")
-    return {
-        "success": True,
-        "mask": mask
-    }
-
-
-@router.get("/get_mask/{mask_id}")
+@router.get("/{mask_id}")
 async def get_mask(
     mask_id: int,
     db: Session = Depends(get_session),
@@ -186,7 +46,7 @@ async def get_mask(
     }
 
 
-@router.get("/get_mask_annotation_status/{mask_id}")
+@router.get("/{mask_id}/status")
 async def get_mask_annotation_status(
     mask_id: int,
     db: Session = Depends(get_session),
@@ -236,7 +96,7 @@ async def get_mask_annotation_status(
         }
 
 
-@router.delete("/delete_mask/{mask_id}")
+@router.delete("/{mask_id}")
 async def delete_mask(
     mask_id: int,
     db: Session = Depends(get_session),
@@ -266,52 +126,273 @@ async def delete_mask(
     }
 
 
-@router.post("/post_mask/mask_id={mask_id}&added_by={added_by}", deprecated=True)
-async def post_mask(
-    mask_id: int,
-    added_by: str,
-    mask: UploadFile = File(...),
-    session: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+@router.patch("/{mask_id}/status/complete")
+async def mark_as_fully_annotated(
+        mask_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
-    """
-    Upload a mask to a mask id. Compute the contours for each label in the mask, build the hierarchy and add
-    them to the database.
+    """ Mark a mask as finished, generate it as an image file and upload it to the AI external service.
 
     Args:
         mask_id (int): The ID of the mask.
-        added_by (str): Who added the mask.
-        temporary (bool): Whether the mask is temporary.
-        mask (UploadFile): The mask file.
-        session (Session): The database session.
+        db (Session): The database session.
         user (User): The current authenticated user.
 
     Returns:
-        dict: A dictionary containing the success status and result.
+        dict: A dictionary containing the success status and mask ID.
     """
-    mask_array = np.frombuffer(mask.file.read(), dtype=np.uint8)
-    image_id = session.query(Masks.image_id).filter_by(id=mask_id).first()
-    height, width = mask_array.shape
-    dataset_id = session.query(Images.dataset_id).filter_by(id=image_id).first()
-    labels = session.query(Labels).filter_by(dataset_id=dataset_id)
-    label_hierarchy = LabelHierarchy.from_query(labels)
- 
-    # Create an initial hierarchy of already added contours
-    contour_hierarchy = ContourHierarchy.from_query(
-        session.query(Contours).filter_by(mask_id=mask_id).all(),
-        height=height,
-        width=width,
-    )
-    # Add new contours from the mask
-    contour_hierarchy = await contour_hierarchy.from_semantic_mask(
-        mask_id,
-        mask_array,
-        label_hierarchy,
-        added_by,
-        session
-    )
+    # Check if mask exists
+    existing_mask = db.query(Masks).filter_by(id=mask_id).first()
+    if not existing_mask:
+        raise HTTPException(status_code=404, detail="Mask not found.")
+    logger.info(f"Finishing this mask: {existing_mask}")
+    # Check if the mask is already finished
+    if bool(existing_mask.fully_annotated):
+        return {
+            "success": True,
+            "message": "Mask is already marked as fully annotated.",
+            "mask_id": existing_mask.id
+        }
+    image = db.query(Images).filter_by(id=existing_mask.image_id).first()
+    # Generate the mask from contours
+    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
+    contours_hierarchy = ContourHierarchy.from_query(contours, image.width, image.height)
+    labels = db.query(Labels).filter_by(dataset_id=image.dataset_id)
+    labels_hierarchy = LabelHierarchy.from_query(labels)
+    semantic_mask = contours_hierarchy.to_semantic_mask(image.height, image.width, labels_hierarchy.id_to_value_map)
+
+    logging.debug(f"Generated mask with the following labels: {np.unique(semantic_mask).tolist()}")
+    mask_path = save_array_to_disk(semantic_mask,
+                                   image.dataset_id,
+                                   image.scan_id,
+                                   is_mask=True,
+                                   new_filename=image.file_name)
+    # Mark the mask as finished
+    existing_mask.fully_annotated = True
+    db.commit()
     return {
         "success": True,
-        "message": "Converted mask object to contour hierarchy and added it to the database.",
-        "result": contour_hierarchy.model_dump_json()
+        "message": "Mask marked as finished successfully.",
+        "mask_id": existing_mask.id
     }
+
+
+@router.patch("/{mask_id}/status/incomplete")
+async def unmark_as_fully_annotated(
+        mask_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """ Remove the finished status from a mask, allowing it to be edited again. This will also delete the mask image
+        file and remove it from the AI external service.
+
+    Args:
+        mask_id (int): The ID of the mask.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and mask ID.
+    """
+    # Check if mask exists
+    existing_mask = db.query(Masks).filter_by(id=mask_id).first()
+    if not existing_mask:
+        raise HTTPException(status_code=404, detail="Mask not found.")
+    # Check if the mask is already unfinished
+    if not existing_mask.fully_annotated:
+        return {
+            "success": True,
+            "message": "Mask is not marked as fully annotated.",
+            "mask_id": existing_mask.id
+        }
+    # Mark the mask as unfinished
+    existing_mask.fully_annotated = False
+    db.commit()
+    return {
+        "success": True,
+        "message": "Mask marked as not fully annotated successfully.",
+        "mask_id": existing_mask.id
+    }
+
+
+@router.get("/{mask_id}/contours")
+async def get_contours_of_mask(mask_id: int,
+                               flattened: bool = True,
+                               db: Session = Depends(get_session),
+                               user: User = Depends(get_current_user)):
+    """ Export quantification data for the given mask_id and labels.
+
+    Args:
+        mask_id (int): The ID of the mask to export contours for.
+        flattened (bool): Whether to flatten the hierarchical JSON structure. Defaults to True. If False, the
+            hierarchical structure will be preserved, i.e. children contours will be nested under their
+            parent contour.
+        db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
+        user (User): Authentication dependency.
+
+    Returns:
+        dict: A dictionary containing the success status and message if error, or a hierarchical JSON structure of
+        contours for the given mask_id.
+    """
+    contours_query = db.query(Contours).filter_by(mask_id=mask_id).all()
+    id, height, width = (db.query(Masks.id, Images.height, Images.width)
+                     .join(Images, Masks.image_id == Images.id)
+                     .filter(Masks.id == mask_id).first())
+    hierarchy = ContourHierarchy.from_query(contours_query,
+                                            height=height,
+                                            width=width)
+    return {
+        "success": True,
+        "message": f"Contours {'hierarchy' if not flattened else ''} retrieved.",
+        "contours": hierarchy.model_dump() if not flattened else hierarchy.dump_contours_as_list()
+    }
+
+
+@router.put("/{mask_id}/contours")
+async def add_contour(mask_id: int,
+                      contour_to_add: Contour,
+                      check_parent: bool = False,
+                      user: User = Depends(get_current_user),
+                      db: Session = Depends(get_session)):
+    """
+    Add a contour to a mask in the database.
+
+    Args:
+        mask_id (int): The ID of the mask to which the contour will be added.
+        contour_to_add (Contour): The contour data to add.
+        user (User): Authentication dependency.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and the ID of the added contour.
+    """
+    try:
+        parent_contour_id = contour_to_add.parent_id
+        # Check parents
+        expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label_id).first())
+        should_have_parent = expected_parent_label is not None
+        if contour_to_add.label_id is not None and check_parent:
+            if should_have_parent and parent_contour_id is None:
+                # Contour should have a parent but none was given.
+                logger.error(f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).")
+                return {
+                    "success": False,
+                    "message": f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).",
+                    "contour_id": None
+                }
+            elif should_have_parent and parent_contour_id is not None:
+                # Contour should have a parent and one is given one
+                parent_contour_label = db.query(Contours.label_id).filter_by(id=parent_contour_id).first()
+                if expected_parent_label != parent_contour_label:
+                    logger.error(f"Error adding contour: Parent contour does not match the expected parent label."
+                                 f"\nGiven label of parent contour: ({parent_contour_label})"
+                                 f"\tExpected label of parent contour: ({expected_parent_label})")
+                    return {
+                        "success": False,
+                        "message": "Parent contour does not match the expected parent label.",
+                        "contour_id": None
+                    }
+            else:
+                logger.error("Contour with label should not have a parent but has a parent contour id given.")
+                return {
+                    "success": False,
+                    "message": "Contour with label should not have a parent but has a parent contour id given.",
+                    "contour_id": None
+                }
+
+        # Add contour to the database
+        entry = save_contour_tree(db, contour_to_add, mask_id, parent_contour_id)
+        db.commit()
+        contour_to_add.id = entry.id
+
+        # SVG path computation for the frontend
+        # Get image dimensions and compute path
+        mask = db.query(Masks).filter_by(id=mask_id).first()
+        if mask:
+            image = db.query(Images).filter_by(id=mask.image_id).first()
+            if image:
+                contour_to_add.compute_path(image.width, image.height)
+
+        return {
+            "success": True,
+            "message": "Contour added successfully.",
+            "added_contour": contour_to_add.model_dump(),
+        }
+    except Exception as e:
+        print(f"Error adding contour: {e}")
+        db.rollback()
+        raise e
+
+
+@router.put("/{mask_id}/contours/multi")
+async def add_contours(mask_id: int,
+                       contours_to_add: list[Contour],
+                       user: User = Depends(get_current_user),
+                       db: Session = Depends(get_session)):
+    """
+    Add multiple contours to a mask in the database. Internally calls `add_contour` for each contour.
+
+    Args:
+        mask_id (int): The ID of the mask to which the contours will be added.
+        contours_to_add (list[Contour]): A list of contour data to add.
+        temporary_list (list[bool]): A list saying whether or not the contours should be temporary.
+        user (User): Authentication dependency.
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and lists of added and failed contour IDs.
+    """
+    added = []
+    for contour_to_add in contours_to_add:
+        logger.info(f"Added {len(added)} / {len(contours_to_add)} contours.")
+        result = await add_contour(mask_id, contour_to_add, user, db)
+        if result["success"]:
+            added.append(result["added_contour"])
+    if len(added) < len(contours_to_add):
+        return {
+            "success": False,
+            "message": f"Added {len(added)} contours. Failed to add all {len(contours_to_add)} contours.",
+            "mask_id": mask_id,
+            "added_contours": added,
+        }
+    else:
+        return {
+            "success": True,
+            "message": "All contours added successfully.",
+            "mask_id": mask_id,
+            "added_contours": added,
+        }
+
+
+@router.delete("/{mask_id}/contours")
+async def delete_all_contours_of_mask(mask_id: int,
+                                      user: User = Depends(get_current_user),
+                                      db: Session = Depends(get_session)):
+    """ Deletes all contours of a mask. """
+    db.query(Contours).filter_by(mask_id=mask_id).delete()
+    mask = db.query(Masks).filter_by(id=mask_id).first()
+    mask.fully_annotated = False
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Deleted all contours of mask {mask_id}"
+    }
+
+
+@router.delete("/{mask_id}/contours/unreviewed")
+async def delete_unreviewed_contours_of_mask(mask_id: int,
+                                             user: User = Depends(get_current_user),
+                                             db: Session = Depends(get_session)):
+    """ Deletes all temporary contours of a mask. """
+    try:
+        contours = db.query(Contours).filter(Contours.mask_id == mask_id, ~Contours.reviewed_by.any()).delete()
+        db.commit()
+        return {
+            "success": True,
+            "message": f"Deleted all temporary contours of mask {mask_id}"
+        }
+    except Exception as e:
+        logger.error(e)
+        db.rollback()
+        raise e

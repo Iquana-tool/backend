@@ -2,15 +2,11 @@ from logging import getLogger
 
 from fastapi import APIRouter
 from fastapi import Depends, HTTPException
-from schemas.contour_hierarchy import ContourHierarchy
 from schemas.contours import Contour
 from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.contours import Contours, save_contour_tree
-from app.database.images import Images
-from app.database.labels import Labels
-from app.database.masks import Masks
 from app.database.users import Users
 from app.schemas.user import User
 from app.services.auth import get_current_user
@@ -19,40 +15,19 @@ router = APIRouter(prefix="/contours", tags=["contours"])
 logger = getLogger(__name__)
 
 
-@router.get("/get_contours_of_mask/{mask_id}&flattened={flattened}")
-async def get_contours_of_mask(mask_id: int,
-                               flattened: bool = True,
-                               db: Session = Depends(get_session),
-                               user: User = Depends(get_current_user)):
-    """ Export quantification data for the given mask_id and labels.
-
-    Args:
-        mask_id (int): The ID of the mask to export contours for.
-        flattened (bool): Whether to flatten the hierarchical JSON structure. Defaults to True. If False, the
-            hierarchical structure will be preserved, i.e. children contours will be nested under their
-            parent contour.
-        db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
-        user (User): Authentication dependency.
-
-    Returns:
-        dict: A dictionary containing the success status and message if error, or a hierarchical JSON structure of
-        contours for the given mask_id.
-    """
-    contours_query = db.query(Contours).filter_by(mask_id=mask_id).all()
-    id, height, width = (db.query(Masks.id, Images.height, Images.width)
-                     .join(Images, Masks.image_id == Images.id)
-                     .filter(Masks.id == mask_id).first())
-    hierarchy = ContourHierarchy.from_query(contours_query,
-                                            height=height,
-                                            width=width)
+@router.get("/{contour_id}")
+async def get_contour(contour_id: int, db: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    existing_contour = db.query(Contours).filter_by(id=contour_id).first()
+    if not existing_contour:
+        raise HTTPException(status_code=404, detail="Contour not found.")
     return {
         "success": True,
-        "message": f"Contours {'hierarchy' if not flattened else ''} retrieved.",
-        "contours": hierarchy.model_dump() if not flattened else hierarchy.dump_contours_as_list()
+        "message": "Contour retrieved successfully.",
+        "contour": Contour.from_db(existing_contour)
     }
 
 
-@router.post("/modify_contour/{contour_id}")
+@router.patch("/{contour_id}")
 async def modify_contour(contour_id,
                          db: Session = Depends(get_session),
                          user: User = Depends(get_current_user),
@@ -106,7 +81,7 @@ async def modify_contour(contour_id,
         raise e
 
 
-@router.post("/replace_contour/{contour_id}")
+@router.put("/{contour_id}")
 async def replace_contour(contour_id,
                           new_contour: Contour,
                           user: User = Depends(get_current_user),
@@ -123,7 +98,7 @@ async def replace_contour(contour_id,
     }
 
 
-@router.post("/change_contour_label/{contour_id}&new_label_id={new_label_id}")
+@router.patch("/{contour_id}/label")
 async def change_contour_label(contour_id: int, new_label_id: int,
                                user: User = Depends(get_current_user),
                                db: Session = Depends(get_session)):
@@ -143,30 +118,30 @@ async def change_contour_label(contour_id: int, new_label_id: int,
     existing_contour = db.query(Contours).filter_by(id=contour_id).first()
     if not existing_contour:
         raise HTTPException(status_code=404, detail="Contour not found.")
-    
+
     # Get current reviewed_by users and add the current user if not already there
     reviewed_by_usernames = [u.username for u in existing_contour.reviewed_by]
     if user.username not in reviewed_by_usernames:
         reviewed_by_usernames.append(user.username)
-    
+
     # Update both label and reviewed_by
     return await modify_contour(contour_id, label_id=new_label_id, reviewed_by=reviewed_by_usernames, db=db)
 
 
-@router.get("/mark_as_reviewed/{contour_id}")
-async def mark_as_reviewed(contour_id: int,
-                           user: User = Depends(get_current_user),
-                           db: Session = Depends(get_session)):
+@router.post("/{contour_id}/reviews/add")
+async def add_contour_review(contour_id: int,
+                             user: User = Depends(get_current_user),
+                             db: Session = Depends(get_session)):
     """ Mark a contour as reviewed by adding the current user to reviewed_by list."""
     contour = db.query(Contours).filter_by(id=contour_id).first()
     if contour is None:
         raise HTTPException(status_code=404, detail="Contour not found.")
-    
+
     # Only add user if not already in reviewed_by list
     if user not in contour.reviewed_by:
         contour.reviewed_by.append(user)
         db.commit()
-    
+
     return {
         "success": True,
         "message": f"Contour {contour_id} marked as reviewed successfully.",
@@ -174,83 +149,46 @@ async def mark_as_reviewed(contour_id: int,
     }
 
 
-@router.post("/add_contour")
-async def add_contour(mask_id: int,
-                      contour_to_add: Contour,
-                      check_parent: bool = False,
-                      user: User = Depends(get_current_user),
-                      db: Session = Depends(get_session)):
-    """
-    Add a contour to a mask in the database.
+@router.delete("/{contour_id}/reviews/remove")
+async def remove_contour_review(contour_id: int,
+                                user: User = Depends(get_current_user),
+                                db: Session = Depends(get_session)):
+    """ Mark a contour as reviewed by adding the current user to reviewed_by list."""
+    contour = db.query(Contours).filter_by(id=contour_id).first()
+    if contour is None:
+        raise HTTPException(status_code=404, detail="Contour not found.")
 
-    Args:
-        mask_id (int): The ID of the mask to which the contour will be added.
-        contour_to_add (Contour): The contour data to add.
-        user (User): Authentication dependency.
-        db (Session): The database session.
-
-    Returns:
-        dict: A dictionary containing the success status, message, and the ID of the added contour.
-    """
-    try:
-        parent_contour_id = contour_to_add.parent_id
-        # Check parents
-        expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label_id).first())
-        should_have_parent = expected_parent_label is not None
-        if contour_to_add.label_id is not None and check_parent:
-            if should_have_parent and parent_contour_id is None:
-                # Contour should have a parent but none was given.
-                logger.error(f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).")
-                return {
-                    "success": False,
-                    "message": f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).",
-                    "contour_id": None
-                }
-            elif should_have_parent and parent_contour_id is not None:
-                # Contour should have a parent and one is given one
-                parent_contour_label = db.query(Contours.label_id).filter_by(id=parent_contour_id).first()
-                if expected_parent_label != parent_contour_label:
-                    logger.error(f"Error adding contour: Parent contour does not match the expected parent label."
-                                 f"\nGiven label of parent contour: ({parent_contour_label})"
-                                 f"\tExpected label of parent contour: ({expected_parent_label})")
-                    return {
-                        "success": False,
-                        "message": "Parent contour does not match the expected parent label.",
-                        "contour_id": None
-                    }
-            else:
-                logger.error("Contour with label should not have a parent but has a parent contour id given.")
-                return {
-                    "success": False,
-                    "message": "Contour with label should not have a parent but has a parent contour id given.",
-                    "contour_id": None
-                }
-
-        # Add contour to the database
-        entry = save_contour_tree(db, contour_to_add, mask_id, parent_contour_id)
+    # Only add user if not already in reviewed_by list
+    if user in contour.reviewed_by:
+        contour.reviewed_by.remove(user)
         db.commit()
-        contour_to_add.id = entry.id
 
-        # SVG path computation for the frontend
-        # Get image dimensions and compute path
-        mask = db.query(Masks).filter_by(id=mask_id).first()
-        if mask:
-            image = db.query(Images).filter_by(id=mask.image_id).first()
-            if image:
-                contour_to_add.compute_path(image.width, image.height)
-
-        return {
-            "success": True,
-            "message": "Contour added successfully.",
-            "added_contour": contour_to_add.model_dump(),
-        }
-    except Exception as e:
-        print(f"Error adding contour: {e}")
-        db.rollback()
-        raise e
+    return {
+        "success": True,
+        "message": f"User removed from reviewer of contour {contour_id}.",
+        "reviewed_by": [u.username for u in contour.reviewed_by],
+    }
 
 
-@router.delete("/delete_contour/{contour_id}")
+@router.delete("/{contour_id}/reviews")
+async def remove_all_contour_reviews(contour_id: int,
+                                     user: User = Depends(get_current_user),
+                                     db: Session = Depends(get_session)):
+    """ Mark a contour as reviewed by adding the current user to reviewed_by list."""
+    contour = db.query(Contours).filter_by(id=contour_id).first()
+    if contour is None:
+        raise HTTPException(status_code=404, detail="Contour not found.")
+
+    contour.reviewed_by = []
+    db.commit()
+
+    return {
+        "success": True,
+        "message": f"Removed all reviewers from contour {contour_id}.",
+    }
+
+
+@router.delete("/{contour_id}")
 async def delete_contour(contour_id: int,
                          user: User = Depends(get_current_user),
                          db: Session = Depends(get_session)):
@@ -275,77 +213,3 @@ async def delete_contour(contour_id: int,
         "success": True,
         "message": "Contour and descendants deleted successfully.",
     }
-
-
-@router.delete("/delete_unreviewed_contours_of_mask/{mask_id}")
-async def delete_unreviewed_contours_of_mask(mask_id: int,
-                                             user: User = Depends(get_current_user),
-                                             db: Session = Depends(get_session)):
-    """ Deletes all temporary contours of a mask. """
-    try:
-        contours = db.query(Contours).filter(Contours.mask_id == mask_id, ~Contours.reviewed_by.any()).delete()
-        db.commit()
-        return {
-            "success": True,
-            "message": f"Deleted all temporary contours of mask {mask_id}"
-        }
-    except Exception as e:
-        logger.error(e)
-        db.rollback()
-        raise e
-
-
-@router.post("/add_contours")
-async def add_contours(mask_id: int,
-                       contours_to_add: list[Contour],
-                       user: User = Depends(get_current_user),
-                       db: Session = Depends(get_session)):
-    """
-    Add multiple contours to a mask in the database. Internally calls `add_contour` for each contour.
-
-    Args:
-        mask_id (int): The ID of the mask to which the contours will be added.
-        contours_to_add (list[Contour]): A list of contour data to add.
-        temporary_list (list[bool]): A list saying whether or not the contours should be temporary.
-        user (User): Authentication dependency.
-        db (Session): The database session.
-
-    Returns:
-        dict: A dictionary containing the success status, message, and lists of added and failed contour IDs.
-    """
-    added = []
-    for contour_to_add in contours_to_add:
-        logger.info(f"Added {len(added)} / {len(contours_to_add)} contours.")
-        result = await add_contour(mask_id, contour_to_add, user, db)
-        if result["success"]:
-            added.append(result["added_contour"])
-    if len(added) < len(contours_to_add):
-        return {
-            "success": False,
-            "message": f"Added {len(added)} contours. Failed to add all {len(contours_to_add)} contours.",
-            "mask_id": mask_id,
-            "added_contours": added,
-        }
-    else:
-        return {
-            "success": True,
-            "message": "All contours added successfully.",
-            "mask_id": mask_id,
-            "added_contours": added,
-        }
-
-
-@router.delete("/delete_all_contours_of_mask/{mask_id}")
-async def delete_all_contours_of_mask(mask_id: int,
-                                      user: User = Depends(get_current_user),
-                                      db: Session = Depends(get_session)):
-    """ Deletes all contours of a mask. """
-    db.query(Contours).filter_by(mask_id=mask_id).delete()
-    mask = db.query(Masks).filter_by(id=mask_id).first()
-    mask.fully_annotated = False
-    db.commit()
-    return {
-        "success": True,
-        "message": f"Deleted all contours of mask {mask_id}"
-    }
-

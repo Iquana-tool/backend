@@ -22,7 +22,7 @@ from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.routes.general.contours import get_contours_of_mask
+from app.routes.general.masks import get_contours_of_mask
 from app.services.auth import get_current_user
 from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path
@@ -31,7 +31,7 @@ router = APIRouter(prefix="/export", tags=["export"])
 logger = getLogger(__name__)
 
 
-@router.get("/get_mask_csv/{mask_id}")
+@router.get("/{mask_id}", deprecated=True)
 async def get_mask_csv(
         mask_id: int,
         db: Session = Depends(get_session),

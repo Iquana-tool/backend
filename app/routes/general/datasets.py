@@ -5,14 +5,20 @@ from logging import getLogger
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from schemas.image import Image
+from schemas.labels import LabelHierarchy
 from schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
+from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
+from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
+from app.routes.general.images import router, logger
+from app.routes.general.labels import router
 from app.routes.general.masks import get_mask_annotation_status
 from app.services.auth import get_current_user
 from paths import Paths
@@ -21,7 +27,7 @@ from paths import Paths
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 logger = getLogger(__name__)
 
-@router.post("/create_dataset")
+@router.post("/create")
 async def create_dataset(name: str,
                          description: str,
                          dataset_type: Literal["image", "scan", "DICOM"],
@@ -72,7 +78,7 @@ async def create_dataset(name: str,
                 "message": "Error creating dataset.",
                 "error": str(e)}
 
-@router.post("/share_dataset")
+@router.post("/{dataset_id}/share")
 async def share_dataset(
     dataset_id: int,
     share_with_username: str,
@@ -105,7 +111,7 @@ async def share_dataset(
     return {"success": True, "message": f"Dataset shared with {share_with_username}"}
 
 
-@router.get("/get_dataset/{dataset_id}")
+@router.get("/{dataset_id}")
 async def get_dataset(
     dataset_id: int,
     db: Session = Depends(get_session),
@@ -127,7 +133,7 @@ async def get_dataset(
     return {"success": True, "message": "Dataset found.", "dataset": dataset}
 
 
-@router.get("/get_number_of_images/{dataset_id}")
+@router.get("/{dataset_id}/images/count")
 async def get_number_of_images(
     dataset_id: int,
     db: Session = Depends(get_session),
@@ -150,7 +156,7 @@ async def get_number_of_images(
     return {"success": True, "number_of_images": number_of_images}
 
 
-@router.get("/get_annotation_progress/{dataset_id}")
+@router.get("/{dataset_id}/progress")
 async def get_annotation_progress(dataset_id: int,
                                   user: User = Depends(get_current_user),
                                   db: Session = Depends(get_session)):
@@ -188,8 +194,8 @@ async def get_annotation_progress(dataset_id: int,
     }
 
 
-@router.get("/get_datasets")
-async def get_datasets(
+@router.get("/all")
+async def get_all_datasets(
     db: Session = Depends(get_session),
     user: "User" = Depends(get_current_user)
 ):
@@ -220,7 +226,7 @@ async def get_datasets(
     ]}
 
 
-@router.delete("/delete_dataset/{dataset_id}")
+@router.delete("/{dataset_id}")
 async def delete_dataset(
     dataset_id: int,
     db: Session = Depends(get_session),
@@ -252,3 +258,173 @@ async def delete_dataset(
         logger.error(e)
         raise e
         return {"success": False, "message": "Error deleting dataset.", "error": str(e)}
+
+
+@router.get("/{dataset_id}/images")
+async def list_images(
+    dataset_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """List all uploaded image ids in an image dataset.
+
+    Args:
+        dataset_id: ID of the dataset to retrieve images from.
+        db: Database session dependency.
+        user (User): The current authenticated user.
+
+    Returns:
+        A dictionary containing the success status and the list of images.
+    """
+    images = (
+        db.query(Images, Masks)
+        .join(Masks, Images.id == Masks.image_id)
+        .filter(Images.dataset_id == dataset_id)
+        .all()
+    )
+    image_response = []
+    for entry in images:
+        image = entry[0]
+        mask = entry[1]
+        image_response.append({
+            **image.__dict__,
+            "status": await get_mask_annotation_status(mask.id, db, user)
+        })
+    return {
+        "success": True,
+        "images": image_response
+    }
+
+
+@router.get("/{dataset_id}/images?status={status}")
+async def list_images_with_annotation_status(
+    dataset_id: int,
+    status: Literal["not_started", "in_progress", "reviewable", "finished"],
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """List all images with masks of certain status for a given image ID.
+
+    Args:
+        dataset_id: Dataset ID to retrieve images from.
+        status: The status of the masks to filter by.
+        db: Database session dependency.
+        user (User): The current authenticated user.
+
+    Returns:
+        A list of image IDs.
+    """
+    match status:
+        case "not_started":
+            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(~Masks.contours.any()).all()
+        case "in_progress":
+            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(Masks.contours.any(), ~Masks.fully_annotated).all()
+        case "reviewable":
+            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(
+                            Masks.fully_annotated, Masks.contours.any(~Contours.reviewed_by.any())).all()
+        case "finished":
+            images = db.query(Images.id).filter_by(dataset_id=dataset_id).filter(
+                Masks.fully_annotated, ~Masks.contours.any(~Contours.reviewed_by.any())
+            )
+        case _:
+            raise HTTPException(status_code=403, detail="Unknown status.")
+    return {
+        "success": True,
+        "message": "Retrieved images with status successfully.",
+        "image_ids": [img.id for img in images]
+    }
+
+
+@router.get("/{dataset_id}/images/b64")
+async def get_base64_images_of_dataset(
+    dataset_id: int,
+    limit: int = None,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """Get all images of a dataset.
+
+    Args:
+        dataset_id: ID of the dataset to retrieve images from.
+        low_res: Whether to return low resolution images (thumbnails).
+        limit: Optional limit on the number of images to return. If not provided, all images will be returned.
+        db: Database session dependency.
+        user (User): The current authenticated user.
+
+    Returns:
+        A dict mapping from image ID to base64 encoded image.
+    """
+    try:
+        response = {}
+        images_query = db.query(Images).filter_by(dataset_id=dataset_id).limit(limit).all()
+        images = [Image.from_db(img) for img in images_query]
+        for img in images:
+            response[id] = img.load_image(as_base64=True)
+        return {
+            "success": True,
+            "message": f"Successfully retrieved {len(images)} images from dataset {dataset_id}.",
+            "images": response
+        }
+    except Exception as e:
+        logger.error(f"Get all images of dataset error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{dataset_id}/thumbnails/b64")
+async def get_base64_thumbnails_of_dataset(
+    dataset_id: int,
+    limit: int = None,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """Get all images of a dataset.
+
+    Args:
+        dataset_id: ID of the dataset to retrieve images from.
+        low_res: Whether to return low resolution images (thumbnails).
+        limit: Optional limit on the number of images to return. If not provided, all images will be returned.
+        db: Database session dependency.
+        user (User): The current authenticated user.
+
+    Returns:
+        A dict mapping from image ID to base64 encoded image.
+    """
+    try:
+        response = {}
+        images_query = db.query(Images).filter_by(dataset_id=dataset_id).limit(limit).all()
+        images = [Image.from_db(img) for img in images_query]
+        for img in images:
+            response[id] = img.load_image(as_base64=True)
+        return {
+            "success": True,
+            "message": f"Successfully retrieved {len(images)} images from dataset {dataset_id}.",
+            "images": response
+        }
+    except Exception as e:
+        logger.error(f"Get all images of dataset error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_labels/{dataset_id}")
+async def get_labels(
+    dataset_id: int,
+    db: Session = Depends(get_session),
+    user: User = Depends(get_current_user)
+):
+    """Retrieve all labels for a given dataset.
+
+    Args:
+        dataset_id (int): The ID of the dataset.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and the labels hierarchy.
+    """
+    labels = db.query(Labels).filter_by(dataset_id=dataset_id)
+    labels_hierarchy = LabelHierarchy.from_query(labels)
+    return {
+        "success": True,
+        "message": f"Retrieved {len(labels_hierarchy)} labels for dataset {dataset_id}.",
+        "labels": labels_hierarchy.model_dump()
+    }

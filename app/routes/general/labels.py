@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, HTTPException, Depends
-from schemas.labels import LabelHierarchy
+from schemas.labels import Label
 from schemas.user import User
 from sqlalchemy.orm import Session
 
@@ -13,32 +13,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/labels", tags=["labels"])
 
 
-@router.get("/get_labels/{dataset_id}")
-async def get_labels(
-    dataset_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
-):
-    """Retrieve all labels for a given dataset.
-
-    Args:
-        dataset_id (int): The ID of the dataset.
-        db (Session): The database session.
-        user (User): The current authenticated user.
-
-    Returns:
-        dict: A dictionary containing the success status and the labels hierarchy.
-    """
-    labels = db.query(Labels).filter_by(dataset_id=dataset_id)
-    labels_hierarchy = LabelHierarchy.from_query(labels)
-    return {
-        "success": True,
-        "message": f"Retrieved {len(labels_hierarchy)} labels for dataset {dataset_id}.",
-        "labels": labels_hierarchy.model_dump()
-    }
-
-
-@router.post("/create_label")
+@router.post("/create")
 async def create_label(label_name: str,
                        dataset_id: int,
                        parent_label_id: int = None,
@@ -58,36 +33,112 @@ async def create_label(label_name: str,
     Returns:
         dict: A dictionary containing the success status, message, and class ID if created successfully.
     """
-    try:
-        # Check if class already exists
-        existing_class = db.query(Labels).filter_by(dataset_id=dataset_id, name=label_name).first()
-        if existing_class:
-            raise HTTPException(status_code=400, detail="Label already exists.")
-        if parent_label_id:
-            # Check if parent class exists
-            parent_label = db.query(Labels).filter_by(id=parent_label_id).first()
-            if not parent_label:
-                raise HTTPException(status_code=404, detail="Parent label not found.")
-        if not label_value:
-            label_value = db.query(Labels).filter_by(dataset_id=dataset_id).count() + 1  # Default value
-        # Create a new class
-        new_label = Labels(dataset_id=dataset_id,
-                           name=label_name,
-                           parent_id=parent_label_id,
-                           value=label_value)
-        db.add(new_label)
-        db.commit()
-        return {
-            "success": True,
-            "message": "Label created successfully.",
-            "class_id": new_label.id
-        }
-    except Exception as e:
-        logger.error(f"Error creating class: {e}")
-        raise HTTPException(status_code=500, detail="Error creating class.")
+    # Check if class already exists
+    existing_class = db.query(Labels).filter_by(dataset_id=dataset_id, name=label_name).first()
+    if existing_class:
+        raise HTTPException(status_code=400, detail="Label already exists.")
+    if parent_label_id:
+        # Check if parent class exists
+        parent_label = db.query(Labels).filter_by(id=parent_label_id).first()
+        if not parent_label:
+            raise HTTPException(status_code=404, detail="Parent label not found.")
+    if not label_value:
+        label_value = db.query(Labels).filter_by(dataset_id=dataset_id).count() + 1  # Default value
+    # Create a new class
+    new_label = Labels(dataset_id=dataset_id,
+                       name=label_name,
+                       parent_id=parent_label_id,
+                       value=label_value)
+    db.add(new_label)
+    db.commit()
+    return {
+        "success": True,
+        "message": "Label created successfully.",
+        "class_id": new_label.id
+    }
 
 
-@router.delete("/delete_label/label={label_id}")
+@router.get("/{label_id}")
+async def get_label(label_id: int,
+                    user: User = Depends(get_current_user),
+                    db: Session = Depends(get_session)):
+    """Create a new label for a dataset.
+
+    Args:
+        label_id (int): The ID of the label to get.
+        user (User): The current authenticated user. Defaults to Depends(get_current_user).
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and class ID if created successfully.
+    """
+    # Check if class already exists
+    existing_class = db.query(Labels).filter_by(id=label_id).first()
+    return {
+        "success": True,
+        "message": "Label retrieved successfully.",
+        "class_id": Label.from_db(existing_class),
+    }
+
+
+@router.patch("/{label_id}")
+async def modify_label(label_id: int,
+                       updates: dict = None,
+                       user: User = Depends(get_current_user),
+                       db: Session = Depends(get_session)):
+    """Create a new label for a dataset.
+
+    Args:
+        label_id (int): The ID of the label to get.
+        user (User): The current authenticated user. Defaults to Depends(get_current_user).
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and class ID if created successfully.
+    """
+    # Check if class already exists
+    existing_class = db.query(Labels).filter_by(id=label_id).first()
+    for k, v in updates.items():
+        setattr(existing_class, k, v)
+    db.commit()
+    return {
+        "success": True,
+        "message": "Label updated successfully.",
+        "class_id": Label.from_db(existing_class),
+    }
+
+
+@router.put("/{label_id}")
+async def replace_label(label_id: int,
+                        new_label: Label,
+                        user: User = Depends(get_current_user),
+                        db: Session = Depends(get_session)):
+    """Create a new label for a dataset.
+
+    Args:
+        label_id (int): The ID of the label to get.
+        user (User): The current authenticated user. Defaults to Depends(get_current_user).
+        db (Session): The database session.
+
+    Returns:
+        dict: A dictionary containing the success status, message, and class ID if created successfully.
+    """
+    # Check if class already exists
+    existing_class = db.query(Labels).filter_by(id=label_id).first()
+    parent_id = existing_class.parent_id
+    db.delete(existing_class)
+    new_label.id = label_id
+    new_label.parent = parent_id
+    new_label_db = Labels.from_schema(new_label)
+    db.add(new_label_db)
+    db.commit()
+    return {
+        "success": True,
+        "message": "Label replaced successfully.",
+    }
+
+
+@router.delete("/{label_id}")
 async def delete_label(label_id: int,
                        user: User = Depends(get_current_user),
                        db: Session = Depends(get_session)):
@@ -102,23 +153,19 @@ async def delete_label(label_id: int,
     Returns:
         dict: A dictionary containing the success status and message.
     """
-    try:
-        # Check if class exists
-        existing_label = db.query(Labels).filter_by(id=label_id).first()
-        if not existing_label:
-            # If class does not exist, return success with message
-            # Remark: Not sure if this is the desired behavior, but it is consistent.
-            return {
-                "success": True,
-                "message": "Class never existed."
-            }
-        # Delete the class
-        db.delete(existing_label)
-        db.commit()
+    # Check if class exists
+    existing_label = db.query(Labels).filter_by(id=label_id).first()
+    if not existing_label:
+        # If class does not exist, return success with message
+        # Remark: Not sure if this is the desired behavior, but it is consistent.
         return {
             "success": True,
-            "message": "Class deleted successfully."
+            "message": "Class never existed."
         }
-    except Exception as e:
-        logger.error(f"Error deleting class: {e}")
-        raise HTTPException(status_code=500, detail="Error deleting class.")
+    # Delete the class
+    db.delete(existing_label)
+    db.commit()
+    return {
+        "success": True,
+        "message": "Class deleted successfully."
+    }

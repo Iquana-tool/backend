@@ -18,9 +18,10 @@ from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
-from app.routes.general.contours import add_contour, get_contours_of_mask, mark_as_reviewed, delete_contour, \
+from app.routes.general.contours import add_contour_review, delete_contour, \
     modify_contour, replace_contour
-from app.routes.general.masks import create_mask, mark_as_fully_annotated
+from app.routes.general.masks import mark_as_fully_annotated, get_contours_of_mask, add_contour
+from app.routes.general.images import create_new_mask_for_image
 from app.services.ai_services.base_service import BaseService
 from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
@@ -64,7 +65,7 @@ class AnnotationSessionState:
         """ Validate the model and fill fields that were not initialized yet."""
         with get_context_session() as session:
             if session.query(Masks).filter_by(image_id=self.image_id).first() is None:
-                await create_mask(self.image_id)
+                await create_new_mask_for_image(self.image_id)
             return session.query(Masks.id).filter_by(image_id=self.image_id).first().id
 
     async def upload_image(self):
@@ -387,7 +388,7 @@ async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage
     """
     contour_id = client_msg.data.get("contour_id")
     with get_context_session() as session:
-        response = await mark_as_reviewed(contour_id, db=session)
+        response = await add_contour_review(contour_id, db=session)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
