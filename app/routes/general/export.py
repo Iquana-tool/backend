@@ -9,8 +9,11 @@ from logging import getLogger
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse
 from fastapi import status
+from fastapi.responses import StreamingResponse, FileResponse
+from schemas.contour_hierarchy import ContourHierarchy
+from schemas.labels import LabelHierarchy
+from schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
@@ -20,12 +23,9 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.routes.general.contours import get_contours_of_mask
-from app.schemas.contour_hierarchy import ContourHierarchy
-from app.schemas.labels import LabelHierarchy
+from app.services.auth import get_current_user
 from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path
-from app.schemas.user import User
-from app.services.auth import get_current_user
 
 router = APIRouter(prefix="/export", tags=["export"])
 logger = getLogger(__name__)
@@ -94,7 +94,7 @@ async def get_dataset_quantification(
     if exclude_unreviewed_objects:
         query = query.filter(Contours.reviewed_by.any())
     if label_ids:
-        query = query.filter(Contours.label.in_(label_ids))
+        query = query.filter(Contours.label_id.in_(label_ids))
 
     dataset_name = db.query(Datasets).filter_by(id=dataset_id).first().name
 
@@ -160,7 +160,9 @@ async def get_dataset_object_quantifications(dataset_id: int,
         if exclude_unreviewed_objects:
             # Excludes contours that have no reviewer
             contours = contours.filter(Contours.reviewed_by.any())
-        contour_hierarchy = ContourHierarchy.from_query(contours)
+        contour_hierarchy = ContourHierarchy.from_query(contours.all(),
+                                                        height=image.height,
+                                                        width=image.width)
         label_quants = contour_hierarchy.get_all_quantifications()
         for label, quants in label_quants.items(): 
             metrics = quants["metrics"]

@@ -4,6 +4,8 @@ from logging import getLogger
 import httpx
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.params import Depends
+from schemas.semantic_segmentation.training import TrainingRequest
+from schemas.user import User
 from sqlalchemy.orm import Session
 from starlette.responses import JSONResponse, StreamingResponse
 
@@ -11,8 +13,6 @@ from app.database import get_session
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.schemas.semantic_segmentation.training import TrainingRequest
-from app.schemas.user import User
 from app.services.ai_services.semantic_segmentation import segment_image_with_semantic_model
 from app.services.auth import get_current_user
 from app.services.util import get_mask_path_from_image_path

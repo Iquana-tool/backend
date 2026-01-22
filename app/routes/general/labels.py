@@ -1,14 +1,14 @@
 import logging
+
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import Field
+from schemas.labels import LabelHierarchy
+from schemas.user import User
 from sqlalchemy.orm import Session
+
 from app.database import get_session
 from app.database.labels import Labels
-from app.database.contours import Contours
-from app.schemas.labels import LabelHierarchy
-from app.schemas.user import User
 from app.services.auth import get_current_user
- 
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/labels", tags=["labels"])
 

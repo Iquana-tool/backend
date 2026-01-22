@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "bcrypt>=5.0.0",
+    "coral-schemas",
     "fastapi[standard]>=0.68.0",
     "httpx>=0.24.0",
     "numpy>=1.21.0",
@@ -21,3 +22,6 @@ dependencies = [
     "sqlalchemy~=2.0.38",
     "uvicorn>=0.15.0",
 ]
+
+[tool.uv.sources]
+coral-schemas = { git = "https://github.com/yapat-app/coral-schemas.git" }

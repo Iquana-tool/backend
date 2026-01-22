@@ -50,7 +50,7 @@ class ContourHierarchy(BaseModel):
             contour = queue.popleft()
             contour_obj = Contour.from_db(contour, image_width, image_height)
             id_to_contour[contour.id] = contour_obj
-            label_id_to_contour[contour.label].append(contour_obj)
+            label_id_to_contour[contour.label_id].append(contour_obj)
             if contour.parent_id is not None:
                 parent = id_to_contour[contour.parent_id]
                 parent.add_child(contour_obj)

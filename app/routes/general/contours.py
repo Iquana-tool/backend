@@ -1,15 +1,17 @@
 from logging import getLogger
+
 from fastapi import APIRouter
 from fastapi import Depends, HTTPException
-from sqlalchemy.orm import Session, joinedload
+from schemas.contour_hierarchy import ContourHierarchy
+from schemas.contours import Contour
+from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.database.contours import Contours
+from app.database.contours import Contours, save_contour_tree
+from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
-from app.schemas.contours import Contour
-from app.schemas.contour_hierarchy import ContourHierarchy
 from app.schemas.user import User
 from app.services.auth import get_current_user
 
@@ -18,7 +20,8 @@ logger = getLogger(__name__)
 
 
 @router.get("/get_contours_of_mask/{mask_id}&flattened={flattened}")
-async def get_contours_of_mask(mask_id: int, flattened: bool = True,
+async def get_contours_of_mask(mask_id: int,
+                               flattened: bool = True,
                                db: Session = Depends(get_session),
                                user: User = Depends(get_current_user)):
     """ Export quantification data for the given mask_id and labels.
@@ -35,8 +38,13 @@ async def get_contours_of_mask(mask_id: int, flattened: bool = True,
         dict: A dictionary containing the success status and message if error, or a hierarchical JSON structure of
         contours for the given mask_id.
     """
-    contours_query = db.query(Contours).filter_by(mask_id=mask_id)
-    hierarchy = ContourHierarchy.from_query(contours_query)
+    contours_query = db.query(Contours).filter_by(mask_id=mask_id).all()
+    id, height, width = (db.query(Masks.id, Images.height, Images.width)
+                     .join(Images, Masks.image_id == Images.id)
+                     .filter(Masks.id == mask_id).first())
+    hierarchy = ContourHierarchy.from_query(contours_query,
+                                            height=height,
+                                            width=width)
     return {
         "success": True,
         "message": f"Contours {'hierarchy' if not flattened else ''} retrieved.",
@@ -105,10 +113,9 @@ async def replace_contour(contour_id,
                           db: Session = Depends(get_session)):
     """ Replace a contour with a new one. """
     new_contour.id = contour_id
-    mask_id = db.query(Contours).filter_by(id=contour_id).first().mask_id
-    new_contour_db = new_contour.to_db_entry(mask_id)
+    contour = db.query(Contours).filter_by(id=contour_id).first()
     db.query(Contours).filter_by(id=contour_id).delete()
-    db.add(new_contour_db)
+    save_contour_tree(db, new_contour, contour.mask_id, contour.parent_id)
     db.commit()
     return {
         "success": True,
@@ -143,7 +150,7 @@ async def change_contour_label(contour_id: int, new_label_id: int,
         reviewed_by_usernames.append(user.username)
     
     # Update both label and reviewed_by
-    return await modify_contour(contour_id, label=new_label_id, reviewed_by=reviewed_by_usernames, db=db)
+    return await modify_contour(contour_id, label_id=new_label_id, reviewed_by=reviewed_by_usernames, db=db)
 
 
 @router.get("/mark_as_reviewed/{contour_id}")
@@ -170,6 +177,7 @@ async def mark_as_reviewed(contour_id: int,
 @router.post("/add_contour")
 async def add_contour(mask_id: int,
                       contour_to_add: Contour,
+                      check_parent: bool = False,
                       user: User = Depends(get_current_user),
                       db: Session = Depends(get_session)):
     """
@@ -189,7 +197,7 @@ async def add_contour(mask_id: int,
         # Check parents
         expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label_id).first())
         should_have_parent = expected_parent_label is not None
-        if contour_to_add.label_id is not None:
+        if contour_to_add.label_id is not None and check_parent:
             if should_have_parent and parent_contour_id is None:
                 # Contour should have a parent but none was given.
                 logger.error(f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).")
@@ -200,7 +208,7 @@ async def add_contour(mask_id: int,
                 }
             elif should_have_parent and parent_contour_id is not None:
                 # Contour should have a parent and one is given one
-                parent_contour_label = db.query(Contours.label).filter_by(id=parent_contour_id).first()
+                parent_contour_label = db.query(Contours.label_id).filter_by(id=parent_contour_id).first()
                 if expected_parent_label != parent_contour_label:
                     logger.error(f"Error adding contour: Parent contour does not match the expected parent label."
                                  f"\nGiven label of parent contour: ({parent_contour_label})"
@@ -219,14 +227,12 @@ async def add_contour(mask_id: int,
                 }
 
         # Add contour to the database
-        entry = contour_to_add.to_db_entry(mask_id)
-        db.add(entry)
+        entry = save_contour_tree(db, contour_to_add, mask_id, parent_contour_id)
         db.commit()
         contour_to_add.id = entry.id
 
+        # SVG path computation for the frontend
         # Get image dimensions and compute path
-        from app.database.masks import Masks
-        from app.database.images import Images
         mask = db.query(Masks).filter_by(id=mask_id).first()
         if mask:
             image = db.query(Images).filter_by(id=mask.image_id).first()

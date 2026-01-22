@@ -8,8 +8,10 @@ from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from schemas.image import Image
+from schemas.user import User
 from sqlalchemy.orm import Session
- 
+
 from app.database import get_session
 from app.database.contours import Contours
 from app.database.datasets import Datasets
@@ -17,13 +19,11 @@ from app.database.images import Images
 from app.database.masks import Masks
 from app.database.scans import Scans
 from app.routes.general.masks import create_mask, get_mask_annotation_status
-from app.schemas.image import Image
+from app.services.auth import get_current_user
 from app.services.database_access import parse_log_file, get_height_width_of_image
 from app.services.database_access import save_image_to_disk_and_db
 from app.services.util import extract_numbers
-from app.schemas.user import User
-from app.services.auth import get_current_user
- 
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
 

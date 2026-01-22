@@ -1,8 +1,9 @@
 import json
 from abc import ABC, abstractmethod
-from enum import Enum
-import httpx
 from logging import getLogger
+
+import httpx
+
 from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images

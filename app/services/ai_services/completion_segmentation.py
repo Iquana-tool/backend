@@ -2,7 +2,8 @@ from logging import getLogger
 
 import httpx
 from fastapi.encoders import jsonable_encoder
-from app.schemas.completion_segmentation.inference import CompletionServiceRequest
+from schemas.completion_segmentation.inference import CompletionServiceRequest
+
 from app.services.ai_services.base_service import BaseService
 from paths import COMPLETION_SEGMENTATION_BACKEND_URL as BASE_URL
 

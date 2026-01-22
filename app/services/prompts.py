@@ -1,8 +1,9 @@
 # This file contains classes for prompts
+from logging import getLogger
+
 import cv2
 import numpy as np
-from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationHTTPRequest
-from logging import getLogger
+from schemas.prompted_segmentation.segmentations import PromptedSegmentationHTTPRequest
 
 logger = getLogger(__name__)
 

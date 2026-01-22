@@ -129,9 +129,9 @@ class Contour(BaseModel):
         contour_obj = cls(
             id=contour.id,
             parent_id=contour.parent_id,
-            label_id=contour.label,
-            x=json.loads(contour.x),
-            y=json.loads(contour.y),
+            label_id=contour.label_id,
+            x=json.loads(contour.x) if type(contour.x) is str else contour.x,
+            y=json.loads(contour.y) if type(contour.y) is str else contour.y,
             added_by=contour.added_by,
             reviewed_by=[user.username for user in contour.reviewed_by],
             quantification=QuantificationModel(

@@ -2,18 +2,17 @@ from datetime import timedelta, datetime, timezone
 
 import jwt
 from fastapi import Depends, HTTPException
+from fastapi import status
 from fastapi.security import OAuth2PasswordBearer
 from jwt import InvalidTokenError
 from pwdlib import PasswordHash
 from pydantic import BaseModel
-from fastapi import status
+from schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.users import Users
-from app.schemas.user import User
 from paths import SECRET_KEY
-
 
 password_hash = PasswordHash.recommended()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")

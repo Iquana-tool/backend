@@ -2,6 +2,9 @@ import logging
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Depends, File, UploadFile
+from schemas.contour_hierarchy import ContourHierarchy
+from schemas.labels import LabelHierarchy
+from schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
@@ -9,9 +12,6 @@ from app.database.contours import Contours
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.schemas.contour_hierarchy import ContourHierarchy
-from app.schemas.labels import LabelHierarchy
-from app.schemas.user import User
 from app.services.auth import get_current_user
 from app.services.database_access import save_array_to_disk
 
@@ -88,8 +88,8 @@ async def mark_as_fully_annotated(
         }
     image = db.query(Images).filter_by(id=existing_mask.image_id).first()
     # Generate the mask from contours
-    contours = db.query(Contours).filter_by(mask_id=mask_id)
-    contours_hierarchy = ContourHierarchy.from_query(contours)
+    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
+    contours_hierarchy = ContourHierarchy.from_query(contours, image.width, image.height)
     labels = db.query(Labels).filter_by(dataset_id=image.dataset_id)
     labels_hierarchy = LabelHierarchy.from_query(labels)
     semantic_mask = contours_hierarchy.to_semantic_mask(image.height, image.width, labels_hierarchy.id_to_value_map)
@@ -291,12 +291,17 @@ async def post_mask(
     """
     mask_array = np.frombuffer(mask.file.read(), dtype=np.uint8)
     image_id = session.query(Masks.image_id).filter_by(id=mask_id).first()
+    height, width = mask_array.shape
     dataset_id = session.query(Images.dataset_id).filter_by(id=image_id).first()
     labels = session.query(Labels).filter_by(dataset_id=dataset_id)
     label_hierarchy = LabelHierarchy.from_query(labels)
  
     # Create an initial hierarchy of already added contours
-    contour_hierarchy = ContourHierarchy.from_query(session.query(Contours).filter_by(mask_id=mask_id))
+    contour_hierarchy = ContourHierarchy.from_query(
+        session.query(Contours).filter_by(mask_id=mask_id).all(),
+        height=height,
+        width=width,
+    )
     # Add new contours from the mask
     contour_hierarchy = await contour_hierarchy.from_semantic_mask(
         mask_id,

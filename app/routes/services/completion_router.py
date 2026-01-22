@@ -1,13 +1,12 @@
 from fastapi import APIRouter, Depends
+from schemas.completion_segmentation.inference import CompletionMainAPIRequest, CompletionServiceRequest
+from schemas.contours import Contour
+from schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.schemas.completion_segmentation.inference import CompletionMainAPIRequest, CompletionServiceRequest
-from app.schemas.contours import Contour
-from app.schemas.user import User
 from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.auth import get_current_user
-
 
 completion_service = CompletionService()
 router = APIRouter(prefix="/completion_segmentation", tags=["Completion Segmentation"])

@@ -1,13 +1,19 @@
 from enum import StrEnum
 from logging import getLogger
 
-import numpy as np
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
+from pycocotools import mask as maskUtils
 from pydantic import field_validator
 from pydantic_core import ValidationError
+from schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
+from schemas.completion_segmentation.inference import CompletionServiceRequest
+from schemas.contours import Contour
+from schemas.labels import Label
+from schemas.prompted_segmentation.prompts import Prompts, BoxPrompt
+from schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
 from starlette.websockets import WebSocketDisconnect
-from pycocotools import mask as maskUtils
+
 from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.images import Images
@@ -15,12 +21,6 @@ from app.database.masks import Masks
 from app.routes.general.contours import add_contour, get_contours_of_mask, mark_as_reviewed, delete_contour, \
     modify_contour, replace_contour
 from app.routes.general.masks import create_mask, mark_as_fully_annotated
-from app.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
-from app.schemas.completion_segmentation.inference import CompletionServiceRequest
-from app.schemas.contours import Contour
-from app.schemas.labels import Label
-from app.schemas.prompted_segmentation.prompts import Prompts, BoxPrompt
-from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
 from app.services.ai_services.base_service import BaseService
 from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
@@ -481,7 +481,7 @@ async def handle_prompted_segmentation(
         override_completion_disable=False,
 ):
     """ Handle prompted_segmentation using a prompted model. """
-    model_identifier = client_msg.data.get("model_identifier")
+    model_identifier = client_msg.data.get("model_key")
     prompts_data = client_msg.data.get("prompts")
     prompts_model = Prompts.model_validate(prompts_data)
     using_refinement = state.refinement_contour_id is not None
@@ -632,7 +632,7 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
                 id="completion",
                 message=None,
                 data={
-                    "model_identifier": "sam2.1_tiny",
+                    "model_key": "sam2.1_tiny",
                     "prompts": Prompts(
                         point_prompts=[],
                         box_prompt=BoxPrompt(

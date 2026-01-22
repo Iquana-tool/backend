@@ -1,10 +1,10 @@
 from logging import getLogger
 
 from fastapi import APIRouter, Depends
-
-from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationHTTPRequest, \
+from schemas.prompted_segmentation.segmentations import PromptedSegmentationHTTPRequest, \
     SegmentationResponse
-from app.schemas.user import User
+from schemas.user import User
+
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.auth import get_current_user
 

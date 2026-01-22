@@ -1,12 +1,8 @@
-import json
 from logging import getLogger
 
 import httpx
+from schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
 
-from app.database import get_context_session
-from app.database.contours import Contours
-from app.database.images import Images
-from app.schemas.prompted_segmentation.segmentations import PromptedSegmentationWebsocketRequest
 from app.services.ai_services.base_service import BaseService
 from app.services.util import extract_mask_from_response
 from paths import PROMPTED_SEGMENTATION_BACKEND_URL as BASE_URL
