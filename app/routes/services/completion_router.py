@@ -9,7 +9,7 @@ from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.auth import get_current_user
 
 completion_service = CompletionService()
-router = APIRouter(prefix="/completion", tags=["Completion Segmentation"])
+router = APIRouter(prefix="/completion_segmentation", tags=["Completion Segmentation"])
 
 
 @router.get("/models")
