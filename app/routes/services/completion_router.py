@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from schemas.completion_segmentation.inference import CompletionMainAPIRequest, CompletionServiceRequest
+from schemas.service_requests import CompletionRequest
 from schemas.contours import Contour
 from schemas.user import User
 from sqlalchemy.orm import Session
@@ -9,7 +9,7 @@ from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.auth import get_current_user
 
 completion_service = CompletionService()
-router = APIRouter(prefix="/completion_segmentation", tags=["Completion Segmentation"])
+router = APIRouter(prefix="/completion", tags=["Completion Segmentation"])
 
 
 @router.get("/models")
@@ -32,22 +32,12 @@ async def upload_image(image_id: int, user: User = Depends(get_current_user)):
     }
 
 
-@router.post("/inference/image_id={image_id}")
+@router.post("/run")
 async def infer_completion(
-        request: CompletionMainAPIRequest,
+        request: CompletionRequest,
         user: User = Depends(get_current_user),
         db: Session = Depends(get_session),
 ):
-    # First upload the image
-    await completion_service.upload_image(user.username, request.image_id)
-
-    contours = [Contour.from_id(contour_id).model_dump(include=["x", "y"]) for contour_id in request.seed_contour_ids]
-
-    service_request = CompletionServiceRequest(
-        model_key=request.model_key,
-        user_id=user.username,
-        contours=contours,
-    )
     # Finally add the result to the db
-    response = await completion_service.infer_instances(service_request)
-    pass
+    return await completion_service.inference(request)
+

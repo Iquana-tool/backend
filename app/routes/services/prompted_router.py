@@ -1,10 +1,8 @@
 from logging import getLogger
 
 from fastapi import APIRouter, Depends
-from schemas.prompted_segmentation.segmentations import PromptedSegmentationHTTPRequest, \
-    SegmentationResponse
 from schemas.user import User
-
+from schemas.service_requests import PromptedSegmentationRequest
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.auth import get_current_user
 
@@ -41,8 +39,8 @@ async def get_available_models(user: User = Depends(get_current_user)):
     }
 
 
-@router.post('/segment_image', deprecated=True)
-async def segment_image(request: PromptedSegmentationHTTPRequest,
+@router.post('/run', deprecated=True)
+async def segment_image(request: PromptedSegmentationRequest,
                         user: User = Depends(get_current_user)):
     """Perform prompted_segmentation with optional prompts, using data validation.
     This function handles the prompted_segmentation of images based on the provided request.

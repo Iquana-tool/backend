@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from logging import getLogger
 
 import httpx
+from schemas.service_requests import BaseImageRequest
 
 from app.database import get_context_session
 from app.database.contours import Contours
@@ -42,16 +43,18 @@ class BaseService(ABC):
         :param image_id: The image id.
         :returns dict: A dictionary containing the success status and message.
         """
-        url = f"{self.backend_url}/annotation_session/open_image/user_id={user_id}"
+        url = f"{self.backend_url}/images/preload"
         with get_context_session() as session:
             image_path = session.query(Images.file_path).filter_by(id=image_id).first()
             image_path = image_path[0]
 
-        with open(image_path, "rb") as f:
-            file = {"image": f}
-            async with httpx.AsyncClient(timeout=120) as client:
-                response = await client.post(url, files=file)
-                response.raise_for_status()
+        request = BaseImageRequest(
+            image_url=image_path,
+            user_id=user_id,
+        )
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(url, json=request.model_dump())
+            response.raise_for_status()
         return response.json()
 
     async def select_model(self, user_id: str, model_identifier: str):
@@ -64,15 +67,15 @@ class BaseService(ABC):
         Returns:
             Response message indicating success.
         """
-        url = f"{self.backend_url}/annotation_session/load_model/model_key={model_identifier}&user_id={user_id}"
+        url = f"{self.backend_url}/annotation_session/models/{model_identifier}/preload"
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.get(url)
+            response = await client.get(url, params={"user_id": user_id})
             response.raise_for_status()
         return response.json()
 
     async def get_models(self):
         """ List all available models."""
-        url = f"{self.backend_url}/get_available_models"
+        url = f"{self.backend_url}/models/all/available"
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.get(url)
             response.raise_for_status()
@@ -101,9 +104,15 @@ class BaseService(ABC):
         Returns:
             dict: A dictionary containing the success status and message.
         """
-        url = f"{self.backend_url}/annotation_session/focus_crop/min_x={min_x}&min_y={min_y}&max_x={max_x}&max_y={max_y}&user_uid={user_id}"
+        url = f"{self.backend_url}/annotation_session/images/focus_crop"
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.get(url)
+            response = await client.get(url, params={
+                "min_x": min_x,
+                "min_y": min_y,
+                "max_x": max_x,
+                "max_y": max_y,
+                "user_id": user_id
+            })
             response.raise_for_status()
         return response.json()
 
@@ -114,9 +123,9 @@ class BaseService(ABC):
         Returns:
             dict: A dictionary containing the success status and message.
         """
-        url = f"{self.backend_url}/annotation_session/unfocus_crop/user_uid={user_id}"
+        url = f"{self.backend_url}/annotation_session/images/unfocus_crop"
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.get(url)
+            response = await client.get(url, params={"user_id": user_id})
             response.raise_for_status()
         return response.json()
 
@@ -127,9 +136,9 @@ class BaseService(ABC):
         Returns:
             dict: A dictionary containing the success status and message.
         """
-        url = f"{self.backend_url}/annotation_session/close_image/user_uid={user_id}"
+        url = f"{self.backend_url}/annotation_session/images/clear_cache"
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.get(url)
+            response = await client.get(url, params={"user_id": user_id})
             response.raise_for_status()
         return response.json()
 
