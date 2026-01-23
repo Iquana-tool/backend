@@ -5,7 +5,7 @@ from logging import getLogger
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
 from pycocotools import mask as maskUtils
-from pydantic import field_validator, BaseModel, Field, computed_field
+from pydantic import field_validator, BaseModel, Field, computed_field, PrivateAttr
 from pydantic_core import ValidationError
 from schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from schemas.completion_segmentation.inference import CompletionServiceRequest
@@ -43,17 +43,13 @@ class AnnotationSessionState(BaseModel):
     """ A class to track the state of the annotation session. """
     image_id: int = Field(..., title="Image ID")
     user_id: str = Field(..., title="User ID")
-    focussed_contour_id: int | None = Field(..., title="Contour ID")
-    refinement_contour_id: int | None = Field(..., title="Contour ID")
-    running_backends: dict[str, BaseService] = Field(
-        default={},
-        description="Tracks all running backends",
-        exclude=True,  # This should not be serialized
+    focussed_contour_id: int | None = Field(default=None, title="Contour ID")
+    refinement_contour_id: int | None = Field(default=None, title="Contour ID")
+    _running_backends: dict[str, BaseService] = PrivateAttr(
+        default_factory=dict  # This should not be serialized
     )
-    failed_backends: dict[str, BaseService] = Field(
-        default={},
-        description="Tracks all failed backends",
-        exclude=True,  # This should not be serialized
+    _failed_backends: dict[str, BaseService] = PrivateAttr(
+        default_factory=dict  # This should not be serialized
     )
 
     @cached_property
@@ -77,25 +73,25 @@ class AnnotationSessionState(BaseModel):
             return session.query(Masks.id).filter_by(image_id=self.image_id).first().id
 
     async def upload_image(self):
-        for key, service in self.running_backends.items():
+        for key, service in self._running_backends.items():
             response = await service.upload_image(self.user_id, self.image_id)
             if not response["success"]:
-                self.running_backends.pop(key, None)
-                self.failed_backends[key] = service
+                self._running_backends.pop(key, None)
+                self._failed_backends[key] = service
 
     async def check_and_register_backend(self, service: BaseService, key):
         if not await service.check_backend():
             logger.error(f"{key} is not reachable. Please make sure it is running.")
-            self.failed_backends[key] = service
+            self._failed_backends[key] = service
         else:
             logger.debug(f"{key} is reachable.")
-            self.running_backends[key] = service
+            self._running_backends[key] = service
 
     async def focus_contour(self, contour_id: int):
         self.focussed_contour_id = contour_id
         successful = []
         unsuccessful = []
-        for key, service in self.running_backends.items():
+        for key, service in self._running_backends.items():
             response = await service.focus_contour(self.user_id, self.focussed_contour_id)
             if not response["success"]:
                 logger.error(f"{key} ran into an error. Focussing might not have work.")
@@ -108,7 +104,7 @@ class AnnotationSessionState(BaseModel):
         self.focussed_contour_id = None
         successful = []
         unsuccessful = []
-        for key, service in self.running_backends.items():
+        for key, service in self._running_backends.items():
             response = await service.unfocus_crop(self.user_id)
             if not response["success"]:
                 logger.error(f"{key} ran into an error. Unfocussing might not have worked.")
@@ -168,13 +164,13 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
     return ServerMessage(
         id="test",
         type=ServerMessageType.SESSION_INITIALIZED,
-        success=len(state.failed_backends) == 0,
+        success=len(state._failed_backends) == 0,
         message=f"Annotation session initialized."
-                f"\nRunning backends: {list(state.running_backends.keys())}"
-                f"\nFailed initializations: {list(state.failed_backends.keys())}",
+                f"\nRunning backends: {list(state._running_backends.keys())}"
+                f"\nFailed initializations: {list(state._failed_backends.keys())}",
         data={
-            "running": list(state.running_backends.keys()),
-            "failed": list(state.failed_backends.keys()),
+            "running": list(state._running_backends.keys()),
+            "failed": list(state._failed_backends.keys()),
             "objects": objects,
         }
     )
@@ -473,8 +469,8 @@ async def handle_semantic_segmentation(websocket: WebSocket, client_msg: ClientM
 async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of a prompted model. """
     selected_model = client_msg.data.get("selected_model")
-    response = await state.running_backends[Backends.PROMPTED_SEGMENTATION.value].select_model(state.user_id,
-                                                                                               selected_model)
+    response = await state._running_backends[Backends.PROMPTED_SEGMENTATION.value].select_model(state.user_id,
+                                                                                                selected_model)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
@@ -516,7 +512,7 @@ async def handle_prompted_segmentation(
         prompts=prompts_model,
     )
 
-    response_seg = await state.running_backends[Backends.PROMPTED_SEGMENTATION.value].inference(prompted_request)
+    response_seg = await state._running_backends[Backends.PROMPTED_SEGMENTATION.value].inference(prompted_request)
     contour_model = Contour.model_validate(response_seg["result"])
 
     # Compute SVG path before sending
@@ -534,10 +530,10 @@ async def handle_prompted_segmentation(
 async def handle_completion_select_model(websocket: WebSocket, client_msg: ClientMessage,
                                          state: AnnotationSessionState):
     """ Handle the selection of a completion model. """
-    if Backends.COMPLETION_SEGMENTATION.value in state.running_backends:
+    if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
         model_identifier = client_msg.data.get("model_identifier")
-        await state.running_backends[Backends.COMPLETION_SEGMENTATION.value].select_model(state.user_id,
-                                                                                          model_identifier)
+        await state._running_backends[Backends.COMPLETION_SEGMENTATION.value].select_model(state.user_id,
+                                                                                           model_identifier)
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.SUCCESS,
@@ -557,8 +553,8 @@ async def handle_completion_select_model(websocket: WebSocket, client_msg: Clien
 
 async def handle_completion_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle enabling of completion model. Leads to a state change. """
-    if Backends.COMPLETION_SEGMENTATION.value in state.running_backends:
-        state.running_backends[Backends.COMPLETION_SEGMENTATION.value].enable()
+    if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
+        state._running_backends[Backends.COMPLETION_SEGMENTATION.value].enable()
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.SUCCESS,
@@ -578,8 +574,8 @@ async def handle_completion_enable(websocket: WebSocket, client_msg: ClientMessa
 
 async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle disabling of completion model. Leads to a state change. """
-    if Backends.COMPLETION_SEGMENTATION.value in state.running_backends:
-        state.running_backends[Backends.COMPLETION_SEGMENTATION.value].disable()
+    if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
+        state._running_backends[Backends.COMPLETION_SEGMENTATION.value].disable()
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.SUCCESS,
@@ -617,7 +613,7 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
         seeds=contours_rles,  # contours_rles,
         concept=concept,
     )
-    response = await state.running_backends[Backends.COMPLETION_SEGMENTATION.value].inference(service_request)
+    response = await state._running_backends[Backends.COMPLETION_SEGMENTATION.value].inference(service_request)
     await send_msg(websocket, ServerMessage(
         success=response["success"],
         id=client_msg.id,
