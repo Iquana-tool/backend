@@ -1,32 +1,23 @@
-import io
 import json
 import logging
 import os.path
-import shutil
-import zipfile
-from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from schemas.contour_hierarchy import ContourHierarchy
 from schemas.image import Image
 from schemas.labels import LabelHierarchy
-from schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.contours import Contours
-from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.database.scans import Scans
-from app.routes.general.masks import router, logger
+from app.routes.general.masks import logger
 from app.schemas.user import User
 from app.services.auth import get_current_user
-from app.services.database_access import parse_log_file, get_height_width_of_image
 from app.services.database_access import save_image_to_disk_and_db
-from app.services.util import extract_numbers
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
@@ -50,21 +41,16 @@ async def upload_image(
     Returns:
         A dictionary containing the success status, image ID, and a message.
     """
-    try:
-        image_id = await save_image_to_disk_and_db(file, dataset_id)
-        if image_id is None:
-            raise HTTPException(status_code=400, detail="Invalid file or upload failed")
-        # Also create a mask for the image
-        await create_new_mask_for_image(image_id, db)
-        return {
-            "success": True,
-            "image_id": image_id,
-            "message": f"Successfully uploaded image. Assigned id {image_id}"
-        }
-    except Exception as e:
-        logger.error(f"Upload error: {str(e)}")
-        raise e
-        raise HTTPException(status_code=500, detail=str(e))
+    image_id = await save_image_to_disk_and_db(file, dataset_id)
+    if image_id is None:
+        raise HTTPException(status_code=400, detail="Invalid file or upload failed")
+    # Also create a mask for the image
+    await create_new_mask_for_image(image_id, db)
+    return {
+        "success": True,
+        "image_id": image_id,
+        "message": f"Successfully uploaded image. Assigned id {image_id}"
+    }
 
 
 @router.post("/upload_multi")
@@ -130,21 +116,18 @@ async def delete_image(
     Returns:
         A dictionary indicating success and a message.
     """
-    try:
-        image = db.query(Images).filter_by(id=image_id).first()
-        if not image:
-            raise HTTPException(status_code=404, detail="Image not found")
-        if os.path.exists(image.file_path):
-            os.remove(image.file_path)  # Remove the original image file
-        if os.path.exists(image.thumbnail_file_path):
-            os.remove(image.thumbnail_file_path)  # Remove the thumbnail
-        db.delete(image)
-        db.commit()
-        return {"success": True,
-                "message": f"Deleted image {image_id}."}
-    except Exception as e:
-        logger.error(f"Delete image error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    image = db.query(Images).filter_by(id=image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if os.path.exists(image.file_path):
+        os.remove(image.file_path)  # Remove the original image file
+    if os.path.exists(image.thumbnail_file_path):
+        os.remove(image.thumbnail_file_path)  # Remove the thumbnail
+    db.delete(image)
+    db.commit()
+    return {"success": True,
+            "message": f"Deleted image {image_id}."}
+
 
 
 @router.get("/{image_id}/b64")
@@ -218,25 +201,21 @@ async def get_base64_images(
     Returns:
         A dictionary mapping from image ID to base64 encoded image.
     """
-    try:
-        # Parse image_ids from JSON string
-        image_ids = json.loads(image_ids)
-        if not isinstance(image_ids, list):
-            raise HTTPException(status_code=400, detail="image_ids must be a list")
+    # Parse image_ids from JSON string
+    image_ids = json.loads(image_ids)
+    if not isinstance(image_ids, list):
+        raise HTTPException(status_code=400, detail="image_ids must be a list")
 
-        response = {}
-        images_query = db.query(Images).filter(Images.id.in_(image_ids)).all()
-        images = [Image.from_db(img) for img in images_query]
-        for img in images:
-            response[img.id] = img.load_image(as_base64=True)
-        return {
-            "success": True,
-            "message": f"Successfully retrieved {len(image_ids)} images.",
-            "images": response
-        }
-    except Exception as e:
-        logger.error(f"Get images error: {str(e)}")
-        raise e
+    response = {}
+    images_query = db.query(Images).filter(Images.id.in_(image_ids)).all()
+    images = [Image.from_db(img) for img in images_query]
+    for img in images:
+        response[img.id] = img.load_image(as_base64=True)
+    return {
+        "success": True,
+        "message": f"Successfully retrieved {len(image_ids)} images.",
+        "images": response
+    }
 
 
 @router.get("/ids/thumbnails")
