@@ -43,7 +43,7 @@ class BaseService(ABC):
         :param image_id: The image id.
         :returns dict: A dictionary containing the success status and message.
         """
-        url = f"{self.backend_url}/images/preload"
+        url = f"{self.backend_url}/annotation_session/images/preload"
         with get_context_session() as session:
             image_path = session.query(Images.file_path).filter_by(id=image_id).first()
             image_path = image_path[0]
