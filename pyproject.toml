@@ -24,4 +24,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-coral-schemas = { git = "https://github.com/yapat-app/coral-schemas.git" }
+coral-schemas = { git = "ssh://git@github.com/yapat-app/coral-schemas.git" }
