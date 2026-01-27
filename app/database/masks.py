@@ -23,7 +23,7 @@ class Masks(database):
         if not self.fully_annotated:
             return "in_progress"
         for contour in self.contours:
-            if not contour.reviewed:
+            if not contour.reviewed_by.any():
                 return "reviewable"
         return "finished"
 

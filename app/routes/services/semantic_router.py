@@ -4,7 +4,7 @@ from logging import getLogger
 import httpx
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.params import Depends
-from schemas.semantic_segmentation.training import TrainingRequest
+from schemas.training import SemanticTrainingRequest
 from schemas.user import User
 from sqlalchemy.orm import Session
 from starlette.responses import JSONResponse, StreamingResponse
@@ -126,7 +126,7 @@ async def cancel_training_of_model(
 
 @router.post("/start_training")
 async def start_training(
-        request: TrainingRequest,
+        request: SemanticTrainingRequest,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
