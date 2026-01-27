@@ -44,6 +44,7 @@ def create_app():
         title="Coral Segmentation API",
         description="FastAPI backend for interactive coral prompted_segmentation",
         version="0.1.0",
+        root_path="/demos/coral/api",  # Handle proxy prefix
     )
 
     # Configure CORS
