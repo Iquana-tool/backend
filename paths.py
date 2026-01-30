@@ -2,16 +2,16 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-SEMANTIC_SEGMENTATION_BACKEND_URL = os.environ.get("AUTOMATIC_SEGMENTATION_BACKEND_URL", "http://coral-automatic-segmentation-cpu:7000")
-PROMPTED_SEGMENTATION_BACKEND_URL = os.environ.get("PROMPTED_SEGMENTATION_BACKEND_URL", "http://coral-prompted-segmentation-cpu:7001")
-COMPLETION_SEGMENTATION_BACKEND_URL = os.environ.get("COMPLETION_SEGMENTATION_BACKEND_URL", "http://coral-completion-segmentation-cpu:7002")
+SEMANTIC_SEGMENTATION_BACKEND_URL = os.environ.get("SEMANTIC_SEGMENTATION_BACKEND_URL")
+PROMPTED_SEGMENTATION_BACKEND_URL = os.environ.get("PROMPTED_SEGMENTATION_BACKEND_URL")
+COMPLETION_SEGMENTATION_BACKEND_URL = os.environ.get("COMPLETION_SEGMENTATION_BACKEND_URL")
 SECRET_KEY = os.environ.get("SECRET_KEY", "supersecretkey")
 
 class Paths:
     """ This class contains the paths to the project directories. It can be used to access the paths from
     any file in the project.
     Attributes:
-        base_dir (str): The base directory of the project.
+        base_dir (str): The general directory of the project.
         data_dir (str): The data directory of the project.
         meso_dir (str): The directory of the meso-scale images of corals.
         micro_dir (str): The directory of the micro-scale CT Scans of corals.

@@ -1,14 +1,15 @@
+from logging import getLogger
+
 from fastapi import APIRouter, Depends, HTTPException
+from iquana_toolbox.schemas.scale import ScaleInput
+from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
-from app.schemas.scale import ScaleInput
+
 from app.database import get_session
 from app.database.images import Images
-from app.services.scale_computation import compute_pixel_scale_from_points
-from logging import getLogger
-from app.schemas.user import User
 from app.services.auth import get_current_user
- 
- 
+from app.services.scale_computation import compute_pixel_scale_from_points
+
 router = APIRouter("/scale", tags=["scale"])
 logger = getLogger(__name__)
 

@@ -3,10 +3,10 @@ from logging import getLogger
 import cv2
 import numpy as np
 from fastapi import HTTPException, status
+from iquana_toolbox.schemas.contours import Contour
 
 from app.database.contours import Contours
 from app.database.images import Images
-from app.schemas.contours import Contour
 
 logger = getLogger(__name__)
 
@@ -15,20 +15,23 @@ def get_contours_from_binary_mask(mask: np.ndarray,
                                   only_return_biggest=False,
                                   limit=None,
                                   added_by: str = "system",
-                                  label_id: int = None,
-                                  temporary: bool = True) -> list[Contour]:
+                                  label_id: int = None,) -> list[Contour]:
     """ Get contour models from a binary mask
     :param mask: A binary mask in the form of a numpy array
     :param only_return_biggest: If true, only return the biggest contour.
     :param limit: Number of contours to return. If None, return all contours.
     :param added_by: Author of this contour, by default "system".
     :param label_id: Contour label id. If None, no label is given to the contour.
-    :param temporary: Sets the contour to temporary.
     :return: List of contour models
     """
     logger.debug("Computing contours for mask.")
-    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if mask.dtype == bool:
+        mask = mask.astype(np.uint8) * 255
+    elif mask.dtype != np.uint8:
+        mask = mask.astype(np.uint8)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:  # check if any contours found
+        logger.info(f"Found {len(contours)} contours.")
         if only_return_biggest:
             contours = [max(contours, key=cv2.contourArea)]
         else:
@@ -46,12 +49,12 @@ def get_contours_from_binary_mask(mask: np.ndarray,
             contour[..., 0] /= mask.shape[1]
             contour[..., 1] /= mask.shape[0]
             models.append(Contour.from_normalized_cv_contour(contour,
-                                                             label=label_id,
-                                                             added_by=added_by,
-                                                             temporary=temporary)
+                                                             label_id=label_id,
+                                                             added_by=added_by)
                           )
         return models
     else:
+        logger.info(f"No contours found for mask: {mask}")
         return np.array([])
 
 

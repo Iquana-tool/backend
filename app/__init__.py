@@ -5,29 +5,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 import paths
-from app.routes.prompted_segmentation.image_segmentation import router as prompted_segmentation_router
-
-from app.routes.semantic_segmentation import router as automatic_general_router
-from app.routes.semantic_segmentation.inference import router as automatic_inference_router
-from app.routes.semantic_segmentation.training import router as automatic_training_router
-from app.routes.semantic_segmentation.models import router as automatic_models_router
-from app.routes.semantic_segmentation.upload_data import router as automatic_upload_router
-from app.routes.auth import router as auth_router
-from app.routes.images import router as image_router
-from app.routes.masks import router as mask_router
-from app.routes.contours import router as contour_router
-from app.routes.labels import router as label_router
-from app.routes.export import router as export_router
-from app.routes.datasets import router as dataset_router
-from app.routes.image_annotation_session import router as image_annotation_session_router
+from app.routes.services import semantic_router
+from app.routes.services.prompted_router import router as prompted_segmentation_router
+from app.routes.services.completion_router import router as completion_segmentation_router
+from app.routes.services.semantic_router import router as semantic_segmentation_router
+from app.routes.general.auth import router as auth_router
+from app.routes.general.images import router as image_router
+from app.routes.general.masks import router as mask_router
+from app.routes.general.contours import router as contour_router
+from app.routes.general.labels import router as label_router
+from app.routes.general.datasets import router as dataset_router
+from app.routes.websockets.image_annotation_session import router as image_annotation_session_router
 from app.database import init_db
 from logging import getLogger
 
 
 logger = getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 def create_app():
+    logger.setLevel(logging.DEBUG)
     logger.debug("Creating FastAPI application")
     # Load environment variables
     load_dotenv()
@@ -47,6 +43,7 @@ def create_app():
         title="Coral Segmentation API",
         description="FastAPI backend for interactive coral prompted_segmentation",
         version="0.1.0",
+        root_path="/demos/coral/api",  # Handle proxy prefix
     )
 
     # Configure CORS
@@ -69,19 +66,18 @@ def create_app():
         return {"status": "ok", "message": "API is running"}
 
     # Include the routers
+    # General Routers
     app.include_router(auth_router)
     app.include_router(dataset_router)
     app.include_router(image_router)
-    app.include_router(prompted_segmentation_router)
-    app.include_router(automatic_general_router)
-    app.include_router(automatic_training_router)
-    app.include_router(automatic_inference_router)
-    app.include_router(automatic_models_router)
-    app.include_router(automatic_upload_router)
     app.include_router(image_annotation_session_router)
     app.include_router(mask_router)
     app.include_router(contour_router)
     app.include_router(label_router)
-    app.include_router(export_router)
+
+    # Services; Add your own service here!
+    app.include_router(prompted_segmentation_router)
+    app.include_router(completion_segmentation_router)
+    app.include_router(semantic_segmentation_router)
 
     return app

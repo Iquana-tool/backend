@@ -20,7 +20,7 @@ class Datasets(database):
     description = Column(String(255), nullable=True)
     dataset_type = Column(String(20), nullable=False)  # Type of dataset, e.g., "image", "scan", "DICOM"
     folder_path = Column(String(255), nullable=False)  # Path to the dataset folder on disk
-    created_by = Column(String, ForeignKey("users.username"), nullable=False)
+    created_by = Column(String, ForeignKey("users.username", ondelete="CASCADE"), nullable=False)
 
     owner = relationship("Users", back_populates="owned_datasets")
     shared_with = relationship("Users", secondary=dataset_user_association, back_populates="accessible_datasets")

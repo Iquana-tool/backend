@@ -1,10 +1,10 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import OAuth2PasswordRequestForm
+from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.users import Users
-from app.schemas.user import User
 from app.services.auth import create_access_token, get_current_user, verify_password, get_password_hash
 
 router = APIRouter(prefix="/auth", tags=["auth"])
