@@ -7,6 +7,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from schemas.contour_hierarchy import ContourHierarchy
 from schemas.image import Image
 from schemas.labels import LabelHierarchy
+from schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
@@ -15,7 +16,6 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.routes.general.masks import logger
-from app.schemas.user import User
 from app.services.auth import get_current_user
 from app.services.database_access import save_image_to_disk_and_db
 

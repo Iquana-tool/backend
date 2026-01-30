@@ -7,6 +7,7 @@ from fastapi.websockets import WebSocket
 from pydantic import field_validator, BaseModel, Field, PrivateAttr
 from pydantic_core import ValidationError
 from schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
+from schemas.contour_hierarchy import ContourHierarchy
 from schemas.contours import Contour
 from schemas.labels import Label
 from schemas.prompts import Prompts
@@ -23,7 +24,6 @@ from app.routes.general.contours import add_contour_review, delete_contour, \
     modify_contour, replace_contour
 from app.routes.general.images import create_new_mask_for_image
 from app.routes.general.masks import mark_as_fully_annotated, get_contours_of_mask, add_contour
-from app.schemas.contour_hierarchy import ContourHierarchy
 from app.services.ai_services.base_service import BaseService
 from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService

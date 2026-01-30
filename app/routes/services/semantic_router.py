@@ -22,7 +22,7 @@ from paths import SEMANTIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
-service = SemanticSegmentationService()
+service: SemanticSegmentationService = SemanticSegmentationService()
 
 
 @router.post("/run")
@@ -36,18 +36,17 @@ async def run_inference(
 
 @router.get("/models")
 async def get_models(
-        dataset_id: int,
         user: User = Depends(get_current_user)
 ):
     """Retrieve all available models for this dataset."""
     return await service.get_models()
 
 
-@router.delete("/models/{model_id}")
-async def delete_model(model_id: int,
+@router.delete("/models/{model_registry_key}")
+async def delete_model(model_registry_key: str,
                        user: User = Depends(get_current_user)):
     """ Delete a model based on its id. """
-    raise NotImplementedError("This is currently not implemented.")
+    return await service.delete_model(model_registry_key)
 
 
 @router.get("/training/{task_id}")
@@ -93,4 +92,4 @@ async def start_training(
     Returns:
         JSONResponse: The response from the Automatic Segmentation Service.
     """
-    raise NotImplementedError("This is currently not implemented.")
+    return await service.start_training(request)

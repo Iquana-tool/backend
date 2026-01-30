@@ -3,9 +3,7 @@ from logging import getLogger
 import httpx
 from schemas.service_requests import PromptedSegmentationRequest
 
-from app.schemas.contours import Contour
 from app.services.ai_services.base_service import BaseService
-from app.services.util import extract_mask_from_response
 from paths import PROMPTED_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)

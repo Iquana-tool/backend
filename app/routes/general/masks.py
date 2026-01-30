@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from schemas.contour_hierarchy import ContourHierarchy
 from schemas.contours import Contour
 from schemas.labels import LabelHierarchy
+from schemas.user import User
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse, FileResponse
 
@@ -16,7 +17,6 @@ from app.database.contours import Contours, save_contour_tree
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.schemas.user import User
 from app.services.auth import get_current_user
 from app.services.database_access import save_array_to_disk
 from app.services.util import get_mask_path_from_image_path
