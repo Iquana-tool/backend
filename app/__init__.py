@@ -1,4 +1,5 @@
 import logging
+import os
 from logging import getLogger
 
 from fastapi import FastAPI
@@ -30,7 +31,11 @@ def create_app():
     allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
     logger.debug(f"Allowed origins: {allowed_origins}")
 
-
+    # Create all necessary directories
+    os.makedirs(DATASETS_DIR, exist_ok=True)
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    os.makedirs(THUMBNAILS_DIR, exist_ok=True)
+    print(DATABASE_FILE)
 
     init_db()
 

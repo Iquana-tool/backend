@@ -7,7 +7,7 @@ from datetime import datetime
 # Set up logging
 os.makedirs(LOGS_DIR, exist_ok=True)
 logging.basicConfig(
-    filename=LOGS_DIR + f"/{datetime.now()}.txt",
+    filename=LOGS_DIR + f"/{datetime.now().date()}.txt",
     filemode='a',
     format='%(asctime)s,%(msecs)03d %(name)s %(levelname)s %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',

@@ -1,4 +1,4 @@
-from schemas.contours import Contour
+from iquana_toolbox.schemas.contours import Contour
 from sqlalchemy import Column, Integer, ForeignKey, Float, JSON, Boolean, String, Table, case
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
