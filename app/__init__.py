@@ -1,24 +1,22 @@
 import logging
-import os
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
-
-import paths
-from app.routes.services import semantic_router
-from app.routes.services.prompted_router import router as prompted_segmentation_router
-from app.routes.services.completion_router import router as completion_segmentation_router
-from app.routes.services.semantic_router import router as semantic_segmentation_router
-from app.routes.general.auth import router as auth_router
-from app.routes.general.images import router as image_router
-from app.routes.general.masks import router as mask_router
-from app.routes.general.contours import router as contour_router
-from app.routes.general.labels import router as label_router
-from app.routes.general.datasets import router as dataset_router
-from app.routes.websockets.image_annotation_session import router as image_annotation_session_router
-from app.database import init_db
 from logging import getLogger
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.database import init_db
+from app.routes.general.auth import router as auth_router
+from app.routes.general.contours import router as contour_router
+from app.routes.general.datasets import router as dataset_router
+from app.routes.general.images import router as image_router
+from app.routes.general.labels import router as label_router
+from app.routes.general.masks import router as mask_router
+from app.routes.services import semantic_router
+from app.routes.services.completion_router import router as completion_segmentation_router
+from app.routes.services.prompted_router import router as prompted_segmentation_router
+from app.routes.services.semantic_router import router as semantic_segmentation_router
+from app.routes.websockets.image_annotation_session import router as image_annotation_session_router
+from config import *
 
 logger = getLogger(__name__)
 
@@ -32,10 +30,7 @@ def create_app():
     allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
     logger.debug(f"Allowed origins: {allowed_origins}")
 
-    # Initialize the directories
-    for directory in [directory for directory in dir(paths.Paths) if "dir" in directory and not "__" in directory]:
-        os.makedirs(getattr(paths.Paths, directory), exist_ok=True)
-        logger.debug(f"Created directory {getattr(paths.Paths, directory)}")
+
 
     init_db()
 

@@ -4,7 +4,7 @@ import httpx
 from iquana_toolbox.schemas.service_requests import CompletionRequest
 
 from app.services.ai_services.base_service import BaseService
-from paths import COMPLETION_SEGMENTATION_BACKEND_URL as BASE_URL
+from config import COMPLETION_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)
 

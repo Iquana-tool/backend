@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.users import Users
-from paths import SECRET_KEY
+from config import SECRET_KEY
 
 password_hash = PasswordHash.recommended()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")

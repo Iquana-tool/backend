@@ -14,7 +14,7 @@ from app.database.masks import Masks
 from app.routes.general import contours, masks
 from app.services.ai_services.base_service import BaseService
 from app.services.util import extract_mask_from_response
-from paths import SEMANTIC_SEGMENTATION_BACKEND_URL as BASE_URL
+from config import SEMANTIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)
 

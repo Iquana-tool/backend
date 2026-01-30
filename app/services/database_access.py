@@ -12,7 +12,7 @@ from app.database import get_context_session
 from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.scans import Scans
-from paths import Paths
+from config import THUMBNAILS_DIR
 
 logger = getLogger(__name__)
 
@@ -151,7 +151,7 @@ def save_as_low_res_image_to_disk(image: np.ndarray, filename: str) -> str:
     new_height = int(height * scale_factor)
     new_width = int(width * scale_factor)
     image = cv.resize(image, (new_width, new_height), interpolation=cv.INTER_AREA)
-    low_res_path = join(Paths.thumbnails_dir, f"{filename}.png")
+    low_res_path = join(THUMBNAILS_DIR, f"{filename}.png")
     cv.imwrite(low_res_path, image)
     logger.info(f"Low resolution image saved to disk at {low_res_path}")
     return low_res_path

@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-from paths import Paths
+from config import DATABASE_FILE
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -13,7 +13,7 @@ logger.setLevel(logging.DEBUG)
 database = declarative_base()
 
 # Create an engine
-engine = create_engine(Paths.database,
+engine = create_engine(DATABASE_FILE,
                        pool_size=20,  # Default is usually 5
                        max_overflow=50,  # Increase from default 10
                        pool_pre_ping=True,  # Validate connections

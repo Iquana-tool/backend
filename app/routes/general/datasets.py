@@ -30,7 +30,7 @@ from app.routes.general.masks import get_mask_annotation_status
 from app.services.auth import get_current_user
 from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path
-from paths import Paths
+from config import DATASETS_DIR
 
 # Create a router for the export functionality
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -62,7 +62,7 @@ async def create_dataset(name: str,
                     "message": f"Dataset with name '{name.strip()}' already exists.",
                     "error": "Duplicate dataset name"}
         
-        dataset_path = os.path.join(Paths.datasets_dir, name.strip())
+        dataset_path = os.path.join(DATASETS_DIR, name.strip())
         # Use exist_ok=True to avoid FileExistsError if directory already exists
         os.makedirs(dataset_path, exist_ok=True)
         

@@ -1,12 +1,13 @@
 import logging
 import os
 from app import create_app
-from paths import Paths
+from config import LOGS_DIR
+from datetime import datetime
 
 # Set up logging
-os.makedirs(Paths.logs_dir, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
 logging.basicConfig(
-    filename=Paths.logs_dir + "/logs.txt",
+    filename=LOGS_DIR + f"/{datetime.now()}.txt",
     filemode='a',
     format='%(asctime)s,%(msecs)03d %(name)s %(levelname)s %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
