@@ -6,13 +6,13 @@ from fastapi import APIRouter
 from fastapi.websockets import WebSocket
 from pydantic import field_validator, BaseModel, Field, PrivateAttr
 from pydantic_core import ValidationError
-from schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
-from schemas.contour_hierarchy import ContourHierarchy
-from schemas.contours import Contour
-from schemas.labels import Label
-from schemas.prompts import Prompts
-from schemas.service_requests import CompletionRequest as CompletionServiceRequest
-from schemas.service_requests import PromptedSegmentationRequest, SemanticSegmentationRequest
+from iquana_toolbox.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
+from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
+from iquana_toolbox.schemas.contours import Contour
+from iquana_toolbox.schemas.labels import Label
+from iquana_toolbox.schemas.prompts import Prompts
+from iquana_toolbox.schemas.service_requests import CompletionRequest as CompletionServiceRequest
+from iquana_toolbox.schemas.service_requests import PromptedSegmentationRequest, SemanticSegmentationRequest
 from starlette.websockets import WebSocketDisconnect
 
 from app.database import get_context_session

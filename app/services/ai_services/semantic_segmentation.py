@@ -2,11 +2,11 @@ import os
 from logging import getLogger
 
 import httpx
-from schemas.contour_hierarchy import ContourHierarchy
-from schemas.labels import LabelHierarchy
-from schemas.service_requests import SemanticSegmentationRequest
-from schemas.training import SemanticTrainingRequest
-from schemas.user import System
+from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
+from iquana_toolbox.schemas.labels import LabelHierarchy
+from iquana_toolbox.schemas.service_requests import SemanticSegmentationRequest
+from iquana_toolbox.schemas.training import SemanticTrainingRequest
+from iquana_toolbox.schemas.user import System
 
 from app.database.images import Images
 from app.database.labels import Labels

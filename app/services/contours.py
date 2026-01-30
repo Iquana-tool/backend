@@ -3,7 +3,7 @@ from logging import getLogger
 import cv2
 import numpy as np
 from fastapi import HTTPException, status
-from schemas.contours import Contour
+from iquana_toolbox.schemas.contours import Contour
 
 from app.database.contours import Contours
 from app.database.images import Images

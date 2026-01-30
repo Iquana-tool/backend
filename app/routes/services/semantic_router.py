@@ -1,24 +1,16 @@
-import os
 from logging import getLogger
 
-import httpx
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter
 from fastapi.params import Depends
-from schemas.service_requests import SemanticSegmentationRequest
-from schemas.training import SemanticTrainingRequest
-from schemas.user import User
+from iquana_toolbox.schemas.service_requests import SemanticSegmentationRequest
+from iquana_toolbox.schemas.training import SemanticTrainingRequest
+from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse
 
 from app.database import get_session
-from app.database.images import Images
-from app.database.labels import Labels
-from app.database.masks import Masks
-from app.services.ai_services.semantic_segmentation import segment_image_with_semantic_model, \
-    SemanticSegmentationService
+from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
 from app.services.auth import get_current_user
-from app.services.util import get_mask_path_from_image_path
-from paths import SEMANTIC_SEGMENTATION_BACKEND_URL as BASE_URL
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])

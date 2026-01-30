@@ -2,13 +2,13 @@ from logging import getLogger
 
 from fastapi import APIRouter
 from fastapi import Depends, HTTPException
-from schemas.contours import Contour
+from iquana_toolbox.schemas.contours import Contour
+from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.contours import Contours, save_contour_tree
 from app.database.users import Users
-from schemas.user import User
 from app.services.auth import get_current_user
 
 router = APIRouter(prefix="/contours", tags=["contours"])

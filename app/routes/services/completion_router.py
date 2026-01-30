@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends
-from schemas.service_requests import CompletionRequest
-from schemas.contours import Contour
-from schemas.user import User
+from iquana_toolbox.schemas.service_requests import CompletionRequest
+from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session

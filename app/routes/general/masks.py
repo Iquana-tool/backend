@@ -5,10 +5,10 @@ from io import StringIO
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Depends
-from schemas.contour_hierarchy import ContourHierarchy
-from schemas.contours import Contour
-from schemas.labels import LabelHierarchy
-from schemas.user import User
+from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
+from iquana_toolbox.schemas.contours import Contour
+from iquana_toolbox.schemas.labels import LabelHierarchy
+from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse, FileResponse
 

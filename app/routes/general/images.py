@@ -4,10 +4,10 @@ import os.path
 
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from schemas.contour_hierarchy import ContourHierarchy
-from schemas.image import Image
-from schemas.labels import LabelHierarchy
-from schemas.user import User
+from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
+from iquana_toolbox.schemas.image import Image
+from iquana_toolbox.schemas.labels import LabelHierarchy
+from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session

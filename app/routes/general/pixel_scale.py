@@ -1,8 +1,8 @@
 from logging import getLogger
 
 from fastapi import APIRouter, Depends, HTTPException
-from schemas.scale import ScaleInput
-from schemas.user import User
+from iquana_toolbox.schemas.scale import ScaleInput
+from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
