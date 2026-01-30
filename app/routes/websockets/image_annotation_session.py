@@ -75,10 +75,13 @@ class AnnotationSessionState(BaseModel):
 
     async def upload_image(self):
         for key, service in self._running_backends.items():
-            response = await service.upload_image(self.user_id, self.image_id)
-            if not response["success"]:
-                self._running_backends.pop(key, None)
-                self._failed_backends[key] = service
+            try:
+                response = await service.upload_image(self.user_id, self.image_id)
+                if not response["success"]:
+                    self._running_backends.pop(key, None)
+                    self._failed_backends[key] = service
+            except Exception as e:
+                logger.error(f"Could not preload an image for service {key}. Maybe this service does not implement this endpoint.")
 
     async def check_and_register_backend(self, service: BaseService, key):
         if not await service.check_backend():
@@ -212,54 +215,64 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
     )
     try:
         # Call some functions on startup
-        print(f"Calling on startup for user {user_id} and image {image_id}")
+        logger.info(f"Calling on startup for user {user_id} and image {image_id}")
         response = await on_startup(state)
-        print(f"Startup response: {response.message}")
+        logger.info(f"Startup response: {response.message}")
         # Send a message about startup
         await send_msg(websocket, response)
         while True:
             client_msg = await receive_msg(websocket)
             # Here we handle different types of messages based on their "type" field
-            match client_msg.type:
-                case ClientMessageType.FOCUS_IMAGE:
-                    await handle_focus_image(websocket, client_msg, state)
-                case ClientMessageType.UNFOCUS_IMAGE:
-                    await handle_unfocus_image(websocket, client_msg, state)
-                case ClientMessageType.SELECT_REFINEMENT_OBJECT:
-                    await handle_select_refinement_object(websocket, client_msg, state)
-                case ClientMessageType.UNSELECT_REFINEMENT_OBJECT:
-                    await handle_unselect_refinement_object(websocket, client_msg, state)
-                case ClientMessageType.OBJECT_ADD_MANUAL:
-                    await handle_object_add(websocket, client_msg, state)
-                case ClientMessageType.OBJECT_FINALISE:
-                    await handle_object_finalise(websocket, client_msg, state)
-                case ClientMessageType.OBJECT_DELETE:
-                    await handle_object_delete(websocket, client_msg, state)
-                case ClientMessageType.OBJECT_MODIFY:
-                    await handle_object_modify(websocket, client_msg, state)
-                case ClientMessageType.SEMANTIC_SELECT_MODEL:
-                    await handle_semantic_select_model(websocket, client_msg, state)
-                case ClientMessageType.SEMANTIC_SEGMENTATION:
-                    await handle_semantic_segmentation(websocket, client_msg, state)
-                case ClientMessageType.PROMPTED_SELECT_MODEL:
-                    await handle_prompted_select_model(websocket, client_msg, state)
-                case ClientMessageType.PROMPTED_SEGMENTATION:
-                    await handle_prompted_segmentation(websocket, client_msg, state)
-                case ClientMessageType.COMPLETION_SELECT_MODEL:
-                    await handle_completion_select_model(websocket, client_msg, state)
-                case ClientMessageType.COMPLETION_ENABLE:
-                    await handle_completion_enable(websocket, client_msg, state)
-                case ClientMessageType.COMPLETION_DISABLE:
-                    await handle_completion_disable(websocket, client_msg, state)
-                case ClientMessageType.COMPLETION_INFERENCE:
-                    await handle_completion(websocket, client_msg, state)
-                case ClientMessageType.FINISH_ANNOTATION:
-                    await handle_finish_annotation(websocket, client_msg, state)
-                case ClientMessageType.OBJECT_CONFLICT_RESOLUTION:
-                    await handle_object_conflict_resolve(websocket, client_msg, state)
-                case _:
-                    # Ignore erroneous messages from the client
-                    pass
+            try:
+                match client_msg.type:
+                    case ClientMessageType.FOCUS_IMAGE:
+                        await handle_focus_image(websocket, client_msg, state)
+                    case ClientMessageType.UNFOCUS_IMAGE:
+                        await handle_unfocus_image(websocket, client_msg, state)
+                    case ClientMessageType.SELECT_REFINEMENT_OBJECT:
+                        await handle_select_refinement_object(websocket, client_msg, state)
+                    case ClientMessageType.UNSELECT_REFINEMENT_OBJECT:
+                        await handle_unselect_refinement_object(websocket, client_msg, state)
+                    case ClientMessageType.OBJECT_ADD_MANUAL:
+                        await handle_object_add(websocket, client_msg, state)
+                    case ClientMessageType.OBJECT_FINALISE:
+                        await handle_object_finalise(websocket, client_msg, state)
+                    case ClientMessageType.OBJECT_DELETE:
+                        await handle_object_delete(websocket, client_msg, state)
+                    case ClientMessageType.OBJECT_MODIFY:
+                        await handle_object_modify(websocket, client_msg, state)
+                    case ClientMessageType.SEMANTIC_SELECT_MODEL:
+                        await handle_semantic_select_model(websocket, client_msg, state)
+                    case ClientMessageType.SEMANTIC_SEGMENTATION:
+                        await handle_semantic_segmentation(websocket, client_msg, state)
+                    case ClientMessageType.PROMPTED_SELECT_MODEL:
+                        await handle_prompted_select_model(websocket, client_msg, state)
+                    case ClientMessageType.PROMPTED_SEGMENTATION:
+                        await handle_prompted_segmentation(websocket, client_msg, state)
+                    case ClientMessageType.COMPLETION_SELECT_MODEL:
+                        await handle_completion_select_model(websocket, client_msg, state)
+                    case ClientMessageType.COMPLETION_ENABLE:
+                        await handle_completion_enable(websocket, client_msg, state)
+                    case ClientMessageType.COMPLETION_DISABLE:
+                        await handle_completion_disable(websocket, client_msg, state)
+                    case ClientMessageType.COMPLETION_INFERENCE:
+                        await handle_completion(websocket, client_msg, state)
+                    case ClientMessageType.FINISH_ANNOTATION:
+                        await handle_finish_annotation(websocket, client_msg, state)
+                    case ClientMessageType.OBJECT_CONFLICT_RESOLUTION:
+                        await handle_object_conflict_resolve(websocket, client_msg, state)
+                    case _:
+                        # Ignore erroneous messages from the client
+                        pass
+            except Exception as e:
+                logger.error(f"Ran into an error handling message: {e} \n Message: {client_msg}")
+                await send_msg(websocket, ServerMessage(
+                    id=client_msg.id,
+                    type=ServerMessageType.ERROR,
+                    message=f"An error occurred: {str(e)}",
+                    success=False,
+                    data=None
+                ))
     except WebSocketDisconnect:
         # Client disconnected normally, just log and exit
         logger.info(f"WebSocket disconnected for user {user_id} and image {image_id}")
@@ -460,7 +473,7 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
 
 async def handle_semantic_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of an automatic model. """
-    selected_model = client_msg.data.get("model_registry_key")
+    selected_model = client_msg.data.get("selected_model")
     response = await state._running_backends[Backends.SEMANTIC_SEGMENTATION.value].select_model(state.user_id,
                                                                                                 selected_model)
     await send_msg(websocket, ServerMessage(

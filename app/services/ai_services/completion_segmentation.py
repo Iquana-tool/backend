@@ -23,7 +23,7 @@ class CompletionService(BaseService):
 
         # Send the request to the backend
         async with httpx.AsyncClient(timeout=120) as client:
-            url = f"{self.backend_url}/annotation_session/completion"
+            url = f"{self.backend_url}/annotation_session/run"
             response = await client.post(url, json=request.model_dump())
 
             response.raise_for_status()
