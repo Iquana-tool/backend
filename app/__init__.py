@@ -35,7 +35,6 @@ def create_app():
     os.makedirs(DATASETS_DIR, exist_ok=True)
     os.makedirs(LOGS_DIR, exist_ok=True)
     os.makedirs(THUMBNAILS_DIR, exist_ok=True)
-    print(DATABASE_FILE)
 
     init_db()
 
