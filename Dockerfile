@@ -19,25 +19,20 @@ RUN apt-get update --allow-unauthenticated && \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
+# Configure git to use token for private repo access (before copying code)
+ARG GITHUB_TOKEN
+RUN if [ -n "$GITHUB_TOKEN" ]; then \
+    cd /tmp && \
+    echo "https://${GITHUB_TOKEN}@github.com" > /root/.git-credentials && \
+    GIT_CONFIG_GLOBAL=/root/.gitconfig git config --global credential.helper store && \
+    GIT_CONFIG_GLOBAL=/root/.gitconfig git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"; \
+    fi
+
 # Copy the rest of the application code
 COPY . .
 
-# Setup SSH for private repo access
-RUN mkdir -p ~/.ssh && \
-    ssh-keyscan github.com >> ~/.ssh/known_hosts && \
-    chmod 700 ~/.ssh && \
-    chmod 644 ~/.ssh/known_hosts
-
-# Copy SSH key if it exists (for build-time git access)
-COPY build_key /tmp/build_key
-RUN cp /tmp/build_key ~/.ssh/id_rsa && \
-    chmod 600 ~/.ssh/id_rsa
-
 # Sync dependencies using uv
 RUN uv sync
-
-# Remove SSH key after installation
-RUN rm -f ~/.ssh/id_rsa /tmp/build_key
 
 # Create necessary directories for data and database
 RUN mkdir -p data && chmod -R 777 data
