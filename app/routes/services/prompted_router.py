@@ -39,7 +39,7 @@ async def get_available_models(user: User = Depends(get_current_user)):
     }
 
 
-@router.post('/run', deprecated=True)
+@router.post('/run')
 async def segment_image(request: PromptedSegmentationRequest,
                         user: User = Depends(get_current_user)):
     """Perform prompted_segmentation with optional prompts, using data validation.

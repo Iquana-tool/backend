@@ -14,7 +14,6 @@ from app.routes.general.images import router as image_router
 from app.routes.general.masks import router as mask_router
 from app.routes.general.contours import router as contour_router
 from app.routes.general.labels import router as label_router
-from app.routes.general.export import router as export_router
 from app.routes.general.datasets import router as dataset_router
 from app.routes.websockets.image_annotation_session import router as image_annotation_session_router
 from app.database import init_db
@@ -75,7 +74,6 @@ def create_app():
     app.include_router(mask_router)
     app.include_router(contour_router)
     app.include_router(label_router)
-    app.include_router(export_router)
 
     # Services; Add your own service here!
     app.include_router(prompted_segmentation_router)
