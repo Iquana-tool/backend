@@ -46,9 +46,8 @@ async def delete_model(model_registry_key: str,
 
 
 @router.get("/training/{task_id}",
-            deprecated=True,
-            description="Queries the celery backend to get an update on the training status. This means overhead for "
-                        "celery, please use the stream endpoint instead. It subscribes to a redis publisher.")
+            description="Queries the celery backend to get an update on the training status. For continuous updates, please "
+                        "use the /training/{task_id}/stream endpoint.")
 async def get_training_status(
         task_id: str,
         user: User = Depends(get_current_user)
@@ -62,7 +61,7 @@ async def get_training_status(
         "result": {
             "task_id": task_id,
             "status": result.status,  # PENDING, STARTED, SUCCESS, FAILURE
-            "info": result.info if not isinstance(result.info, Exception) else str(result.info)
+            "progress": TrainingProgress.model_validate(result.info) if not isinstance(result.info, Exception) else str(result.info)
         }
     }
 
