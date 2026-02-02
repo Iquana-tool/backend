@@ -17,20 +17,6 @@ from config import THUMBNAILS_DIR
 logger = getLogger(__name__)
 
 
-# Function to generate hash of a file
-def generate_hash_for_image(image: UploadFile):
-    """Generate a hash for the given image file."""
-    hasher = hashlib.sha256()
-    image.file.seek(0)  # Reset file pointer to the beginning
-    while True:
-        data = image.file.read(65536)  # Read in 64k chunks
-        if not data:
-            break
-        hasher.update(data)
-    image.file.seek(0)  # Reset file pointer to the beginning again for further use
-    return hasher.hexdigest()
-
-
 def get_height_width_of_image(image_id: int) -> tuple[int, int]:
     """Get the height and width of an image from the database by its ID."""
     with get_context_session() as session:

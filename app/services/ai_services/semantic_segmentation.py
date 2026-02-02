@@ -131,12 +131,3 @@ class SemanticSegmentationService(BaseService):
             response.raise_for_status()
 
             return response.json()
-
-    async def stop_training(self, task_id: str):
-        async with httpx.AsyncClient(timeout=120) as client:
-            url = f"{self.backend_url}/training/task/{task_id}"
-            response = await client.delete(url)
-
-            response.raise_for_status()
-
-            return response.json()

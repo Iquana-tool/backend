@@ -1,16 +1,20 @@
+import json
 from logging import getLogger
 
-from fastapi import APIRouter
-from fastapi.params import Depends
+from celery.result import AsyncResult
+from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from iquana_toolbox.schemas.service_requests import SemanticSegmentationRequest
 from iquana_toolbox.schemas.training import SemanticTrainingRequest
 from iquana_toolbox.schemas.user import User
+from redis.asyncio import Redis
 from sqlalchemy.orm import Session
 from starlette.responses import JSONResponse
 
 from app.database import get_session
 from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
 from app.services.auth import get_current_user
+from app.services.redis import get_redis
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
@@ -43,29 +47,72 @@ async def delete_model(model_registry_key: str,
 
 @router.get("/training/{task_id}")
 async def get_training_status(
-        model_registry_key: str,
+        task_id: str,
         user: User = Depends(get_current_user)
 ):
-    """ Get the status of a training job by its ID. """
-    raise NotImplementedError("This is currently not implemented.")
+    """ Get the status of a training job by its ID. Accesses the celery queue. """
+    result = AsyncResult(task_id)
+
+    return {
+        "success": True,
+        "message": "Successfully fetched training status.",
+        "result": {
+            "task_id": task_id,
+            "status": result.status,  # PENDING, STARTED, SUCCESS, FAILURE
+            "info": result.info if not isinstance(result.info, Exception) else str(result.info)
+        }
+    }
 
 
 @router.get("/training/{task_id}/stream")
 async def get_training_status_stream(
         task_id: int,
-        user: User = Depends(get_current_user)
+        user: User = Depends(get_current_user),
+        redis_client: Redis = Depends(get_redis)
 ):
-    """ Get live updates of the status of a training job by its ID. """
-    raise NotImplementedError("This is currently not implemented.")
+    """
+    Streams status updates by subscribing to a Redis channel.
+    Channel name: task_progress_{task_id}
+    """
+    channel_name = f"task_progress_{task_id}"
+
+    async def event_generator():
+        pubsub = redis_client.pubsub()
+        await pubsub.subscribe(channel_name)
+
+        try:
+            # You might want to send an initial "connected" message
+            yield f"data: {json.dumps({'status': 'connected', 'channel': channel_name})}\n\n"
+
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    data = message["data"]
+                    yield f"data: {data}\n\n"
+
+                    # Optional: Logic to close the stream if the message indicates completion
+                    # parsed_data = json.loads(data)
+                    # if parsed_data.get("status") in ["SUCCESS", "FAILURE"]:
+                    #     break
+
+        finally:
+            await pubsub.unsubscribe(channel_name)
+            await pubsub.close()
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.delete("/training/{task_id}")
 async def cancel_training_of_model(
-        model_id: str,
+        task_id: str,
         user: User = Depends(get_current_user)
 ):
     """ Cancel a training job by its ID."""
-    raise NotImplementedError("This is currently not implemented.")
+    result = AsyncResult(task_id)
+
+    # terminate=True sends a SIGTERM to the worker process
+    result.revoke(terminate=True)
+
+    return {"message": f"Task {task_id} has been revoked."}
 
 
 @router.post("/training/start")
