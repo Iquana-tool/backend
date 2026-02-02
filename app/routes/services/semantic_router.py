@@ -5,7 +5,7 @@ from celery.result import AsyncResult
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from iquana_toolbox.schemas.service_requests import SemanticSegmentationRequest
-from iquana_toolbox.schemas.training import SemanticTrainingRequest
+from iquana_toolbox.schemas.training import SemanticTrainingRequest, TrainingProgress
 from iquana_toolbox.schemas.user import User
 from redis.asyncio import Redis
 from sqlalchemy.orm import Session
@@ -45,7 +45,10 @@ async def delete_model(model_registry_key: str,
     return await service.delete_model(model_registry_key)
 
 
-@router.get("/training/{task_id}")
+@router.get("/training/{task_id}",
+            deprecated=True,
+            description="Queries the celery backend to get an update on the training status. This means overhead for "
+                        "celery, please use the stream endpoint instead. It subscribes to a redis publisher.")
 async def get_training_status(
         task_id: str,
         user: User = Depends(get_current_user)
@@ -86,19 +89,17 @@ async def get_training_status_stream(
 
             async for message in pubsub.listen():
                 if message["type"] == "message":
-                    data = message["data"]
-                    yield f"data: {data}\n\n"
+                    progress = TrainingProgress.model_validate(message["data"])
+                    yield progress.model_dump_json() + "\n"
 
-                    # Optional: Logic to close the stream if the message indicates completion
-                    # parsed_data = json.loads(data)
-                    # if parsed_data.get("status") in ["SUCCESS", "FAILURE"]:
-                    #     break
+                    if progress.status != "PROGRESS":
+                        break
 
         finally:
             await pubsub.unsubscribe(channel_name)
             await pubsub.close()
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
 @router.delete("/training/{task_id}")

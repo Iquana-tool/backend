@@ -648,7 +648,7 @@ wheels = [
 [[package]]
 name = "iquana-toolbox"
 version = "0.1.0"
-source = { git = "https://github.com/Iquana-tool/iquana-toolbox.git#4289465edd320500976386d6059b805c41f2c46d" }
+source = { git = "https://github.com/Iquana-tool/iquana-toolbox.git#daaabad9c560d4cdd01b98c7a1fe51c099bd6029" }
 dependencies = [
     { name = "cachetools" },
     { name = "numpy" },
