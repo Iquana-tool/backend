@@ -414,8 +414,8 @@ async def get_labels(
     "/{dataset_id}/quantification")
 async def get_dataset_quantification(
         dataset_id: int,
-        include_label_ids: list[int] = None,
-        exclude: list[Literal["unreviewed", "not_fully_annotated"]] = ["unreviewed", "not_fully_annotated"],
+        exclude_unreviewed: bool = True,
+        exclude_not_fully_annotated: bool = True,
         as_download: bool = False,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
@@ -425,8 +425,8 @@ async def get_dataset_quantification(
 
     Args:
         dataset_id (int): The ID of the dataset to export.
-        include_label_ids (list[int], optional): List of label IDs to filter contours. Defaults to None.
-        exclude (list[Literal["unreviewed", "not_fully_annotated"]]): A list of tags for what to exclude.
+        exclude_not_fully_annotated (bool): Whether to exclude not fully annotated masks.
+        exclude_unreviewed (bool): Whether to exclude unreviewed contours.
         as_download (bool, optional): Whether to export as CSV. Defaults to False. If False, returns the data as a json.
         db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
         user (User): The current authenticated user.
@@ -441,12 +441,10 @@ async def get_dataset_quantification(
     .join(Masks, Masks.id == Contours.mask_id).join(Images, Images.id == Masks.image_id).filter(
         Images.dataset_id == dataset_id
     ))
-    if "not_fully_annotated" in exclude:
+    if exclude_not_fully_annotated:
         query = query.filter(Masks.fully_annotated == True)
-    if "unreviewed" in exclude:
+    if exclude_unreviewed:
         query = query.filter(Contours.reviewed_by.any())
-    if include_label_ids:
-        query = query.filter(Contours.label_id.in_(include_label_ids))
 
     dataset_name = db.query(Datasets).filter_by(id=dataset_id).first().name
 
