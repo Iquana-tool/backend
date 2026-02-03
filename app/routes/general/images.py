@@ -1,6 +1,7 @@
 import json
 import logging
 import os.path
+from pathlib import Path
 
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
@@ -12,12 +13,14 @@ from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.contours import Contours
+from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.routes.general.masks import logger
 from app.services.auth import get_current_user
-from app.services.database_access import save_image_to_disk_and_db
+from app.services.database_access import save_image_to_disk
+from config import THUMBNAILS_DIR
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
@@ -41,15 +44,36 @@ async def upload_image(
     Returns:
         A dictionary containing the success status, image ID, and a message.
     """
-    image_id = await save_image_to_disk_and_db(file, dataset_id)
-    if image_id is None:
-        raise HTTPException(status_code=400, detail="Invalid file or upload failed")
+    dataset_folder = db.query(Datasets).filter_by(id=dataset_id).first().folder_path
+    file_path = Path(os.path.join(dataset_folder, file.filename))
+    img = await save_image_to_disk(file, file_path)
+    try:
+        # Save the new image to the database
+        # Image comes in HWC format
+        new_entry = Images(file_name=file.filename,
+                           file_path=str(file_path),
+                           dataset_id=dataset_id,
+                           width=img.width,
+                           height=img.height,
+                           color_mode=img.mode,
+                           )
+        thumbnail_path = Path(os.path.join(THUMBNAILS_DIR, f"{new_entry.id}.png"))
+        await save_image_to_disk(file, thumbnail_path, as_thumbnail=True)
+        new_entry.thumbnail_path = str(thumbnail_path)
+        db.add(new_entry)
+        db.commit()
+        logger.info("New image saved to disk and database.")
+    except Exception as e:
+        logger.error(f"Error saving image to database: {str(e)}")
+        logger.error(f"Deleting image '{file.file_name}' from disk to ensure consistency.")
+        os.remove(file_path)
+        return None
     # Also create a mask for the image
-    await create_new_mask_for_image(image_id, db)
+    await create_new_mask_for_image(new_entry.id, db)
     return {
         "success": True,
-        "image_id": image_id,
-        "message": f"Successfully uploaded image. Assigned id {image_id}"
+        "image_id": new_entry.id,
+        "message": f"Successfully uploaded image. Assigned id {new_entry.id}"
     }
 
 
