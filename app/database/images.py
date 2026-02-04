@@ -15,7 +15,7 @@ class Images(database):
 
     file_name = Column(String, nullable=False)  # Image file name
     file_path = Column(String, nullable=False)  # Full path to the image file on disk
-    thumbnail_file_path = Column(String, nullable=True)  # Full path to the thumbnail image file on disk
+    thumbnail_file_path = Column(String, nullable=False)  # Full path to the thumbnail image file on disk
     description = Column(String, nullable=True)  # Optional description of the image
 
     width = Column(Integer, nullable=False)  # Width of the image in pixels

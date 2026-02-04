@@ -55,7 +55,9 @@ def save_array_to_disk(array: np.ndarray, dataset_id: int, scan_id: int = None,
     return str(file_path)
 
 
-async def save_image_to_disk(image: Union[UploadFile, np.ndarray], file_path: Path, as_thumbnail: bool = False):
+async def save_image_to_disk(image: Union[UploadFile, np.ndarray],
+                             file_path: Path,
+                             thumbnail_path: Path):
     """
     Save an image file to disk. If as_thumbnail is True, the image is downsized to 50 x 50 resolution before saving.
     """
@@ -70,14 +72,14 @@ async def save_image_to_disk(image: Union[UploadFile, np.ndarray], file_path: Pa
     else:
         raise ValueError(f"Unsupported image type: {type(image)}.")
 
-    # Save the image
-    if as_thumbnail:
-        # Resize using thumbnail (maintains aspect ratio) or resize (forces 50x50)
-        img.thumbnail((50, 50))
     # Save the processed image to the file path
     img.save(file_path)
 
-    logger.info(f"Saved {'image' if not as_thumbnail else 'thumbnail'} to disk at {file_path}.")
+    # Resize using thumbnail (maintains aspect ratio) or resize (forces 50x50)
+    img.thumbnail((100, 100))
+    img.save(thumbnail_path)
+
+    logger.info(f"Saved image to disk at {file_path} and thumbnail at {thumbnail_path}.")
     return img
 
 
@@ -89,14 +91,16 @@ async def process_and_save_image(
 ) -> int:
     """Internal logic to save one image and its thumbnail."""
     file_path = Path(dataset_folder) / file.filename
+    thumbnail_path = Path(THUMBNAILS_DIR) / file.filename
 
     # We pass the same UploadFile to save_image_to_disk twice.
     # IMPORTANT: The fix we discussed earlier (await file.seek(0)) is critical here!
-    img = await save_image_to_disk(file, file_path)
+    img = await save_image_to_disk(file, file_path, thumbnail_path)
 
     new_entry = Images(
         file_name=file.filename,
         file_path=str(file_path),
+        thumbnail_file_path=str(thumbnail_path),
         dataset_id=dataset_id,
         width=img.width,
         height=img.height,
@@ -106,11 +110,6 @@ async def process_and_save_image(
     # Add to session but DON'T commit yet
     db.add(new_entry)
     db.flush()  # This populates new_entry.id without ending the transaction
-
-    thumbnail_path = Path(THUMBNAILS_DIR) / f"{new_entry.id}.png"
-    await save_image_to_disk(file, thumbnail_path, as_thumbnail=True)
-
-    new_entry.thumbnail_path = str(thumbnail_path)
 
     # Mask logic
     await create_new_mask(new_entry.id, db)
