@@ -8,12 +8,15 @@ from typing import Union
 import cv2 as cv
 import numpy as np
 from PIL import Image
+from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
 from app.database import get_context_session
 from app.database.datasets import Datasets
 from app.database.images import Images
+from app.database.masks import Masks
 from app.database.scans import Scans
+from config import THUMBNAILS_DIR
 
 logger = getLogger(__name__)
 
@@ -76,3 +79,50 @@ async def save_image_to_disk(image: Union[UploadFile, np.ndarray], file_path: Pa
 
     logger.info(f"Saved {'image' if not as_thumbnail else 'thumbnail'} to disk at {file_path}.")
     return img
+
+
+async def process_and_save_image(
+        file: UploadFile,
+        dataset_id: int,
+        dataset_folder: str,
+        db: Session
+) -> int:
+    """Internal logic to save one image and its thumbnail."""
+    file_path = Path(dataset_folder) / file.filename
+
+    # We pass the same UploadFile to save_image_to_disk twice.
+    # IMPORTANT: The fix we discussed earlier (await file.seek(0)) is critical here!
+    img = await save_image_to_disk(file, file_path)
+
+    new_entry = Images(
+        file_name=file.filename,
+        file_path=str(file_path),
+        dataset_id=dataset_id,
+        width=img.width,
+        height=img.height,
+        color_mode=img.mode,
+    )
+
+    # Add to session but DON'T commit yet
+    db.add(new_entry)
+    db.flush()  # This populates new_entry.id without ending the transaction
+
+    thumbnail_path = Path(THUMBNAILS_DIR) / f"{new_entry.id}.png"
+    await save_image_to_disk(file, thumbnail_path, as_thumbnail=True)
+
+    new_entry.thumbnail_path = str(thumbnail_path)
+
+    # Mask logic
+    await create_new_mask(new_entry.id, db)
+
+    return new_entry.id
+
+
+async def create_new_mask(
+        image_id: int,
+        db: Session,
+):
+    new_mask = Masks(image_id=image_id)
+    db.add(new_mask)
+    db.flush()
+    return new_mask

@@ -1,7 +1,6 @@
 import json
 import logging
 import os.path
-from pathlib import Path
 
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
@@ -17,111 +16,33 @@ from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.routes.general.masks import logger
 from app.services.auth import get_current_user
-from app.services.database_access import save_image_to_disk
-from config import THUMBNAILS_DIR
+from app.services.database_access import process_and_save_image
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
 
 
 @router.post("/upload")
-async def upload_image(
-        dataset_id: int,
-        file: UploadFile = File(...),
-        db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
-):
-    """Upload an image file.
-
-    Args:
-        dataset_id: ID of the dataset to which the image belongs.
-        file: The image file to upload.
-        db: Database session dependency.
-        user (User): The current authenticated user.
-
-    Returns:
-        A dictionary containing the success status, image ID, and a message.
-    """
-    dataset_folder = db.query(Datasets).filter_by(id=dataset_id).first().folder_path
-    file_path = Path(os.path.join(dataset_folder, file.filename))
-    img = await save_image_to_disk(file, file_path)
-    try:
-        # Save the new image to the database
-        # Image comes in HWC format
-        new_entry = Images(file_name=file.filename,
-                           file_path=str(file_path),
-                           dataset_id=dataset_id,
-                           width=img.width,
-                           height=img.height,
-                           color_mode=img.mode,
-                           )
-        thumbnail_path = Path(os.path.join(THUMBNAILS_DIR, f"{new_entry.id}.png"))
-        await save_image_to_disk(file, thumbnail_path, as_thumbnail=True)
-        new_entry.thumbnail_path = str(thumbnail_path)
-        db.add(new_entry)
-        db.commit()
-        logger.info("New image saved to disk and database.")
-    except Exception as e:
-        logger.error(f"Error saving image to database: {str(e)}")
-        logger.error(f"Deleting image '{file.file_name}' from disk to ensure consistency.")
-        os.remove(file_path)
-        return None
-    # Also create a mask for the image
-    await create_new_mask_for_image(new_entry.id, db)
-    return {
-        "success": True,
-        "image_id": new_entry.id,
-        "message": f"Successfully uploaded image. Assigned id {new_entry.id}"
-    }
+async def upload_image(dataset_id: int, file: UploadFile = File(...), db: Session = Depends(get_session)):
+    dataset = db.query(Datasets).get(dataset_id)
+    image_id = await process_and_save_image(file, dataset_id, dataset.folder_path, db)
+    db.commit()  # Commit once
+    return {"success": True, "image_id": image_id}
 
 
 @router.post("/upload_multi")
-async def upload_images(
-        dataset_id: int,
-        files: list[UploadFile] = File(...),
-        db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
-):
-    """Upload multiple image files.
-
-    Args:
-        dataset_id: ID of the dataset to which the images belong.
-        files: List of image files to upload.
-        db: Database session dependency.
-        user (User): The current authenticated user.
-
-    Returns:
-        A dictionary containing the success status, list of image IDs, and a message.
-    """
+async def upload_images(dataset_id: int, files: list[UploadFile] = File(...), db: Session = Depends(get_session)):
+    dataset = db.query(Datasets).get(dataset_id)
     image_ids = []
-    failed_files = []
+
     for file in files:
-        try:
-            image_id = (await upload_image(dataset_id, file, db))["image_id"]
-            image_ids.append(image_id)
-        except HTTPException as e:
-            logger.error(f"Failed to upload {file.filename}: {str(e)}")
-            failed_files.append(file.filename)
+        # Now we only query the dataset folder ONCE at the top
+        image_id = await process_and_save_image(file, dataset_id, dataset.folder_path, db)
+        image_ids.append(image_id)
 
-    # Prepare response message
-    if failed_files:
-        if len(image_ids) > 0:
-            message = f"Successfully processed {len(image_ids)} files. Failed to upload {len(failed_files)} files: {', '.join(failed_files)}"
-        else:
-            message = f"Failed to upload all {len(failed_files)} files: {', '.join(failed_files)}"
-    else:
-        message = f"Successfully processed {len(image_ids)} images. Assigned ids {image_ids}"
-
-    return {
-        "success": True,
-        "image_ids": image_ids,
-        "uploaded_count": len(image_ids),
-        "failed_count": len(failed_files),
-        "failed_files": failed_files,
-        "message": message,
-    }
+    db.commit()  # One big commit for all images (Atomic!)
+    return {"success": True, "image_ids": image_ids}
 
 
 @router.delete("/{image_id}")
@@ -301,8 +222,7 @@ async def create_new_mask_for_image(
             "mask_id": existing_mask.id
         }
     # Create a new mask
-    new_mask = Masks(image_id=image_id)
-    db.add(new_mask)
+    new_mask = await create_new_mask_for_image(image_id=image_id, db=db)
     db.commit()
     return {
         "success": True,
