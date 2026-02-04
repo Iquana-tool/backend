@@ -8,7 +8,7 @@ from typing import Union
 import cv2 as cv
 import numpy as np
 from PIL import Image
-from fastapi import UploadFile
+from starlette.datastructures import UploadFile
 
 from app.database import get_context_session
 from app.database.datasets import Datasets
@@ -58,6 +58,8 @@ async def save_image_to_disk(image: Union[UploadFile, np.ndarray], file_path: Pa
     """
     # Read the image
     if isinstance(image, UploadFile):
+        # Ensure we are at the start of the file stream
+        await image.seek(0)
         content = await image.read()
         img = Image.open(io.BytesIO(content))
     elif isinstance(image, np.ndarray):
@@ -71,4 +73,6 @@ async def save_image_to_disk(image: Union[UploadFile, np.ndarray], file_path: Pa
         img.thumbnail((50, 50))
     # Save the processed image to the file path
     img.save(file_path)
+
+    logger.info(f"Saved {'image' if not as_thumbnail else 'thumbnail'} to disk at {file_path}.")
     return img
