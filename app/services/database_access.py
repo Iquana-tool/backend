@@ -76,7 +76,7 @@ async def save_image_to_disk(image: Union[UploadFile, np.ndarray],
     img.save(file_path)
 
     # Resize using thumbnail (maintains aspect ratio) or resize (forces 50x50)
-    img.thumbnail((100, 100))
+    img.thumbnail((200, 200))
     img.save(thumbnail_path)
 
     logger.info(f"Saved image to disk at {file_path} and thumbnail at {thumbnail_path}.")
@@ -90,11 +90,11 @@ async def process_and_save_image(
         db: Session
 ) -> int:
     """Internal logic to save one image and its thumbnail."""
-    file_path = Path(dataset_folder) / "images" / file.filename
+    image_folder = Path(dataset_folder) / "images"
+    os.makedirs(image_folder, exist_ok=True)
+    file_path = image_folder / file.filename
     thumbnail_path = Path(THUMBNAILS_DIR) / file.filename
 
-    # We pass the same UploadFile to save_image_to_disk twice.
-    # IMPORTANT: The fix we discussed earlier (await file.seek(0)) is critical here!
     img = await save_image_to_disk(file, file_path, thumbnail_path)
 
     new_entry = Images(
@@ -122,8 +122,9 @@ async def create_new_mask(
         dataset_folder: str,
         db: Session,
 ):
-    mask_path = Path(dataset_folder) / "masks" / f"{image_id}.png"
-    os.makedirs(Path(dataset_folder) / "masks", exist_ok=True)
+    mask_folder = Path(dataset_folder) / "masks"
+    os.makedirs(mask_folder, exist_ok=True)
+    mask_path = mask_folder / f"{image_id}.png"
     new_mask = Masks(
         image_id=image_id,
         file_path=str(mask_path),
