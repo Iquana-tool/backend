@@ -112,7 +112,7 @@ async def process_and_save_image(
     db.flush()  # This populates new_entry.id without ending the transaction
 
     # Mask logic
-    await create_new_mask(new_entry.id, db)
+    await create_new_mask(new_entry.id, dataset_folder, db)
 
     return new_entry.id
 
