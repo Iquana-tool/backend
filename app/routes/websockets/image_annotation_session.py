@@ -4,8 +4,6 @@ from logging import getLogger
 
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
-from pydantic import field_validator, BaseModel, Field, PrivateAttr
-from pydantic_core import ValidationError
 from iquana_toolbox.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
 from iquana_toolbox.schemas.contours import Contour
@@ -13,6 +11,8 @@ from iquana_toolbox.schemas.labels import Label
 from iquana_toolbox.schemas.prompts import Prompts
 from iquana_toolbox.schemas.service_requests import CompletionRequest as CompletionServiceRequest
 from iquana_toolbox.schemas.service_requests import PromptedSegmentationRequest, SemanticSegmentationRequest
+from pydantic import field_validator, BaseModel, Field, PrivateAttr
+from pydantic_core import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
 from app.database import get_context_session
@@ -28,7 +28,6 @@ from app.services.ai_services.base_service import BaseService
 from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
-from app.services.database_access import get_height_width_of_image
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
@@ -636,7 +635,7 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
     with get_context_session() as session:
         contours_db = session.query(Contours).filter(Contours.id.in_(seed_contour_ids)).all()
         contours = [Contour.from_db(contour_db) for contour_db in contours_db]
-    height, width = get_height_width_of_image(state.image_id)
+    height, width = state.image_db.height, state.image_db.width
     positive_exemplars = [contour.to_binary_mask_model(height, width) for contour in contours]
 
     # Find out the concept

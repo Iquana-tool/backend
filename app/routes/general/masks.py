@@ -20,7 +20,7 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.services.auth import get_current_user
-from app.services.database_access import save_array_to_disk, save_image_to_disk
+from app.services.database_access import save_semantic_mask
 from app.services.util import get_mask_path_from_image_path
 
 logger = logging.getLogger(__name__)
@@ -127,7 +127,7 @@ async def mark_as_fully_annotated(
         Masks,
         Images.dataset_id,
         Images.width,
-        Images.height
+        Images.height,
     ).join(
         Images, Masks.image_id == Images.id
     ).filter_by(
@@ -144,19 +144,13 @@ async def mark_as_fully_annotated(
             "mask_id": mask.id
         }
     # Generate the mask from contours
+    # Currently three separate queries, should be one
     contours = db.query(Contours).filter_by(mask_id=mask_id).all()
     contours_hierarchy = ContourHierarchy.from_query(contours, width, height)
     labels = db.query(Labels).filter_by(dataset_id=dataset_id)
     labels_hierarchy = LabelHierarchy.from_query(labels)
     semantic_mask = contours_hierarchy.to_semantic_mask(height, width, labels_hierarchy.id_to_value_map)
-
-    # Convert to PIL image & save
-    semantic_mask = Image.fromarray(semantic_mask, mode="L")  # <- Saves as a greyscale image, tiny file size
-    mask_path = Path(mask.file_path)
-    semantic_mask.save(mask_path)
-
-    # Logging
-    logging.debug(f"Generated mask with the following labels: {np.unique(semantic_mask).tolist()}")
+    await save_semantic_mask(semantic_mask, mask.file_path)
 
     # Mark the mask as finished
     mask.fully_annotated = True

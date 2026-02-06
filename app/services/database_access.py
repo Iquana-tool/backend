@@ -1,58 +1,33 @@
 import io
 import os
 from logging import getLogger
-from os.path import join
 from pathlib import Path
 from typing import Union
 
-import cv2 as cv
 import numpy as np
 from PIL import Image
+from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
+from iquana_toolbox.schemas.labels import LabelHierarchy
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
 from app.database import get_context_session
-from app.database.datasets import Datasets
+from app.database.contours import Contours
 from app.database.images import Images
+from app.database.labels import Labels
 from app.database.masks import Masks
-from app.database.scans import Scans
 from config import THUMBNAILS_DIR
 
 logger = getLogger(__name__)
 
 
-def get_height_width_of_image(image_id: int) -> tuple[int, int]:
-    """Get the height and width of an image from the database by its ID."""
-    with get_context_session() as session:
-        image = session.query(Images).filter_by(id=image_id).first()
-    if image:
-        return image.height, image.width
-    else:
-        raise ValueError(f"Image with ID {image_id} not found in database.")
-
-
-def save_array_to_disk(array: np.ndarray, dataset_id: int, scan_id: int = None,
-                       new_filename: str = None, is_mask: bool = False) -> str:
-    """Save a numpy array as an image file to disk."""
-    with get_context_session() as session:
-        dataset = session.query(Datasets).filter_by(id=dataset_id).first()
-        if not dataset:
-            raise ValueError(f"Dataset with ID {dataset_id} not found.")
-        if dataset.dataset_type == "scan":
-            if scan_id is None:
-                raise ValueError("Scan ID must be provided for scan datasets.")
-            scan = session.query(Scans).filter_by(id=scan_id).first()
-            path = join(scan.folder_path, "masks" if is_mask else "slices")
-        else:
-            path = join(dataset.folder_path, "masks" if is_mask else "images")
-    os.makedirs(path, exist_ok=True)
-    file_path = join(path, new_filename if new_filename else "image.png")
-    if is_mask:
-        # Masks must be saved as PNG. Other file formats might be lossy and change the values!
-        file_path = file_path.rsplit(".", 1)[0] + ".png"
-    cv.imwrite(file_path, array)
-    logger.info(f"Image saved to disk at {file_path}")
-    return str(file_path)
+async def save_semantic_mask(
+        semantic_mask: np.ndarray,
+        file_path: Path,
+):
+    # Convert to PIL image & save
+    semantic_mask = Image.fromarray(semantic_mask, mode="L")  # <- Saves as a greyscale image, tiny file size
+    semantic_mask.save(file_path)
 
 
 async def save_image_to_disk(image: Union[UploadFile, np.ndarray],
