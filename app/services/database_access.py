@@ -119,9 +119,14 @@ async def process_and_save_image(
 
 async def create_new_mask(
         image_id: int,
+        dataset_folder: str,
         db: Session,
 ):
-    new_mask = Masks(image_id=image_id)
+    mask_path = Path(dataset_folder) / "masks" / f"{image_id}.png"
+    new_mask = Masks(
+        image_id=image_id,
+        file_path=str(mask_path),
+    )
     db.add(new_mask)
     db.flush()
     return new_mask

@@ -1,17 +1,21 @@
 import json
+import os
 from logging import getLogger
 
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from iquana_toolbox.schemas.service_requests import SemanticSegmentationRequest
-from iquana_toolbox.schemas.training import SemanticTrainingRequest, TrainingProgress
+from iquana_toolbox.schemas.training import SemanticTrainingRequest, TrainingProgress, SemanticTrainingConfig
 from iquana_toolbox.schemas.user import User
 from redis.asyncio import Redis
 from sqlalchemy.orm import Session
-from starlette.responses import JSONResponse
 
 from app.database import get_session
+from app.database.datasets import Datasets
+from app.database.images import Images
+from app.database.masks import Masks
+from app.services.celery_app import celery_app
 from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
 from app.services.auth import get_current_user
 from app.services.redis import get_redis
@@ -117,18 +121,37 @@ async def cancel_training_of_model(
 
 @router.post("/training/start")
 async def start_training(
-        request: SemanticTrainingRequest,
+        model_registry_key: str,
+        dataset_id: int,
+        training_config: SemanticTrainingConfig,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """ Start training a model for automatic prompted_segmentation.
     This endpoint prepares the request with necessary parameters and forwards it to the Automatic Segmentation Service.
-    Args:
-        request (TrainingRequest): The training request containing dataset_id and other parameters.
-        db (Session): The database session for querying labels.
-        user (User): The current authenticated user.
-
-    Returns:
-        JSONResponse: The response from the Automatic Segmentation Service.
     """
-    return await service.start_training(request)
+    # Build the training request, which consists of the training_data and training_config
+    # First get all images and masks urls of the dataset
+    file_urls = (db.query(
+        Images.file_path.label("image_url"),
+        Masks.file_path.label("mask_url")
+    ).join(
+        Masks, Masks.image_id == Images.id
+    ).filter(Images.dataset_id == dataset_id).all())
+
+    request = SemanticTrainingRequest(
+        model_registry_key=model_registry_key,
+        image_urls=[row.image_url for row in file_urls],
+        mask_urls=[row.mask_url for row in file_urls],
+        **training_config.model_dump(),
+    )
+    task = celery_app.send_task(
+        "semantic_segmentation.train_model",
+        args=[request],
+        queue="semantic_queue"
+    )
+    return {
+        "success": True,
+        "message": "Training task enqueued.",
+        "result": {"task_id": task.task_id, "state": task.state, "data": task.info}
+    }
