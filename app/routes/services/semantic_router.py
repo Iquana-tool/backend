@@ -137,7 +137,16 @@ async def start_training(
         Masks.file_path.label("mask_url")
     ).join(
         Masks, Masks.image_id == Images.id
-    ).filter(Images.dataset_id == dataset_id).all())
+    ).filter(
+        Images.dataset_id == dataset_id,
+        Masks.fully_annotated == True,
+    ).all())
+
+    if len(file_urls) == 0:
+        return {
+            "success": False,
+            "message": f"No data to train on for dataset {dataset_id}!"
+        }
 
     request = SemanticTrainingRequest(
         model_registry_key=model_registry_key,
