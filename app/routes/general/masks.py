@@ -251,62 +251,28 @@ async def add_contour(mask_id: int,
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the added contour.
     """
-    try:
-        parent_contour_id = contour_to_add.parent_id
-        # Check parents
-        expected_parent_label = (db.query(Labels.parent_id).filter_by(id=contour_to_add.label_id).first())
-        should_have_parent = expected_parent_label is not None
-        if contour_to_add.label_id is not None and check_parent:
-            if should_have_parent and parent_contour_id is None:
-                # Contour should have a parent but none was given.
-                logger.error(f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).")
-                return {
-                    "success": False,
-                    "message": f"Parent contour ID is None, but the label expects a parent ({expected_parent_label}).",
-                    "contour_id": None
-                }
-            elif should_have_parent and parent_contour_id is not None:
-                # Contour should have a parent and one is given one
-                parent_contour_label = db.query(Contours.label_id).filter_by(id=parent_contour_id).first()
-                if expected_parent_label != parent_contour_label:
-                    logger.error(f"Error adding contour: Parent contour does not match the expected parent label."
-                                 f"\nGiven label of parent contour: ({parent_contour_label})"
-                                 f"\tExpected label of parent contour: ({expected_parent_label})")
-                    return {
-                        "success": False,
-                        "message": "Parent contour does not match the expected parent label.",
-                        "contour_id": None
-                    }
-            else:
-                logger.error("Contour with label should not have a parent but has a parent contour id given.")
-                return {
-                    "success": False,
-                    "message": "Contour with label should not have a parent but has a parent contour id given.",
-                    "contour_id": None
-                }
+    contours_query = db.query(Contours).filter_by(mask_id=mask_id).all()
+    id, height, width = (db.query(Masks.id, Images.height, Images.width)
+                         .join(Images, Masks.image_id == Images.id)
+                         .filter(Masks.id == mask_id).first())
+    hierarchy = ContourHierarchy.from_query(contours_query,
+                                            height=height,
+                                            width=width)
+    added_contour, changed = hierarchy.add_contour(contour_to_add)
+    # Add contour to the database
+    entry = save_contour_tree(db, added_contour, mask_id)
+    db.commit()
+    added_contour.id = entry.id
 
-        # Add contour to the database
-        entry = save_contour_tree(db, contour_to_add, mask_id, parent_contour_id)
-        db.commit()
-        contour_to_add.id = entry.id
+    # SVG path computation for the frontend
+    # Get image dimensions and compute path
+    added_contour.compute_path(width, height)
 
-        # SVG path computation for the frontend
-        # Get image dimensions and compute path
-        mask = db.query(Masks).filter_by(id=mask_id).first()
-        if mask:
-            image = db.query(Images).filter_by(id=mask.image_id).first()
-            if image:
-                contour_to_add.compute_path(image.width, image.height)
-
-        return {
-            "success": True,
-            "message": "Contour added successfully.",
-            "added_contour": contour_to_add.model_dump(),
-        }
-    except Exception as e:
-        print(f"Error adding contour: {e}")
-        db.rollback()
-        raise e
+    return {
+        "success": True,
+        "message": "Contour added successfully.",
+        "added_contour": added_contour.model_dump(),
+    }
 
 
 @router.put("/{mask_id}/contours/multi")

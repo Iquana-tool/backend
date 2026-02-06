@@ -265,6 +265,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                         pass
             except Exception as e:
                 logger.error(f"Ran into an error handling message: {e} \n Message: {client_msg}")
+                raise e
                 await send_msg(websocket, ServerMessage(
                     id=client_msg.id,
                     type=ServerMessageType.ERROR,
@@ -302,6 +303,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
         except Exception:
             # Websocket might already be closed, ignore
             pass
+        # Save the session state and the mask to disk
+        # TODO save the session state
+        pass
+
 
 
 async def handle_focus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -672,6 +677,7 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
 
 async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage,
                      state: AnnotationSessionState):
+    print(object_to_add)
     with get_context_session() as session:
         response = await add_contour(
             mask_id=await state.mask_id(),
@@ -684,7 +690,7 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
         success=response["success"],
         message=f"Successfully added object with confidence score {object_to_add.confidence:.1%}" if response[
             "success"] else response["message"],
-        data=object_to_add.model_dump() if response["success"] else None,
+        data=response["added_contour"],
     ))
     return response
 
