@@ -1,9 +1,11 @@
 import logging
 import os
 from io import StringIO
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from PIL import Image
 from fastapi import APIRouter, HTTPException, Depends
 from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
 from iquana_toolbox.schemas.contours import Contour
@@ -18,7 +20,7 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.services.auth import get_current_user
-from app.services.database_access import save_array_to_disk
+from app.services.database_access import save_array_to_disk, save_image_to_disk
 from app.services.util import get_mask_path_from_image_path
 
 logger = logging.getLogger(__name__)
@@ -121,38 +123,48 @@ async def mark_as_fully_annotated(
         dict: A dictionary containing the success status and mask ID.
     """
     # Check if mask exists
-    existing_mask = db.query(Masks).filter_by(id=mask_id).first()
-    if not existing_mask:
+    mask, dataset_id, width, height = db.query(
+        Masks,
+        Images.dataset_id,
+        Images.width,
+        Images.height
+    ).join(
+        Images, Masks.image_id == Images.id
+    ).filter_by(
+        id=mask_id
+    ).first()
+    if not mask:
         raise HTTPException(status_code=404, detail="Mask not found.")
-    logger.info(f"Finishing this mask: {existing_mask}")
+    logger.info(f"Finishing this mask: {mask}")
     # Check if the mask is already finished
-    if bool(existing_mask.fully_annotated):
+    if mask.fully_annotated:
         return {
             "success": True,
             "message": "Mask is already marked as fully annotated.",
-            "mask_id": existing_mask.id
+            "mask_id": mask.id
         }
-    image = db.query(Images).filter_by(id=existing_mask.image_id).first()
     # Generate the mask from contours
     contours = db.query(Contours).filter_by(mask_id=mask_id).all()
-    contours_hierarchy = ContourHierarchy.from_query(contours, image.width, image.height)
-    labels = db.query(Labels).filter_by(dataset_id=image.dataset_id)
+    contours_hierarchy = ContourHierarchy.from_query(contours, width, height)
+    labels = db.query(Labels).filter_by(dataset_id=dataset_id)
     labels_hierarchy = LabelHierarchy.from_query(labels)
-    semantic_mask = contours_hierarchy.to_semantic_mask(image.height, image.width, labels_hierarchy.id_to_value_map)
+    semantic_mask = contours_hierarchy.to_semantic_mask(height, width, labels_hierarchy.id_to_value_map)
 
+    # Convert to PIL image & save
+    semantic_mask = Image.fromarray(semantic_mask, mode="L")  # <- Saves as a greyscale image, tiny file size
+    mask_path = Path(mask.file_path)
+    semantic_mask.save(mask_path)
+
+    # Logging
     logging.debug(f"Generated mask with the following labels: {np.unique(semantic_mask).tolist()}")
-    mask_path = save_array_to_disk(semantic_mask,
-                                   image.dataset_id,
-                                   image.scan_id,
-                                   is_mask=True,
-                                   new_filename=image.file_name)
+
     # Mark the mask as finished
-    existing_mask.fully_annotated = True
+    mask.fully_annotated = True
     db.commit()
     return {
         "success": True,
         "message": "Mask marked as finished successfully.",
-        "mask_id": existing_mask.id
+        "mask_id": mask.id
     }
 
 

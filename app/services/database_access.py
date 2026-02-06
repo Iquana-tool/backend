@@ -90,7 +90,7 @@ async def process_and_save_image(
         db: Session
 ) -> int:
     """Internal logic to save one image and its thumbnail."""
-    file_path = Path(dataset_folder) / file.filename
+    file_path = Path(dataset_folder) / "images" / file.filename
     thumbnail_path = Path(THUMBNAILS_DIR) / file.filename
 
     # We pass the same UploadFile to save_image_to_disk twice.
@@ -123,6 +123,7 @@ async def create_new_mask(
         db: Session,
 ):
     mask_path = Path(dataset_folder) / "masks" / f"{image_id}.png"
+    os.makedirs(Path(dataset_folder) / "masks", exist_ok=True)
     new_mask = Masks(
         image_id=image_id,
         file_path=str(mask_path),
