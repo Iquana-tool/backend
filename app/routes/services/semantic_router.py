@@ -5,6 +5,7 @@ from logging import getLogger
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+from iquana_toolbox.schemas.labels import LabelHierarchy
 from iquana_toolbox.schemas.service_requests import SemanticSegmentationRequest
 from iquana_toolbox.schemas.training import SemanticTrainingRequest, TrainingProgress, SemanticTrainingConfig
 from iquana_toolbox.schemas.user import User
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.datasets import Datasets
 from app.database.images import Images
+from app.database.labels import Labels
 from app.database.masks import Masks
 from app.services.celery_app import celery_app
 from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
@@ -141,6 +143,8 @@ async def start_training(
         Images.dataset_id == dataset_id,
         Masks.fully_annotated == True,
     ).all())
+    labels = db.query(Labels).filter_by(dataset_id=dataset_id)
+    label_hierarchy = LabelHierarchy.from_query(labels)
 
     if len(file_urls) == 0:
         return {
@@ -152,6 +156,7 @@ async def start_training(
         model_registry_key=model_registry_key,
         image_urls=[row.image_url for row in file_urls],
         mask_urls=[row.mask_url for row in file_urls],
+        label_hierarchy=label_hierarchy,
         **training_config.model_dump(),
     )
     task = celery_app.send_task(
