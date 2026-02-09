@@ -110,7 +110,7 @@ async def share_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found")
     if dataset.created_by != user.username:
         raise HTTPException(status_code=403, detail="Only the owner can share this dataset")
-    user_to_share = db.query(Users).filter_by(name=share_with_username).first()
+    user_to_share = db.query(Users).filter_by(username=share_with_username).first()
     if not user_to_share:
         raise HTTPException(status_code=404, detail="User to share with not found")
     if user_to_share in dataset.shared_with:
