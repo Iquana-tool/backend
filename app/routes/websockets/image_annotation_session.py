@@ -555,6 +555,7 @@ async def handle_prompted_segmentation(
 
     response_seg = await state._running_backends[Backends.PROMPTED_SEGMENTATION.value].inference(prompted_request)
     contour_model = Contour.model_validate(response_seg["result"])
+    contour_model.parent_id = state.focussed_contour_id
 
     # Compute SVG path before sending
     contour_model.compute_path(
@@ -677,7 +678,6 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
 
 async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage,
                      state: AnnotationSessionState):
-    print(object_to_add)
     with get_context_session() as session:
         response = await add_contour(
             mask_id=await state.mask_id(),
