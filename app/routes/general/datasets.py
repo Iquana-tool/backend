@@ -146,7 +146,7 @@ async def get_all_datasets(
             "dataset_type": ds.dataset_type,
             "folder_path": ds.folder_path,
             "created_by": ds.created_by,
-            "shared_with": [u.id for u in ds.shared_with]
+            "shared_with": [u.username for u in ds.shared_with]
         }
         for ds in datasets
     ]}
