@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
+from iquana_toolbox.schemas.contours import Contour
 from iquana_toolbox.schemas.image import Image
 from iquana_toolbox.schemas.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
@@ -451,25 +452,22 @@ async def get_dataset_quantification(
     data = query.all()
     df_data = {}
     for row in data:
-        contour, file_name, finished, generated = row
+        contour: Contour = Contour.from_db(row[0])
+        file_name: str = row[1]
         label_name = get_hierarchical_label_name(contour.label_id)
-        diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
-        coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
 
         df_data.setdefault("file_name", []).append(file_name)
         df_data.setdefault("label", []).append(label_name)
         df_data.setdefault("label_id", []).append(contour.label_id)
         df_data.setdefault("contour_id", []).append(contour.id)
-        df_data.setdefault("area", []).append(contour.area)
-        df_data.setdefault("perimeter", []).append(contour.perimeter)
-        df_data.setdefault("circularity", []).append(contour.circularity)
-        df_data.setdefault("diameter_avg", []).append(str(np.mean(diameters)) if diameters else None)
-        df_data.setdefault("coords_x", []).append(str(coords["x"]) if coords else None)
-        df_data.setdefault("coords_y", []).append(str(coords["y"]) if coords else None)
-        df_data.setdefault("centroid_x", []).append(str(np.mean(coords["x"])) if coords else None)
-        df_data.setdefault("centroid_y", []).append(str(np.mean(coords["y"])) if coords else None)
-        df_data.setdefault("finished", []).append(finished)
-        df_data.setdefault("generated", []).append(generated)
+        df_data.setdefault("area", []).append(contour.quantification.area)
+        df_data.setdefault("perimeter", []).append(contour.quantification.perimeter)
+        df_data.setdefault("circularity", []).append(contour.quantification.circularity)
+        df_data.setdefault("diameter_avg", []).append(contour.quantification.max_diameter)
+        df_data.setdefault("coords_x", []).append(contour.x)
+        df_data.setdefault("coords_y", []).append(contour.y)
+        df_data.setdefault("centroid_x", []).append(np.mean(contour.x))
+        df_data.setdefault("centroid_y", []).append(np.mean(contour.y))
     df = pd.DataFrame(df_data)
     if df.empty:
         return {
