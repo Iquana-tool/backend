@@ -67,14 +67,14 @@ async def get_training_status(
         "result": {
             "task_id": task_id,
             "status": result.status,  # PENDING, STARTED, SUCCESS, FAILURE
-            "progress": TrainingProgress.model_validate(result.info) if not isinstance(result.info, Exception) else str(result.info)
+            "progress": result.info
         }
     }
 
 
 @router.get("/training/{task_id}/stream")
 async def get_training_status_stream(
-        task_id: int,
+        task_id: str,
         user: User = Depends(get_current_user),
         redis_client: Redis = Depends(get_redis)
 ):
@@ -124,7 +124,7 @@ async def cancel_training_of_model(
 @router.post("/training/start")
 async def start_training(
         model_registry_key: str,
-        dataset_id: int,
+        dataset_id: int | str,
         training_config: SemanticTrainingConfig,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
@@ -161,7 +161,7 @@ async def start_training(
     )
     task = celery_app.send_task(
         "semantic_segmentation.train_model",
-        args=[request],
+        args=[request.model_dump_json()],
         queue="semantic_queue"
     )
     return {

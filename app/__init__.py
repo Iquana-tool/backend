@@ -12,6 +12,7 @@ from app.routes.general.datasets import router as dataset_router
 from app.routes.general.images import router as image_router
 from app.routes.general.labels import router as label_router
 from app.routes.general.masks import router as mask_router
+from app.routes.general.status import router as status_router
 from app.routes.services import semantic_router
 from app.routes.services.completion_router import router as completion_segmentation_router
 from app.routes.services.prompted_router import router as prompted_segmentation_router
@@ -59,13 +60,9 @@ def create_app():
     async def root():
         return {"message": "This is the API for DFKI"}
 
-    # Status endpoint
-    @app.get("/status")
-    async def status():
-        return {"status": "ok", "message": "API is running"}
-
     # Include the routers
     # General Routers
+    app.include_router(status_router)
     app.include_router(auth_router)
     app.include_router(dataset_router)
     app.include_router(image_router)

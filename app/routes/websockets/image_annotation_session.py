@@ -242,11 +242,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                         await handle_object_modify(websocket, client_msg, state)
                     case ClientMessageType.SEMANTIC_SELECT_MODEL:
                         await handle_semantic_select_model(websocket, client_msg, state)
-                    case ClientMessageType.SEMANTIC_SEGMENTATION:
+                    case ClientMessageType.SEMANTIC_INFERENCE:
                         await handle_semantic_segmentation(websocket, client_msg, state)
                     case ClientMessageType.PROMPTED_SELECT_MODEL:
                         await handle_prompted_select_model(websocket, client_msg, state)
-                    case ClientMessageType.PROMPTED_SEGMENTATION:
+                    case ClientMessageType.PROMPTED_INFERENCE:
                         await handle_prompted_segmentation(websocket, client_msg, state)
                     case ClientMessageType.COMPLETION_SELECT_MODEL:
                         await handle_completion_select_model(websocket, client_msg, state)
@@ -491,7 +491,12 @@ async def handle_semantic_select_model(websocket: WebSocket, client_msg: ClientM
 
 async def handle_semantic_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle prompted_segmentation using an automatic model. """
-    inference_req = SemanticSegmentationRequest.model_validate(client_msg.data)
+    model_registry_key = client_msg.data.get("model_registry_key")
+    inference_req = SemanticSegmentationRequest(
+        model_registry_key=model_registry_key,
+        image_url=state.image_db.file_path,
+        user_id=state.user_id,
+    )
     response = await state._running_backends[Backends.SEMANTIC_SEGMENTATION.value].inference(inference_req)
     contour_hierarchy = ContourHierarchy.model_validate(response["result"])
     await send_msg(websocket, ServerMessage(

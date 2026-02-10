@@ -32,7 +32,7 @@ class BaseService(ABC):
         url = f"{self.backend_url}/health"
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                return await client.get(url)
+                return (await client.get(url)).json()
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
             logger.error(f"Error checking prompted prompted_segmentation backend: {e}")
             return False
