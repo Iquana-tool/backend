@@ -13,21 +13,18 @@ class Images(database):
     id = Column(Integer, primary_key=True, autoincrement=True)
     dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False)  # Foreign key to the datasets table
 
-    file_name = Column(String, nullable=False)  # Path to the image file
+    file_name = Column(String, nullable=False)  # Image file name
     file_path = Column(String, nullable=False)  # Full path to the image file on disk
     thumbnail_file_path = Column(String, nullable=False)  # Full path to the thumbnail image file on disk
     description = Column(String, nullable=True)  # Optional description of the image
 
     width = Column(Integer, nullable=False)  # Width of the image in pixels
     height = Column(Integer, nullable=False)  # Height of the image in pixels
-    channels = Column(Integer, nullable=False, default=3)  # Number of channels in the image (e.g., 3 for RGB)
+    color_mode = Column(String, nullable=False, default=3)  # Color mode of the image, eg. 'RGB', 'RGBA', 'L'
 
     scale_x = Column(Float, nullable=False, default=1)  # mm per pixel in X
     scale_y = Column(Float, nullable=False, default=1)  # mm per pixel in Y
     unit = Column(String(10), default="px")  # Default unit: px (for pixels)
-
-    scan_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'))  # Scan id for CT or MRI or OCT, etc.
-    index_in_scan = Column(Integer)  # Index of the image in the scan
 
     def __repr__(self):
         return (f"<Image(id='{self.id}', "

@@ -32,7 +32,7 @@ class BaseService(ABC):
         url = f"{self.backend_url}/health"
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                return await client.get(url)
+                return (await client.get(url)).json()
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
             logger.error(f"Error checking prompted prompted_segmentation backend: {e}")
             return False
@@ -85,8 +85,8 @@ class BaseService(ABC):
         """Crop the uploaded image to a contour. """
         with get_context_session() as session:
             contour = session.query(Contours.x, Contours.y).filter_by(id=contour_id).first()
-            x = json.loads(contour.x)
-            y = json.loads(contour.y)
+            x = contour.x
+            y = contour.y
             min_x = min(x)
             max_x = max(x)
             min_y = min(y)

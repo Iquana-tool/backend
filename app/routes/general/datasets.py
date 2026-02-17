@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
+from iquana_toolbox.schemas.contours import Contour
 from iquana_toolbox.schemas.image import Image
 from iquana_toolbox.schemas.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
@@ -108,13 +109,13 @@ async def share_dataset(
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    if dataset.created_by != user.id:
+    if dataset.created_by != user.username:
         raise HTTPException(status_code=403, detail="Only the owner can share this dataset")
-    user_to_share = db.query(Users).filter_by(name=share_with_username).first()
+    user_to_share = db.query(Users).filter_by(username=share_with_username).first()
     if not user_to_share:
         raise HTTPException(status_code=404, detail="User to share with not found")
     if user_to_share in dataset.shared_with:
-        return {"success": False, "message": "User already has access"}
+        return {"success": True, "message": "User already has access"}
     dataset.shared_with.append(user_to_share)
     db.commit()
     return {"success": True, "message": f"Dataset shared with {share_with_username}"}
@@ -146,7 +147,7 @@ async def get_all_datasets(
             "dataset_type": ds.dataset_type,
             "folder_path": ds.folder_path,
             "created_by": ds.created_by,
-            "shared_with": [u.id for u in ds.shared_with]
+            "shared_with": [u.username for u in ds.shared_with]
         }
         for ds in datasets
     ]}
@@ -414,8 +415,8 @@ async def get_labels(
     "/{dataset_id}/quantification")
 async def get_dataset_quantification(
         dataset_id: int,
-        include_label_ids: list[int] = None,
-        exclude: list[Literal["unreviewed", "not_fully_annotated"]] = ["unreviewed", "not_fully_annotated"],
+        exclude_unreviewed: bool = True,
+        exclude_not_fully_annotated: bool = True,
         as_download: bool = False,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
@@ -425,8 +426,8 @@ async def get_dataset_quantification(
 
     Args:
         dataset_id (int): The ID of the dataset to export.
-        include_label_ids (list[int], optional): List of label IDs to filter contours. Defaults to None.
-        exclude (list[Literal["unreviewed", "not_fully_annotated"]]): A list of tags for what to exclude.
+        exclude_not_fully_annotated (bool): Whether to exclude not fully annotated masks.
+        exclude_unreviewed (bool): Whether to exclude unreviewed contours.
         as_download (bool, optional): Whether to export as CSV. Defaults to False. If False, returns the data as a json.
         db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
         user (User): The current authenticated user.
@@ -441,37 +442,32 @@ async def get_dataset_quantification(
     .join(Masks, Masks.id == Contours.mask_id).join(Images, Images.id == Masks.image_id).filter(
         Images.dataset_id == dataset_id
     ))
-    if "not_fully_annotated" in exclude:
+    if exclude_not_fully_annotated:
         query = query.filter(Masks.fully_annotated == True)
-    if "unreviewed" in exclude:
+    if exclude_unreviewed:
         query = query.filter(Contours.reviewed_by.any())
-    if include_label_ids:
-        query = query.filter(Contours.label_id.in_(include_label_ids))
 
     dataset_name = db.query(Datasets).filter_by(id=dataset_id).first().name
 
     data = query.all()
     df_data = {}
     for row in data:
-        contour, file_name, finished, generated = row
+        contour: Contour = Contour.from_db(row[0])
+        file_name: str = row[1]
         label_name = get_hierarchical_label_name(contour.label_id)
-        diameters = json.loads(contour.diameters) if isinstance(contour.diameters, str) else contour.diameters
-        coords = json.loads(contour.coords) if isinstance(contour.coords, str) else contour.coords
 
         df_data.setdefault("file_name", []).append(file_name)
         df_data.setdefault("label", []).append(label_name)
         df_data.setdefault("label_id", []).append(contour.label_id)
         df_data.setdefault("contour_id", []).append(contour.id)
-        df_data.setdefault("area", []).append(contour.area)
-        df_data.setdefault("perimeter", []).append(contour.perimeter)
-        df_data.setdefault("circularity", []).append(contour.circularity)
-        df_data.setdefault("diameter_avg", []).append(str(np.mean(diameters)) if diameters else None)
-        df_data.setdefault("coords_x", []).append(str(coords["x"]) if coords else None)
-        df_data.setdefault("coords_y", []).append(str(coords["y"]) if coords else None)
-        df_data.setdefault("centroid_x", []).append(str(np.mean(coords["x"])) if coords else None)
-        df_data.setdefault("centroid_y", []).append(str(np.mean(coords["y"])) if coords else None)
-        df_data.setdefault("finished", []).append(finished)
-        df_data.setdefault("generated", []).append(generated)
+        df_data.setdefault("area", []).append(contour.quantification.area)
+        df_data.setdefault("perimeter", []).append(contour.quantification.perimeter)
+        df_data.setdefault("circularity", []).append(contour.quantification.circularity)
+        df_data.setdefault("diameter_avg", []).append(contour.quantification.max_diameter)
+        df_data.setdefault("coords_x", []).append(contour.x)
+        df_data.setdefault("coords_y", []).append(contour.y)
+        df_data.setdefault("centroid_x", []).append(np.mean(contour.x))
+        df_data.setdefault("centroid_y", []).append(np.mean(contour.y))
     df = pd.DataFrame(df_data)
     if df.empty:
         return {

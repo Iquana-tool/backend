@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, ForeignKey, Boolean, exists, case, not_, select, func
+from sqlalchemy import Column, Integer, ForeignKey, Boolean, exists, case, not_, select, func, String
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
 
@@ -13,6 +13,7 @@ class Masks(database):
     image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'),
                       nullable=False)
     fully_annotated = Column(Boolean, default=False, nullable=False)  # Users can mark a mask as fully annotated indicating that all objects are there.
+    file_path = Column(String, nullable=False)  # Where this mask should be saved
     contours = relationship("Contours", backref="mask")
 
     @hybrid_property
@@ -23,7 +24,7 @@ class Masks(database):
         if not self.fully_annotated:
             return "in_progress"
         for contour in self.contours:
-            if not contour.reviewed_by.any():
+            if not any(contour.reviewed_by):
                 return "reviewable"
         return "finished"
 

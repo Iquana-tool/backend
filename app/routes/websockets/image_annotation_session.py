@@ -4,8 +4,6 @@ from logging import getLogger
 
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
-from pydantic import field_validator, BaseModel, Field, PrivateAttr
-from pydantic_core import ValidationError
 from iquana_toolbox.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
 from iquana_toolbox.schemas.contours import Contour
@@ -13,6 +11,8 @@ from iquana_toolbox.schemas.labels import Label
 from iquana_toolbox.schemas.prompts import Prompts
 from iquana_toolbox.schemas.service_requests import CompletionRequest as CompletionServiceRequest
 from iquana_toolbox.schemas.service_requests import PromptedSegmentationRequest, SemanticSegmentationRequest
+from pydantic import field_validator, BaseModel, Field, PrivateAttr
+from pydantic_core import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
 from app.database import get_context_session
@@ -28,7 +28,6 @@ from app.services.ai_services.base_service import BaseService
 from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
-from app.services.database_access import get_height_width_of_image
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
@@ -243,11 +242,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                         await handle_object_modify(websocket, client_msg, state)
                     case ClientMessageType.SEMANTIC_SELECT_MODEL:
                         await handle_semantic_select_model(websocket, client_msg, state)
-                    case ClientMessageType.SEMANTIC_SEGMENTATION:
+                    case ClientMessageType.SEMANTIC_INFERENCE:
                         await handle_semantic_segmentation(websocket, client_msg, state)
                     case ClientMessageType.PROMPTED_SELECT_MODEL:
                         await handle_prompted_select_model(websocket, client_msg, state)
-                    case ClientMessageType.PROMPTED_SEGMENTATION:
+                    case ClientMessageType.PROMPTED_INFERENCE:
                         await handle_prompted_segmentation(websocket, client_msg, state)
                     case ClientMessageType.COMPLETION_SELECT_MODEL:
                         await handle_completion_select_model(websocket, client_msg, state)
@@ -266,6 +265,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                         pass
             except Exception as e:
                 logger.error(f"Ran into an error handling message: {e} \n Message: {client_msg}")
+                raise e
                 await send_msg(websocket, ServerMessage(
                     id=client_msg.id,
                     type=ServerMessageType.ERROR,
@@ -303,6 +303,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
         except Exception:
             # Websocket might already be closed, ignore
             pass
+        # Save the session state and the mask to disk
+        # TODO save the session state
+        pass
+
 
 
 async def handle_focus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -487,7 +491,12 @@ async def handle_semantic_select_model(websocket: WebSocket, client_msg: ClientM
 
 async def handle_semantic_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle prompted_segmentation using an automatic model. """
-    inference_req = SemanticSegmentationRequest.model_validate(client_msg.data)
+    model_registry_key = client_msg.data.get("model_registry_key")
+    inference_req = SemanticSegmentationRequest(
+        model_registry_key=model_registry_key,
+        image_url=state.image_db.file_path,
+        user_id=state.user_id,
+    )
     response = await state._running_backends[Backends.SEMANTIC_SEGMENTATION.value].inference(inference_req)
     contour_hierarchy = ContourHierarchy.model_validate(response["result"])
     await send_msg(websocket, ServerMessage(
@@ -551,6 +560,7 @@ async def handle_prompted_segmentation(
 
     response_seg = await state._running_backends[Backends.PROMPTED_SEGMENTATION.value].inference(prompted_request)
     contour_model = Contour.model_validate(response_seg["result"])
+    contour_model.parent_id = state.focussed_contour_id
 
     # Compute SVG path before sending
     contour_model.compute_path(
@@ -636,7 +646,7 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
     with get_context_session() as session:
         contours_db = session.query(Contours).filter(Contours.id.in_(seed_contour_ids)).all()
         contours = [Contour.from_db(contour_db) for contour_db in contours_db]
-    height, width = get_height_width_of_image(state.image_id)
+    height, width = state.image_db.height, state.image_db.width
     positive_exemplars = [contour.to_binary_mask_model(height, width) for contour in contours]
 
     # Find out the concept
@@ -685,7 +695,7 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
         success=response["success"],
         message=f"Successfully added object with confidence score {object_to_add.confidence:.1%}" if response[
             "success"] else response["message"],
-        data=object_to_add.model_dump() if response["success"] else None,
+        data=response["added_contour"],
     ))
     return response
 
