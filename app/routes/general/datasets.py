@@ -18,7 +18,7 @@ from iquana_toolbox.schemas.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 from starlette import status
-from starlette.responses import StreamingResponse
+from starlette.responses import StreamingResponse, FileResponse
 
 from app.database import get_session
 from app.database.contours import Contours
@@ -29,6 +29,7 @@ from app.database.masks import Masks
 from app.database.users import Users
 from app.routes.general.masks import get_mask_annotation_status
 from app.services.auth import get_current_user
+from app.services.database_access import get_dataset_as_df
 from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path
 from config import DATASETS_DIR
@@ -36,6 +37,7 @@ from config import DATASETS_DIR
 # Create a router for the export functionality
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 logger = getLogger(__name__)
+
 
 @router.post("/create")
 async def create_dataset(name: str,
@@ -62,11 +64,11 @@ async def create_dataset(name: str,
             return {"success": False,
                     "message": f"Dataset with name '{name.strip()}' already exists.",
                     "error": "Duplicate dataset name"}
-        
+
         dataset_path = os.path.join(DATASETS_DIR, name.strip())
         # Use exist_ok=True to avoid FileExistsError if directory already exists
         os.makedirs(dataset_path, exist_ok=True)
-        
+
         new_dataset = Datasets(
             name=name.strip(),
             description=description.strip(),
@@ -88,12 +90,13 @@ async def create_dataset(name: str,
                 "message": "Error creating dataset.",
                 "error": str(e)}
 
+
 @router.post("/{dataset_id}/share")
 async def share_dataset(
-    dataset_id: int,
-    share_with_username: str,
-    db: Session = Depends(get_session),
-    user: "User" = Depends(get_current_user)
+        dataset_id: int,
+        share_with_username: str,
+        db: Session = Depends(get_session),
+        user: "User" = Depends(get_current_user)
 ):
     """Share a dataset with another user by username.
 
@@ -123,8 +126,8 @@ async def share_dataset(
 
 @router.get("/all")
 async def get_all_datasets(
-    db: Session = Depends(get_session),
-    user: "User" = Depends(get_current_user)
+        db: Session = Depends(get_session),
+        user: "User" = Depends(get_current_user)
 ):
     """Get all datasets owned by or shared with the current user.
 
@@ -155,9 +158,9 @@ async def get_all_datasets(
 
 @router.get("/{dataset_id}")
 async def get_dataset(
-    dataset_id: int,
-    db: Session = Depends(get_session),
-    user: "User" = Depends(get_current_user)
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: "User" = Depends(get_current_user)
 ):
     """Get dataset information.
 
@@ -177,9 +180,9 @@ async def get_dataset(
 
 @router.get("/{dataset_id}/images/count")
 async def get_number_of_images(
-    dataset_id: int,
-    db: Session = Depends(get_session),
-    user: "User" = Depends(get_current_user)
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: "User" = Depends(get_current_user)
 ):
     """Get the number of images in a dataset.
 
@@ -238,9 +241,9 @@ async def get_annotation_progress(dataset_id: int,
 
 @router.delete("/{dataset_id}")
 async def delete_dataset(
-    dataset_id: int,
-    db: Session = Depends(get_session),
-    user: "User" = Depends(get_current_user)
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: "User" = Depends(get_current_user)
 ):
     """Delete a dataset.
 
@@ -272,10 +275,10 @@ async def delete_dataset(
 
 @router.get("/{dataset_id}/images")
 async def list_images(
-    dataset_id: int,
-    filter_for_status: Literal["not_started", "in_progress", "reviewable", "finished"] | None = None,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+        dataset_id: int,
+        filter_for_status: Literal["not_started", "in_progress", "reviewable", "finished"] | None = None,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """List all images with masks of certain status for a given image ID.
 
@@ -318,10 +321,10 @@ async def list_images(
 
 @router.get("/{dataset_id}/images/b64")
 async def get_base64_images_of_dataset(
-    dataset_id: int,
-    limit: int = None,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+        dataset_id: int,
+        limit: int = None,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """Get all images of a dataset.
 
@@ -353,10 +356,10 @@ async def get_base64_images_of_dataset(
 
 @router.get("/{dataset_id}/thumbnails/b64")
 async def get_base64_thumbnails_of_dataset(
-    dataset_id: int,
-    limit: int = None,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+        dataset_id: int,
+        limit: int = None,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """Get all images of a dataset.
 
@@ -388,9 +391,9 @@ async def get_base64_thumbnails_of_dataset(
 
 @router.get("/{dataset_id}/labels")
 async def get_labels(
-    dataset_id: int,
-    db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
 ):
     """Retrieve all labels for a given dataset.
 
@@ -417,7 +420,6 @@ async def get_dataset_quantification(
         dataset_id: int,
         exclude_unreviewed: bool = True,
         exclude_not_fully_annotated: bool = True,
-        as_download: bool = False,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
@@ -438,56 +440,69 @@ async def get_dataset_quantification(
     """
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
-    query = (db.query(Contours, Images.file_name)
-    .join(Masks, Masks.id == Contours.mask_id).join(Images, Images.id == Masks.image_id).filter(
-        Images.dataset_id == dataset_id
-    ))
-    if exclude_not_fully_annotated:
-        query = query.filter(Masks.fully_annotated == True)
-    if exclude_unreviewed:
-        query = query.filter(Contours.reviewed_by.any())
+    df = await get_dataset_as_df(dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db)
+    if df.empty:
+        return {
+            "success": False,
+            "message": "No data found for the given dataset and filters.",
+            "data": None
+        }
+    else:
+        return {
+            "success": True,
+            "message": "Successfully exported the dataset as json.",
+            "data": df.to_json(orient="records"),
+        }
+
+
+@router.get(
+    "/{dataset_id}/quantification/download")
+async def download_dataset_quantification(
+        dataset_id: int,
+        exclude_unreviewed: bool = True,
+        exclude_not_fully_annotated: bool = True,
+        file_format: Literal["json", "csv"] = "json",
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """
+    Export quantification data for the given dataset_id and labels.
+
+    Args:
+        dataset_id (int): The ID of the dataset to export.
+        exclude_not_fully_annotated (bool): Whether to exclude not fully annotated masks.
+        exclude_unreviewed (bool): Whether to exclude unreviewed contours.
+        file_format (Literal["json", "csv"]): File format to export to.
+        db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: A dictionary containing the success status and message if error, or a
+        StreamingResponse with the CSV file.
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
 
     dataset_name = db.query(Datasets).filter_by(id=dataset_id).first().name
-
-    data = query.all()
-    df_data = {}
-    for row in data:
-        contour: Contour = Contour.from_db(row[0])
-        file_name: str = row[1]
-        label_name = get_hierarchical_label_name(contour.label_id)
-
-        df_data.setdefault("file_name", []).append(file_name)
-        df_data.setdefault("label", []).append(label_name)
-        df_data.setdefault("label_id", []).append(contour.label_id)
-        df_data.setdefault("contour_id", []).append(contour.id)
-        df_data.setdefault("area", []).append(contour.quantification.area)
-        df_data.setdefault("perimeter", []).append(contour.quantification.perimeter)
-        df_data.setdefault("circularity", []).append(contour.quantification.circularity)
-        df_data.setdefault("diameter_avg", []).append(contour.quantification.max_diameter)
-        df_data.setdefault("coords_x", []).append(contour.x)
-        df_data.setdefault("coords_y", []).append(contour.y)
-        df_data.setdefault("centroid_x", []).append(np.mean(contour.x))
-        df_data.setdefault("centroid_y", []).append(np.mean(contour.y))
-    df = pd.DataFrame(df_data)
+    df = await get_dataset_as_df(dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db)
     if df.empty:
         return {
             "success": False,
             "message": "No data found for the given dataset and filters."
         }
     else:
-        if as_download:
-            # Convert to CSV
-            csv_content = df.to_csv(index=False)
-            response = StreamingResponse(StringIO(csv_content), media_type="text/csv")
-            response.headers[
-                "Content-Disposition"] = f'attachment; filename="{dataset_name.replace(' ', '_')}_dataset.csv"'
-            return response
-        else:
-            return {
-                "success": True,
-                "message": "Successfully exported the dataset as json.",
-                "data": df.to_json(orient="records"),
-            }
+        file_data = None
+        match file_format:
+            case "json":
+                file_data = df.to_json(orient="records")
+            case "csv":
+                file_data = StringIO(df.to_csv(index=False))
+            case _:
+                raise ValueError(f"Invalid file format: {file_format}")
+        response = StreamingResponse(file_data, media_type=f"text/{file_format}")
+        response.headers[
+            "Content-Disposition"] = f'attachment; filename="{dataset_name.replace(' ', '_')}_dataset.{file_format}"'
+        return response
 
 
 @router.get(
