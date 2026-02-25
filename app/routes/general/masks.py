@@ -259,8 +259,8 @@ async def add_contour(mask_id: int,
                                             height=height,
                                             width=width)
     added_contour, changed = hierarchy.add_contour(contour_to_add)
-    # Add contour to the database
-    entry = save_contour_tree(db, added_contour, mask_id)
+    # Add contour to the database, preserving parent_id from the schema
+    entry = save_contour_tree(db, added_contour, mask_id, parent_id=added_contour.parent_id)
     db.commit()
     added_contour.id = entry.id
 
