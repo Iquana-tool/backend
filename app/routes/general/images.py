@@ -17,7 +17,8 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.services.auth import get_current_user
-from app.services.database_access import process_and_save_image
+from app.services.database_access.images import process_and_save_image
+from app.services.database_access.masks import create_new_mask
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
@@ -197,7 +198,7 @@ async def get_base64_thumbnails(
     }
 
 
-@router.post("/{image_id}/masks/create")
+@router.post("/{image_id}/masks/create", deprecated=True)
 async def create_new_mask_for_image(
         image_id: int,
         db: Session = Depends(get_session),
@@ -213,22 +214,7 @@ async def create_new_mask_for_image(
     Returns:
         dict: A dictionary containing the success status and mask ID.
     """
-    # Check if mask already exists for the image
-    existing_mask = db.query(Masks).filter_by(image_id=image_id).first()
-    if existing_mask:
-        return {
-            "success": False,
-            "message": "Mask already exists for this image.",
-            "mask_id": existing_mask.id
-        }
-    # Create a new mask
-    new_mask = await create_new_mask_for_image(image_id=image_id, db=db)
-    db.commit()
-    return {
-        "success": True,
-        "message": "Mask created successfully.",
-        "mask_id": new_mask.id
-    }
+    raise NotImplementedError("This method is not implemented.")
 
 
 @router.get("/{image_id}/masks")
@@ -277,7 +263,7 @@ async def post_semantic_mask_to_image(
         width=image.width,
     )
     # Add new contours from the mask
-    contour_hierarchy = await contour_hierarchy.from_semantic_mask(
+    contour_hierarchy = contour_hierarchy.from_semantic_mask(
         mask_array,
         label_hierarchy,
         user.username,
