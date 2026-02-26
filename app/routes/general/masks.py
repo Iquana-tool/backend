@@ -21,6 +21,7 @@ from app.database.labels import Labels
 from app.database.masks import Masks
 from app.services.auth import get_current_user
 from app.services.database_access import save_semantic_mask
+from app.services.database_access.masks import get_contour_hierarchy_of_mask, get_size_of_mask
 from app.services.util import get_mask_path_from_image_path
 
 logger = logging.getLogger(__name__)
@@ -219,13 +220,7 @@ async def get_contours_of_mask(mask_id: int,
         dict: A dictionary containing the success status and message if error, or a hierarchical JSON structure of
         contours for the given mask_id.
     """
-    contours_query = db.query(Contours).filter_by(mask_id=mask_id).all()
-    _, height, width = (db.query(Masks.id, Images.height, Images.width)
-                     .join(Images, Masks.image_id == Images.id)
-                     .filter(Masks.id == mask_id).first())
-    hierarchy = ContourHierarchy.from_query(contours_query,
-                                            height=height,
-                                            width=width)
+    hierarchy = await get_contour_hierarchy_of_mask(mask_id, db)
     return {
         "success": True,
         "message": f"Contours {'hierarchy' if not flattened else ''} retrieved.",
@@ -251,13 +246,7 @@ async def add_contour(mask_id: int,
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the added contour.
     """
-    contours_query = db.query(Contours).filter_by(mask_id=mask_id).all()
-    id, height, width = (db.query(Masks.id, Images.height, Images.width)
-                         .join(Images, Masks.image_id == Images.id)
-                         .filter(Masks.id == mask_id).first())
-    hierarchy = ContourHierarchy.from_query(contours_query,
-                                            height=height,
-                                            width=width)
+    hierarchy = await get_contour_hierarchy_of_mask(mask_id, db)
     added_contour, changed = hierarchy.add_contour(contour_to_add)
     # Add contour to the database
     entry = save_contour_tree(db, added_contour, mask_id)
@@ -266,7 +255,11 @@ async def add_contour(mask_id: int,
 
     # SVG path computation for the frontend
     # Get image dimensions and compute path
-    added_contour.compute_path(width, height)
+    size = await get_size_of_mask(mask_id, db)
+    added_contour.compute_path(
+        image_width=size["width"],
+        image_height=size["height"],
+    )
 
     return {
         "success": True,
