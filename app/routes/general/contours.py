@@ -10,6 +10,7 @@ from app.database import get_session
 from app.database.contours import Contours, save_contour_tree
 from app.database.users import Users
 from app.services.auth import get_current_user
+from app.services.database_access.contours import replace_contour as db_replace_contour
 
 router = APIRouter(prefix="/contours", tags=["contours"])
 logger = getLogger(__name__)
@@ -87,14 +88,10 @@ async def replace_contour(contour_id,
                           user: User = Depends(get_current_user),
                           db: Session = Depends(get_session)):
     """ Replace a contour with a new one. """
-    new_contour.id = contour_id
-    contour = db.query(Contours).filter_by(id=contour_id).first()
-    db.query(Contours).filter_by(id=contour_id).delete()
-    save_contour_tree(db, new_contour, contour.mask_id, contour.parent_id)
-    db.commit()
+    replaced = await db_replace_contour(contour_id, new_contour, db)
     return {
-        "success": True,
-        "message": "Successfully replaced contour.",
+        "success": replaced,
+        "message": "Successfully replaced contour." if replaced else "Could not replace contour.",
     }
 
 
