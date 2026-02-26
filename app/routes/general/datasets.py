@@ -1,5 +1,4 @@
 import io
-import json
 import os
 import shutil
 import zipfile
@@ -8,17 +7,14 @@ from io import StringIO
 from logging import getLogger
 from typing import Literal
 
-import numpy as np
-import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
-from iquana_toolbox.schemas.contours import Contour
 from iquana_toolbox.schemas.image import Image
 from iquana_toolbox.schemas.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 from starlette import status
-from starlette.responses import StreamingResponse, FileResponse
+from starlette.responses import StreamingResponse
 
 from app.database import get_session
 from app.database.contours import Contours
@@ -30,7 +26,6 @@ from app.database.users import Users
 from app.routes.general.masks import get_mask_annotation_status
 from app.services.auth import get_current_user
 from app.services.database_access import get_dataset_as_df
-from app.services.labels import get_hierarchical_label_name
 from app.services.util import get_mask_path_from_image_path
 from config import DATASETS_DIR
 

@@ -43,6 +43,7 @@ class AnnotationSessionState(BaseModel):
     """ A class to track the state of the annotation session. """
     image_id: int = Field(..., title="Image ID")
     user_id: str = Field(..., title="User ID")
+    contour_hierarchy: ContourHierarchy | None = Field(default=None, title="Contour Hierarchy")
     focussed_contour_id: int | None = Field(default=None, title="Contour ID")
     refinement_contour_id: int | None = Field(default=None, title="Contour ID")
     _running_backends: dict[str, BaseService] = PrivateAttr(
@@ -165,6 +166,7 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
                                                        flattened=False,
                                                        db=session)
         objects = contours_response.get("contours", [])
+        state.contour_hierarchy = objects
     return ServerMessage(
         id="test",
         type=ServerMessageType.SESSION_INITIALIZED,

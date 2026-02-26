@@ -220,7 +220,7 @@ async def get_contours_of_mask(mask_id: int,
         contours for the given mask_id.
     """
     contours_query = db.query(Contours).filter_by(mask_id=mask_id).all()
-    id, height, width = (db.query(Masks.id, Images.height, Images.width)
+    _, height, width = (db.query(Masks.id, Images.height, Images.width)
                      .join(Images, Masks.image_id == Images.id)
                      .filter(Masks.id == mask_id).first())
     hierarchy = ContourHierarchy.from_query(contours_query,

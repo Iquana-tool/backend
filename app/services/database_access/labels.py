@@ -1,5 +1,9 @@
+from logging import getLogger
+
 from app.database import get_context_session
 from app.database.labels import Labels
+
+logger = getLogger(__name__)
 
 
 def get_hierarchical_label_name(label_id):
