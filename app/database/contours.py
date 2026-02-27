@@ -1,7 +1,7 @@
 from iquana_toolbox.schemas.contours import Contour
 from sqlalchemy import Column, Integer, ForeignKey, Float, JSON, Boolean, String, Table, case
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped
 
 from app.database import database
 
@@ -17,21 +17,22 @@ reviewer_contour_association = Table('reviewer_contour_association',
 class Contours(database):
     """Contours table to store contour information for masks."""
     __tablename__ = 'contours'
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    mask_id = Column(Integer, ForeignKey('masks.id', ondelete='CASCADE'),
+    id: Mapped[int] = Column(Integer, primary_key=True, autoincrement=True)
+    mask_id: Mapped[int] = Column(Integer, ForeignKey('masks.id', ondelete='CASCADE'),
                      nullable=False)
-    parent_id = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'))
+    parent_id: Mapped[int] = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'))
     temporary = Column(Boolean, nullable=False, default=False)  # Whether a contour is temporary or not.
-    added_by = Column(String(255), nullable=False)  # Who added this contour: User, SAM2, UNET, DINO etc.
-    confidence_score = Column(Float, nullable=False)  # Confidence score provided by a model, for users this is set to 1
+    added_by: Mapped[str] = Column(String(255), nullable=False)  # Who added this contour: User, SAM2, UNET, DINO etc.
+    confidence_score: Mapped[float] = Column(Float, nullable=False)  # Confidence score provided by a model, for users this is set to 1
     # Allowing labels to be null, this allows contours without labels to exist, such that users can label them later.
-    label_id = Column(Integer, ForeignKey('labels.id', ondelete='CASCADE'), nullable=True)
-    area = Column(Float, nullable=False)
-    perimeter = Column(Float, nullable=False)
-    circularity = Column(Float, nullable=False)
-    diameter = Column(Float, nullable=False)
+    label_id: Mapped[int] = Column(Integer, ForeignKey('labels.id', ondelete='CASCADE'), nullable=True)
+    area: Mapped[float] = Column(Float, nullable=False)
+    perimeter: Mapped[float] = Column(Float, nullable=False)
+    circularity: Mapped[float] = Column(Float, nullable=False)
+    diameter: Mapped[float] = Column(Float, nullable=False)
     x = Column(JSON, nullable=False)
     y = Column(JSON, nullable=False)
+
     # Easy access to children, this makes accessing children much faster
     children = relationship("Contours", backref="parent", remote_side=[id], single_parent=True)
     reviewed_by = relationship("Users", secondary=reviewer_contour_association, back_populates="reviewed_objects")
