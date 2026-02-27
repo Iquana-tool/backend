@@ -463,9 +463,9 @@ async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, 
         response = await contours_db.delete_contour(contour_id, db)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
-        type=ServerMessageType.OBJECT_REMOVED if response["success"] else ServerMessageType.ERROR,
-        success=response["success"],
-        message=response["message"],
+        type=ServerMessageType.OBJECT_REMOVED,
+        success=True,
+        message="Object removed from mask.",
         data=None,
     ))
 
@@ -493,16 +493,17 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
         ]
 
     if fields_to_be_updated:
-        response = await contours_db.modify_contour(contour_id, **fields_to_be_updated)
+        with get_context_session() as db:
+            await contours_db.modify_contour(contour_id, db=db, **fields_to_be_updated)
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
-            type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
-            message=response["message"],
-            success=response["success"],
+            type=ServerMessageType.OBJECT_MODIFIED,
+            message="Modified object",
+            success=True,
             data={
                 "contour_id": contour_id,
                 "fields_to_be_updated": fields_to_be_updated,
-            } if response["success"] else None,
+            },
         ))
 
 

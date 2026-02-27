@@ -92,7 +92,7 @@ async def change_contour_label(
         dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
     # 1. Change the label_id, this checks if the new label is valid
-    await contours_db.modify_contour(contour_id, label_id=new_label_id)
+    await contours_db.modify_contour(contour_id, label_id=new_label_id, db=db)
 
     # 2. Add the user to the reviewed list
     # Get current reviewed_by users and add the current user if not already there

@@ -5,6 +5,7 @@ from io import StringIO
 from logging import getLogger
 from typing import Literal
 
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
@@ -354,7 +355,7 @@ async def get_dataset_quantification(
     """
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
-    df = await datasets_db.get_dataset_as_df(dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db)
+    df: pd.DataFrame = await datasets_db.get_dataset_as_df(dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db)
     if df.empty:
         return {
             "success": False,
@@ -365,7 +366,7 @@ async def get_dataset_quantification(
         return {
             "success": True,
             "message": "Successfully exported the dataset as json.",
-            "data": df.to_json(orient="records"),
+            "data": df.to_json(),
         }
 
 

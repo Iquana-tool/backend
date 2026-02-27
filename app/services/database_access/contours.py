@@ -4,9 +4,10 @@ from iquana_toolbox.schemas.contours import Contour
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
-from app.database.contours import Contours, save_contour_tree
+from app.database.contours import Contours, save_contour_tree, reviewer_contour_association
 from app.database.images import Images
 from app.database.masks import Masks
+from app.database.users import Users
 from app.services.database_access.labels import get_label_hierarchy
 
 logger = getLogger(__name__)
@@ -46,7 +47,7 @@ async def _check_contour_label(
         .filter(Contours.id == contour.id)
         .scalar()
     )
-    label_hierarchy = await get_label_hierarchy(dataset_id)
+    label_hierarchy = await get_label_hierarchy(dataset_id, db)
     parent_contour = db.query(Contours).filter_by(id=contour.parent_id).one_or_none()
     if parent_contour is None:
         parent_label_id = None
@@ -68,10 +69,11 @@ async def review_contour(
         db: Session
 ):
     contour_db = db.query(Contours).filter_by(id=contour_id).first()
+    user_db = db.query(Users).filter_by(username=user.username).first()
     if not contour_db:
         raise KeyError(f"Contour with id {contour_id} does not exist")
     if user not in contour_db.reviewed_by:
-        contour_db.reviewed_by.append(user)
+        contour_db.reviewed_by.append(user_db)
         db.commit()
 
 
@@ -99,10 +101,11 @@ async def remove_review(
         db: Session
 ):
     contour_db = db.query(Contours).filter_by(id=contour_id).first()
+    user_db = db.query(Users).filter_by(username=user.username).first()
     if not contour_db:
         raise KeyError(f"Contour with id {contour_id} does not exist")
     if user in contour_db.reviewed_by:
-        contour_db.reviewed_by.remove(user)
+        contour_db.reviewed_by.remove(user_db)
         db.commit()
 
 
@@ -120,8 +123,8 @@ async def modify_contour(
     contour = Contour.from_db(contour_db)
     for key, value in kwargs.items():
         if key in contour.__dict__:
-            if key == Contour.label_id.__name__:
-                contour = _check_contour_label(contour, value, db)
+            if key == "label_id":
+                contour = await _check_contour_label(contour, value, db)
             else:
                 setattr(contour, key, value)
     return await replace_contour(contour_db.id, contour, db)
