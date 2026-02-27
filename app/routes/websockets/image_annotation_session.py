@@ -741,16 +741,15 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
 async def replace_object(old_object_id, new_object: Contour, websocket: WebSocket, client_msg: ClientMessage,
                          state: AnnotationSessionState):
     with get_context_session() as db:
-        response = await contours_db.replace_contour(old_object_id, new_object, db)
+        success = await contours_db.replace_contour(old_object_id, new_object, db)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
-        type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
-        success=response["success"],
-        message=f"Successfully modified object." if response[
-            "success"] else response["message"],
-        data=new_object.model_dump() if response["success"] else None,
+        type=ServerMessageType.OBJECT_MODIFIED if success else ServerMessageType.ERROR,
+        success=success,
+        message="Successfully modified object." if success else f"Failed to replace contour {old_object_id}.",
+        data=new_object.model_dump() if success else None,
     ))
-    return response
+    return success
 
 
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
