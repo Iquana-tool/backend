@@ -7,11 +7,9 @@ from typing import Union
 import numpy as np
 from PIL import Image
 from iquana_toolbox.schemas.image import Image as ImageModel
-from fastapi import Depends
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 
-from app.database import get_session
 from app.database.images import Images
 from app.database.masks import Masks
 from app.services.database_access.masks import create_new_mask
@@ -20,9 +18,11 @@ from config import THUMBNAILS_DIR
 logger = getLogger(__name__)
 
 
-async def save_image_to_disk(image: Union[UploadFile, np.ndarray],
-                             file_path: Path,
-                             thumbnail_path: Path):
+async def save_image_to_disk(
+        image: Union[UploadFile, np.ndarray],
+        file_path: Path,
+        thumbnail_path: Path
+):
     """
     Save an image file to disk. If as_thumbnail is True, the image is downsized to 50 x 50 resolution before saving.
     """
@@ -52,7 +52,7 @@ async def process_and_save_image(
         file: UploadFile,
         dataset_id: int,
         dataset_folder: str,
-        db: Session = Depends(get_session)
+        db: Session
 ) -> int:
     """Internal logic to save one image and its thumbnail."""
     image_folder = Path(dataset_folder) / "images"
@@ -85,7 +85,7 @@ async def process_and_save_image(
 
 async def delete_image(
         image_id: int,
-        db: Session = Depends(get_session)
+        db: Session
 ):
     """Delete an image."""
     image = db.query(Images).filter_by(id=image_id).first()
@@ -101,9 +101,9 @@ async def delete_image(
 
 async def get_image_data(
         image_id: int,
-        as_thumbnail: bool = False,
-        as_base64: bool = False,
-        db: Session = Depends(get_session)
+        as_thumbnail: bool,
+        as_base64: bool,
+        db: Session
 ) -> Images:
     image_query = db.query(Images).filter_by(id=image_id).first()
     image = ImageModel.from_db(image_query)
@@ -114,9 +114,9 @@ async def get_image_data(
 
 async def get_images_data(
         image_ids: list[int],
-        as_thumbnail: bool = False,
-        as_base64: bool = False,
-        db: Session = Depends(get_session)
+        as_thumbnail: bool,
+        as_base64: bool,
+        db: Session
 ):
     images_query = db.query(Images).filter(Images.id.in_(image_ids)).all()
     if as_thumbnail:
@@ -134,5 +134,8 @@ async def get_images_data(
     return images
 
 
-async def get_masks_of_image(image_id: int, db: Session = Depends(get_session)):
+async def get_masks_of_image(
+        image_id: int,
+        db: Session
+):
     return db.query(Masks).filter_by(image_id=image_id).all()

@@ -6,13 +6,11 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
-from fastapi import Depends
 from iquana_toolbox.schemas.contours import Contour
 from iquana_toolbox.schemas.image import Image
 from iquana_toolbox.schemas.labels import LabelHierarchy
 from sqlalchemy.orm import Session
 
-from app.database import get_session
 from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
@@ -29,7 +27,7 @@ async def create_new_dataset(
         name: str,
         description: str,
         owner_username: str,
-        db: Session = Depends(get_session)
+        db: Session
 ):
     # Check if dataset with the same name already exists
     existing_dataset = db.query(Datasets).filter_by(name=name.strip()).first()
@@ -59,7 +57,7 @@ async def share_dataset(
         dataset_id: int,
         share_with_username: str,
         sharing_username: str,
-        db: Session = Depends(get_session)
+        db: Session
 ):
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if dataset.created_by != sharing_username:
@@ -75,7 +73,7 @@ async def share_dataset(
 async def user_has_sharing_permission_for_dataset(
         dataset_id: int,
         sharing_username: str,
-        db: Session = Depends(get_session)
+        db: Session
 ):
     """ Check whether a user can share a dataset. """
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
@@ -84,21 +82,21 @@ async def user_has_sharing_permission_for_dataset(
 
 async def get_dataset(
         dataset_id: int,
-        db: Session = Depends(get_session)
+        db: Session
 ):
     return db.query(Datasets).filter_by(id=dataset_id).first()
 
 
 async def get_num_of_images_in_dataset(
         dataset_id: int,
-        db: Session = Depends(get_session)
+        db: Session
 ):
     return db.query(Images).filter_by(dataset_id=dataset_id).count()
 
 
 async def get_annotation_progress_of_dataset(
         dataset_id: int,
-        db: Session = Depends(get_session)
+        db: Session
 ):
     masks = (
         db.query(Masks)
@@ -113,12 +111,15 @@ async def get_annotation_progress_of_dataset(
 
 async def get_datasets_of_user(
         user_name: str,
-        db: Session = Depends(get_session)
+        db: Session
 ):
     return db.query(Users).filter_by(username=user_name).one().accessible_datasets
 
 
-async def get_label_hierarchy_of_dataset(dataset_id: int, db: Session) -> LabelHierarchy:
+async def get_label_hierarchy_of_dataset(
+        dataset_id: int,
+        db: Session
+) -> LabelHierarchy:
     labels = db.query(Labels).filter_by(dataset_id=dataset_id)
     return LabelHierarchy.from_query(labels)
 
@@ -126,13 +127,14 @@ async def get_label_hierarchy_of_dataset(dataset_id: int, db: Session) -> LabelH
 async def has_dataset_deletion_permission(
         dataset_id: int,
         username: str,
-        db: Session = Depends(get_session)
+        db: Session
 ):
     raise NotImplementedError
 
+
 async def delete_dataset(
         dataset_id: int,
-        db: Session = Depends(get_session)
+        db: Session
 ):
     dataset = db.query(Datasets).filter_by(id=dataset_id).first()
     if not dataset:
@@ -147,8 +149,9 @@ async def delete_dataset(
 
 async def get_image_and_mask_ids_of_dataset(
         dataset_id: int,
+        db: Session,
         filter_for_status: Literal["not_started", "in_progress", "reviewable", "finished"] | None = None,
-        db: Session = Depends(get_session),
+
 ):
     query = db.query(Images, Masks).join(Masks, Images.id == Masks.image_id).filter(Images.dataset_id == dataset_id)
     if filter_for_status:
@@ -166,10 +169,11 @@ async def get_image_and_mask_ids_of_dataset(
 
 async def get_images_of_dataset(
         dataset_id: int,
+        db: Session,
         limit: int = None,
         as_thumbnail: bool = False,
         as_base64: bool = False,
-        db: Session = Depends(get_session)
+
 ):
     response = {}
     images_query = db.query(Images).filter_by(dataset_id=dataset_id).limit(limit).all()
