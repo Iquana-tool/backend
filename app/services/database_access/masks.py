@@ -5,9 +5,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
+from iquana_toolbox.schemas.contours import Contour
 from sqlalchemy.orm import Session
 
-from app.database.contours import Contours
+from app.database.contours import Contours, save_contour_tree
 from app.database.images import Images
 from app.database.masks import Masks
 
@@ -50,10 +51,44 @@ async def get_contour_hierarchy_of_mask(mask_id: int, db: Session):
 
 
 async def get_size_of_mask(mask_id: int, db: Session):
-    _, height, width = (db.query(Masks.id, Images.height, Images.width)
+    print(mask_id)
+    result = (db.query(Masks.id, Images.height, Images.width)
                         .join(Images, Masks.image_id == Images.id)
                         .filter(Masks.id == mask_id).first())
     return {
-        "height": height,
-        "width": width,
+        "height": result.height,
+        "width": result.width,
     }
+
+
+async def add_contour_to_mask(
+        mask_id: int,
+        contour_to_add: Contour,
+        db: Session,
+        check_hierarchy: bool = True,
+):
+    """
+    Add a contour to an existing mask and fit it into the hierarchy.
+    :param mask_id: ID of the mask the contour should be added to.
+    :param contour_to_add: Contour to be added to the mask.
+    :param check_hierarchy: Whether to fit the contour into the existing hierarchy. This is true by default and should
+        only be set to False, if the contour was already fitted. Otherwise, might lead to inconsistencies. When False,
+        skips creating the hierarchy.
+    :param db: Database session
+    """
+    if check_hierarchy:
+        hierarchy = await get_contour_hierarchy_of_mask(mask_id, db)
+        contour_to_add, changed = hierarchy.add_contour(contour_to_add)
+    # Add contour to the database
+    entry = save_contour_tree(db, contour_to_add, mask_id)
+    db.commit()
+    contour_to_add.id = entry.id
+
+    # SVG path computation for the frontend
+    # Get image dimensions and compute path
+    size = await get_size_of_mask(mask_id, db)
+    contour_to_add.compute_path(
+        image_width=size["width"],
+        image_height=size["height"],
+    )
+    return contour_to_add

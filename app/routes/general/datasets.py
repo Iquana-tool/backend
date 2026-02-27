@@ -25,7 +25,7 @@ from app.database.masks import Masks
 from app.database.users import Users
 from app.routes.general.masks import get_mask_annotation_status
 from app.services.auth import get_current_user
-from app.services.database_access import get_dataset_as_df
+from app.services.database_access.datasets import get_dataset_as_df
 from app.services.util import get_mask_path_from_image_path
 from config import DATASETS_DIR
 

@@ -7,32 +7,35 @@ from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.database.contours import Contours, save_contour_tree
-from app.database.users import Users
+from app.database.contours import Contours
 from app.services.auth import get_current_user
-from app.services.database_access.contours import replace_contour as db_replace_contour
+from app.services.database_access import contours as contours_db
 
 router = APIRouter(prefix="/contours", tags=["contours"])
 logger = getLogger(__name__)
 
 
 @router.get("/{contour_id}")
-async def get_contour(contour_id: int, db: Session = Depends(get_session), user: User = Depends(get_current_user)):
-    existing_contour = db.query(Contours).filter_by(id=contour_id).first()
-    if not existing_contour:
+async def get_contour(
+        contour_id: int,
+        user: User = Depends(get_current_user)
+):
+    try:
+        return {
+            "success": True,
+            "message": "Contour retrieved successfully.",
+            "contour": await contours_db.get_contour(contour_id)
+        }
+    except KeyError:
         raise HTTPException(status_code=404, detail="Contour not found.")
-    return {
-        "success": True,
-        "message": "Contour retrieved successfully.",
-        "contour": Contour.from_db(existing_contour)
-    }
 
 
 @router.patch("/{contour_id}")
-async def modify_contour(contour_id,
-                         db: Session = Depends(get_session),
-                         user: User = Depends(get_current_user),
-                         **kwargs):
+async def modify_contour(
+        contour_id,
+        user: User = Depends(get_current_user),
+        **kwargs
+):
     """
     Edit a contour by updating its coordinates or label.
 
@@ -45,50 +48,21 @@ async def modify_contour(contour_id,
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
-    try:
-        existing_contour = db.query(Contours).filter_by(id=contour_id).first()
-        if not existing_contour:
-            raise HTTPException(status_code=404, detail="Contour not found.")
-
-        for key, value in kwargs.items():
-            if hasattr(existing_contour, key):
-                if key == "label":
-                    # Update the label - validation for parent/child label consistency can be added here if needed
-                    setattr(existing_contour, key, value)
-                elif key == "reviewed_by":
-                    # Handle reviewed_by
-                    if value is not None:
-                        # Convert list of usernames to User instances
-                        user_instances = []
-                        for username in value:
-                            user = db.query(Users).filter_by(username=username).first()
-                            if user:
-                                user_instances.append(user)
-                            else:
-                                logger.warning(f"User {username} not found when adding to reviewed_by")
-                        existing_contour.reviewed_by = user_instances
-                else:
-                    setattr(existing_contour, key, value)
-
-        db.commit()
-        return {
-            "success": True,
-            "message": "Contour edited successfully.",
-            "contour": Contour.from_db(existing_contour)
-        }
-    except Exception as e:
-        logger.error(f"Error modifying contour: {e}")
-        db.rollback()
-        raise e
+    modified = await contours_db.modify_contour(contour_id, **kwargs)
+    return {
+        "success": modified,
+        "message": "Contour updated successfully." if modified else "Contour could not be updated.",
+    }
 
 
 @router.put("/{contour_id}")
-async def replace_contour(contour_id,
-                          new_contour: Contour,
-                          user: User = Depends(get_current_user),
-                          db: Session = Depends(get_session)):
+async def replace_contour(
+        contour_id,
+        new_contour: Contour,
+        user: User = Depends(get_current_user)
+):
     """ Replace a contour with a new one. """
-    replaced = await db_replace_contour(contour_id, new_contour, db)
+    replaced = await contours_db.replace_contour(contour_id, new_contour)
     return {
         "success": replaced,
         "message": "Successfully replaced contour." if replaced else "Could not replace contour.",
@@ -96,9 +70,11 @@ async def replace_contour(contour_id,
 
 
 @router.patch("/{contour_id}/label")
-async def change_contour_label(contour_id: int, new_label_id: int,
-                               user: User = Depends(get_current_user),
-                               db: Session = Depends(get_session)):
+async def change_contour_label(
+        contour_id: int,
+        new_label_id: int,
+        user: User = Depends(get_current_user)
+):
     """
     Edit the label of a contour and automatically mark it as reviewed by the current user.
 
@@ -111,59 +87,46 @@ async def change_contour_label(contour_id: int, new_label_id: int,
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
-    # Get existing contour to check current reviewers
-    existing_contour = db.query(Contours).filter_by(id=contour_id).first()
-    if not existing_contour:
-        raise HTTPException(status_code=404, detail="Contour not found.")
+    # 1. Change the label_id, this checks if the new label is valid
+    await contours_db.modify_contour(contour_id, label_id=new_label_id)
 
+    # 2. Add the user to the reviewed list
     # Get current reviewed_by users and add the current user if not already there
-    reviewed_by_usernames = [u.username for u in existing_contour.reviewed_by]
-    if user.username not in reviewed_by_usernames:
-        reviewed_by_usernames.append(user.username)
+    await contours_db.review_contour(contour_id, user)
 
     # Update both label and reviewed_by
-    return await modify_contour(contour_id, label_id=new_label_id, reviewed_by=reviewed_by_usernames, db=db)
+    return {
+        "success": True,
+        "message": "Contour updated successfully.",
+    }
 
 
 @router.post("/{contour_id}/reviews/add")
-async def add_contour_review(contour_id: int,
-                             user: User = Depends(get_current_user),
-                             db: Session = Depends(get_session)):
+async def add_contour_review(
+        contour_id: int,
+        user: User = Depends(get_current_user),
+):
     """ Mark a contour as reviewed by adding the current user to reviewed_by list."""
-    contour = db.query(Contours).filter_by(id=contour_id).first()
-    if contour is None:
-        raise HTTPException(status_code=404, detail="Contour not found.")
-
-    # Only add user if not already in reviewed_by list
-    if user not in contour.reviewed_by:
-        contour.reviewed_by.append(user)
-        db.commit()
+    await contours_db.review_contour(contour_id, user)
 
     return {
         "success": True,
-        "message": f"Contour {contour_id} marked as reviewed successfully.",
-        "reviewed_by": [u.username for u in contour.reviewed_by],
+        "message": f"Contour {contour_id} marked as reviewed successfully."
     }
 
 
 @router.delete("/{contour_id}/reviews/remove")
-async def remove_contour_review(contour_id: int,
-                                user: User = Depends(get_current_user),
-                                db: Session = Depends(get_session)):
+async def remove_contour_review(
+        contour_id: int,
+        user: User = Depends(get_current_user),
+        db: Session = Depends(get_session)
+):
     """ Mark a contour as reviewed by adding the current user to reviewed_by list."""
-    contour = db.query(Contours).filter_by(id=contour_id).first()
-    if contour is None:
-        raise HTTPException(status_code=404, detail="Contour not found.")
-
-    # Only add user if not already in reviewed_by list
-    if user in contour.reviewed_by:
-        contour.reviewed_by.remove(user)
-        db.commit()
+    await contours_db.remove_review(contour_id, user)
 
     return {
         "success": True,
         "message": f"User removed from reviewer of contour {contour_id}.",
-        "reviewed_by": [u.username for u in contour.reviewed_by],
     }
 
 
@@ -171,7 +134,7 @@ async def remove_contour_review(contour_id: int,
 async def remove_all_contour_reviews(contour_id: int,
                                      user: User = Depends(get_current_user),
                                      db: Session = Depends(get_session)):
-    """ Mark a contour as reviewed by adding the current user to reviewed_by list."""
+    """ Remove all reviews. Admin feature. """
     contour = db.query(Contours).filter_by(id=contour_id).first()
     if contour is None:
         raise HTTPException(status_code=404, detail="Contour not found.")
@@ -193,18 +156,7 @@ async def delete_contour(contour_id: int,
     Delete a contour and all its descendants (via CASCADE).
     Returns the list of deleted contour IDs.
     """
-    # Fetch the contour and all descendants in one query
-    contour = (
-        db.query(Contours)
-        .filter_by(id=contour_id)
-        .first()
-    )
-    if not contour:
-        raise HTTPException(status_code=404, detail="Contour not found.")
-
-    # Delete the root contour (CASCADE will handle the rest)
-    db.delete(contour)
-    db.commit()
+    await contours_db.delete_contour(contour_id)
 
     return {
         "success": True,

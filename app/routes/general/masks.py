@@ -20,8 +20,8 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.services.auth import get_current_user
-from app.services.database_access import save_semantic_mask
-from app.services.database_access.masks import get_contour_hierarchy_of_mask, get_size_of_mask
+from app.services.database_access.datasets import get_label_hierarchy_of_dataset
+from app.services.database_access.masks import get_contour_hierarchy_of_mask, add_contour_to_mask, save_semantic_mask
 from app.services.util import get_mask_path_from_image_path
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ async def delete_mask(
     Returns:
         dict: A dictionary containing the success status and message.
     """
-    mask = db.query(Masks).filter_by(id=mask_id).first()
+    mask = db.query(Masks).filter_by(id=mask_id).one_or_none()
     if mask is None:
         return {
             "success": True,
@@ -124,16 +124,8 @@ async def mark_as_fully_annotated(
         dict: A dictionary containing the success status and mask ID.
     """
     # Check if mask exists
-    mask, dataset_id, width, height = db.query(
-        Masks,
-        Images.dataset_id,
-        Images.width,
-        Images.height,
-    ).join(
-        Images, Masks.image_id == Images.id
-    ).filter_by(
-        id=mask_id
-    ).first()
+    mask = db.query(Masks).filter_by(id=mask_id).first()
+    image = mask.image
     if not mask:
         raise HTTPException(status_code=404, detail="Mask not found.")
     logger.info(f"Finishing this mask: {mask}")
@@ -144,14 +136,19 @@ async def mark_as_fully_annotated(
             "message": "Mask is already marked as fully annotated.",
             "mask_id": mask.id
         }
+
     # Generate the mask from contours
-    # Currently three separate queries, should be one
-    contours = db.query(Contours).filter_by(mask_id=mask_id).all()
-    contours_hierarchy = ContourHierarchy.from_query(contours, width, height)
-    labels = db.query(Labels).filter_by(dataset_id=dataset_id)
-    labels_hierarchy = LabelHierarchy.from_query(labels)
-    semantic_mask = contours_hierarchy.to_semantic_mask(height, width, labels_hierarchy.id_to_value_map)
-    await save_semantic_mask(semantic_mask, mask.file_path)
+    contours_hierarchy = await get_contour_hierarchy_of_mask(mask_id, db)
+    labels_hierarchy = await get_label_hierarchy_of_dataset(image.dataset_id, db)
+
+    await save_semantic_mask(
+        contours_hierarchy.to_semantic_mask(
+            height=image.height,
+            width=image.width,
+            label_id_to_value_map=labels_hierarchy.id_to_value_map
+        ),
+        Path(str(mask.file_path))
+    )
 
     # Mark the mask as finished
     mask.fully_annotated = True
@@ -231,7 +228,7 @@ async def get_contours_of_mask(mask_id: int,
 @router.put("/{mask_id}/contours")
 async def add_contour(mask_id: int,
                       contour_to_add: Contour,
-                      check_parent: bool = False,
+                      check_hierarchy: bool = True,
                       user: User = Depends(get_current_user),
                       db: Session = Depends(get_session)):
     """
@@ -240,27 +237,15 @@ async def add_contour(mask_id: int,
     Args:
         mask_id (int): The ID of the mask to which the contour will be added.
         contour_to_add (Contour): The contour data to add.
+        check_hierarchy (bool): Whether to check the hierarchy of the contour. Defaults to True. If true, fits the contour
+            into the existing hierarchy.
         user (User): Authentication dependency.
         db (Session): The database session.
 
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the added contour.
     """
-    hierarchy = await get_contour_hierarchy_of_mask(mask_id, db)
-    added_contour, changed = hierarchy.add_contour(contour_to_add)
-    # Add contour to the database
-    entry = save_contour_tree(db, added_contour, mask_id)
-    db.commit()
-    added_contour.id = entry.id
-
-    # SVG path computation for the frontend
-    # Get image dimensions and compute path
-    size = await get_size_of_mask(mask_id, db)
-    added_contour.compute_path(
-        image_width=size["width"],
-        image_height=size["height"],
-    )
-
+    added_contour = await add_contour_to_mask(mask_id, contour_to_add, db, check_hierarchy=check_hierarchy)
     return {
         "success": True,
         "message": "Contour added successfully.",
@@ -286,12 +271,19 @@ async def add_contours(mask_id: int,
     Returns:
         dict: A dictionary containing the success status, message, and lists of added and failed contour IDs.
     """
+    hierarchy = await get_contour_hierarchy_of_mask(mask_id, db)
     added = []
     for contour_to_add in contours_to_add:
         logger.info(f"Added {len(added)} / {len(contours_to_add)} contours.")
-        result = await add_contour(mask_id, contour_to_add, user, db)
-        if result["success"]:
-            added.append(result["added_contour"])
+        # 1. Add to the hierarchy, ensuring it fits and respects hierarchies
+        fitted_contour, changed = hierarchy.add_contour(contour_to_add)
+
+        # 2. Add the (fitted) contour to the db; don't need to check the hierarchy here
+        await add_contour_to_mask(mask_id, fitted_contour, db, check_hierarchy=False)
+
+        # 3. Add to a list for us to return
+        added.append(fitted_contour)
+
     if len(added) < len(contours_to_add):
         return {
             "success": False,

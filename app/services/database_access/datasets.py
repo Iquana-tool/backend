@@ -1,24 +1,23 @@
-import io
-import os
 from logging import getLogger
-from pathlib import Path
-from typing import Union
 
 import numpy as np
 import pandas as pd
-from PIL import Image
 from iquana_toolbox.schemas.contours import Contour
+from iquana_toolbox.schemas.labels import LabelHierarchy
 from sqlalchemy.orm import Session
-from starlette.datastructures import UploadFile
 
 from app.database.contours import Contours
 from app.database.images import Images
+from app.database.labels import Labels
 from app.database.masks import Masks
 from app.services.database_access.labels import get_hierarchical_label_name
-from app.services.database_access.masks import create_new_mask
-from config import THUMBNAILS_DIR
 
 logger = getLogger(__name__)
+
+
+async def get_label_hierarchy_of_dataset(dataset_id: int, db: Session) -> LabelHierarchy:
+    labels = db.query(Labels).filter_by(dataset_id=dataset_id)
+    return LabelHierarchy.from_query(labels)
 
 
 async def get_dataset_as_df(
