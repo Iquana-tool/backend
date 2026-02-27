@@ -4,15 +4,79 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from fastapi import Depends
 from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
 from iquana_toolbox.schemas.contours import Contour
 from sqlalchemy.orm import Session
 
+from app.database import get_session
 from app.database.contours import Contours, save_contour_tree
 from app.database.images import Images
 from app.database.masks import Masks
+from app.services.database_access import labels as labels_db
 
 logger = getLogger(__name__)
+
+
+async def get_mask(
+        mask_id: int,
+        db: Session = Depends(get_session)
+):
+    mask = db.query(Masks).filter_by(id=mask_id).first()
+    if mask is None:
+        raise KeyError(f"No mask with id {mask_id}")
+    return mask
+
+
+async def delete_mask(
+        mask_id: int,
+        db: Session = Depends(get_session)
+):
+    mask = db.query(Masks).filter_by(id=mask_id).one_or_none()
+    db.delete(mask)
+    db.commit()
+
+
+async def mark_mask_as_complete(
+        mask_id: int,
+        db: Session = Depends(get_session)
+):
+    mask = db.query(Masks).filter_by(id=mask_id).first()
+    image = mask.image
+
+    # Check if the mask is already finished
+    if mask.fully_annotated:
+        return
+
+    # Generate the mask from contours
+    contours_hierarchy = await get_contour_hierarchy_of_mask(mask_id, db)
+    labels_hierarchy = await labels_db.get_label_hierarchy(image.dataset_id, db)
+
+    await save_semantic_mask(
+        contours_hierarchy.to_semantic_mask(
+            height=image.height,
+            width=image.width,
+            label_id_to_value_map=labels_hierarchy.id_to_value_map
+        ),
+        Path(str(mask.file_path))
+    )
+
+    # Mark the mask as finished
+    mask.fully_annotated = True
+    db.commit()
+
+
+async def mark_mask_as_incomplete(
+        mask_id: int,
+        db: Session = Depends(get_session)
+):
+    existing_mask = db.query(Masks).filter_by(id=mask_id).first()
+    # Check if the mask is already unfinished
+    if not existing_mask.fully_annotated:
+        return
+    # Mark the mask as unfinished
+    existing_mask.fully_annotated = False
+    db.commit()
 
 
 async def save_semantic_mask(
@@ -41,7 +105,7 @@ async def create_new_mask(
     return new_mask
 
 
-async def get_contour_hierarchy_of_mask(mask_id: int, db: Session):
+async def get_contour_hierarchy_of_mask(mask_id: int, db: Session = Depends(get_session)):
     contours_query = db.query(Contours).filter_by(mask_id=mask_id).all()
     size = await get_size_of_mask(mask_id, db)
     return ContourHierarchy.from_query(contours_query,
@@ -64,7 +128,7 @@ async def get_size_of_mask(mask_id: int, db: Session):
 async def add_contour_to_mask(
         mask_id: int,
         contour_to_add: Contour,
-        db: Session,
+        db: Session = Depends(get_session),
         check_hierarchy: bool = True,
 ):
     """
@@ -92,3 +156,13 @@ async def add_contour_to_mask(
         image_height=size["height"],
     )
     return contour_to_add
+
+
+async def delete_all_contours_of_mask(mask_id: int, unreviewed_only: bool = False, db: Session = Depends(get_session)):
+    if unreviewed_only:
+        db.query(Contours).filter(Contours.mask_id == mask_id, ~Contours.reviewed_by.any()).delete()
+    else:
+        db.query(Contours).filter_by(mask_id=mask_id).delete()
+    mask = db.query(Masks).filter_by(id=mask_id).first()
+    mask.fully_annotated = False
+    db.commit()
