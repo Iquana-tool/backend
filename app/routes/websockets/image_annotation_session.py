@@ -7,7 +7,6 @@ from fastapi.websockets import WebSocket
 from iquana_toolbox.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
 from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
 from iquana_toolbox.schemas.contours import Contour
-from iquana_toolbox.schemas.labels import Label
 from iquana_toolbox.schemas.prompts import Prompts
 from iquana_toolbox.schemas.service_requests import CompletionRequest as CompletionServiceRequest
 from iquana_toolbox.schemas.service_requests import PromptedSegmentationRequest, SemanticSegmentationRequest
@@ -17,20 +16,16 @@ from pydantic_core.core_schema import ValidationInfo
 from starlette.websockets import WebSocketDisconnect
 
 from app.database import get_context_session
-from app.database.contours import Contours, save_contour_tree
 from app.database.images import Images
-from app.database.labels import Labels
 from app.database.masks import Masks
-from app.routes.general.contours import add_contour_review, delete_contour, \
-    modify_contour
-from app.routes.general.images import create_new_mask_for_image
-from app.routes.general.masks import mark_as_fully_annotated, get_contours_of_mask, add_contour
 from app.services.ai_services.base_service import BaseService
 from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
-from app.services.database_access.contours import replace_contour
-from app.services.database_access.masks import get_contour_hierarchy_of_mask, add_contour_to_mask
+from app.services.auth import get_current_user
+from app.services.database_access import contours as contours_db
+from app.services.database_access import labels as labels_db
+from app.services.database_access import masks as masks_db
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
@@ -45,8 +40,9 @@ class Backends(StrEnum):
 class AnnotationSessionState(BaseModel):
     """ A class to track the state of the annotation session. """
     image_id: int = Field(..., title="Image ID")
-    mask_id: int | None = Field(..., title="Mask ID", description="The mask id. If None, will be validated and the correct"
-                                                                  "id is fetched from the db.")
+    mask_id: int | None = Field(..., title="Mask ID",
+                                description="The mask id. If None, will be validated and the correct"
+                                            "id is fetched from the db.")
     # User ID might not be too interesting to save
     user_id: str = Field(..., title="User ID")
     contour_hierarchy: ContourHierarchy | None = Field(default=None, title="Contour Hierarchy")
@@ -109,7 +105,8 @@ class AnnotationSessionState(BaseModel):
                     self._running_backends.pop(key, None)
                     self._failed_backends[key] = service
             except Exception as e:
-                logger.error(f"Could not preload an image for service {key}. Maybe this service does not implement this endpoint.")
+                logger.error(
+                    f"Could not preload an image for service {key}. Maybe this service does not implement this endpoint.")
 
     async def check_and_register_backend(self, service: BaseService, key):
         if not await service.check_backend():
@@ -176,7 +173,7 @@ async def send_msg(websocket: WebSocket, message: ServerMessage):
     await websocket.send_json(message.model_dump_json())
 
 
-async def on_startup(state: AnnotationSessionState) -> ServerMessage:
+async def startup(websocket: WebSocket, state: AnnotationSessionState):
     """Function to be called at the start of an annotation session. Any initialization code can be placed here.
     """
     print(f"Annotation session initialized: {state.model_dump()}")
@@ -186,26 +183,38 @@ async def on_startup(state: AnnotationSessionState) -> ServerMessage:
     await state.check_and_register_backend(CompletionService(), Backends.COMPLETION_SEGMENTATION.value)
     await state.check_and_register_backend(SemanticSegmentationService(), Backends.SEMANTIC_SEGMENTATION.value)
 
+    await send_msg(
+        websocket,
+        ServerMessage(
+            id="0",
+            type=ServerMessageType.SESSION_INITIALIZED,
+            success=len(state._failed_backends) == 0,
+            message=f"Annotation session initialized."
+                    f"\nRunning backends: {list(state._running_backends.keys())}"
+                    f"\nFailed initializations: {list(state._failed_backends.keys())}",
+            data={
+                "running": list(state._running_backends.keys()),
+                "failed": list(state._failed_backends.keys()),
+            }
+        )
+    )
+
     # Upload the image to all running backends
     # This is theoretically not needed anymore
     await state.upload_image()
 
     logger.info("Annotation session initialized.")
-    with get_context_session() as session:
-        hierarchy = await get_contour_hierarchy_of_mask(state.mask_id, session)
+    hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id)
     state.contour_hierarchy = hierarchy
-    return ServerMessage(
-        id="test",
-        type=ServerMessageType.SESSION_INITIALIZED,
-        success=len(state._failed_backends) == 0,
-        message=f"Annotation session initialized."
-                f"\nRunning backends: {list(state._running_backends.keys())}"
-                f"\nFailed initializations: {list(state._failed_backends.keys())}",
-        data={
-            "running": list(state._running_backends.keys()),
-            "failed": list(state._failed_backends.keys()),
-            "objects": hierarchy.model_dump(),
-        }
+    await send_msg(
+        websocket,
+        ServerMessage(
+            id="1",
+            type=ServerMessageType.OBJECTS,
+            success=True,
+            message=f"Retrieved annotations",
+            data=hierarchy.model_dump()
+        )
     )
 
 
@@ -245,10 +254,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
     try:
         # Call some functions on startup
         logger.info(f"Calling on startup for user {user_id} and image {image_id}")
-        response = await on_startup(state)
-        logger.info(f"Startup response: {response.message}")
-        # Send a message about startup
-        await send_msg(websocket, response)
+        await startup(websocket, state)
         while True:
             client_msg = await receive_msg(websocket)
             # Here we handle different types of messages based on their "type" field
@@ -340,7 +346,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
         pass
 
 
-
 async def handle_focus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the client sending a focus image request"""
     focussed_contour_id = client_msg.data.get("focussed_contour_id")
@@ -415,10 +420,8 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
     """ Handle adding an object to the mask."""
     contour = Contour.model_validate_json(client_msg.data)
     contour, _ = state.contour_hierarchy.add_contour(contour)
-    with get_context_session() as session:
-        # We add the contour to the existing mask
-        # Check_hierarchy=False, because we already fitted it into the hierarchy copy in the session state
-        new_contour = await add_contour_to_mask(state.mask_id, contour, db=session, check_hierarchy=False)
+
+    # Send the message with the new object, before adding it to the db
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_ADDED,
@@ -427,6 +430,9 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
         data=state.contour_hierarchy.model_dump(),
     ))
 
+    # We add the contour to the db
+    # Check_hierarchy=False, because we already fitted it into the hierarchy copy in the session state
+    await masks_db.add_contour_to_mask(state.mask_id, contour, check_hierarchy=False)
 
 
 async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -434,8 +440,7 @@ async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage
         make them non temporary, they will be added to the mask and can be used for training.
     """
     contour_id = client_msg.data.get("contour_id")
-    with get_context_session() as session:
-        response = await add_contour_review(contour_id, db=session)
+    response = await contours_db.review_contour(contour_id, user=await get_current_user())
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
@@ -451,8 +456,7 @@ async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage
 async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle removing an object from the mask. """
     contour_id = client_msg.data.get("contour_id")
-    with get_context_session() as session:
-        response = await delete_contour(contour_id, db=session)
+    response = await contours_db.delete_contour(contour_id)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_REMOVED if response["success"] else ServerMessageType.ERROR,
@@ -485,8 +489,7 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
         ]
 
     if fields_to_be_updated:
-        with get_context_session() as session:
-            response = await modify_contour(contour_id, db=session, **fields_to_be_updated)
+        response = await contours_db.modify_contour(contour_id, **fields_to_be_updated)
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
@@ -523,17 +526,16 @@ async def handle_semantic_segmentation(websocket: WebSocket, client_msg: ClientM
     )
     response = await state._running_backends[Backends.SEMANTIC_SEGMENTATION.value].inference(inference_req)
     contour_hierarchy = ContourHierarchy.model_validate(response["result"])
+
+    # Send the new hierarchy first
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
-        type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
+        type=ServerMessageType.OBJECTS if response["success"] else ServerMessageType.ERROR,
         success=response["success"],
         message=response["message"],
         data=contour_hierarchy
     ))
-    for root_contours in contour_hierarchy.root_contours:
-        with get_context_session() as session:
-            save_contour_tree(session, root_contours, state.mask_id)
-
+    await masks_db.add_contours_from_hierarchy(state.mask_id, contour_hierarchy)
 
 
 async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -563,9 +565,7 @@ async def handle_prompted_segmentation(
     using_refinement = state.refinement_contour_id is not None
     if using_refinement:
         # Get the contour to refine
-        with get_context_session() as session:
-            contour = session.query(Contours).filter_by(id=state.refinement_contour_id).first()
-            contour_model = Contour.from_db(contour)
+        contour_model = await contours_db.get_contour(contour_id=state.refinement_contour_id)
         # The height and width are hardcoded here, which is not the preferred solution
         # It should resize to the og image shape, but for now this works.
         # SAM accepts previous masks in this format anyway.
@@ -676,9 +676,7 @@ async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMess
 async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the completion of a completion model. """
     seed_contour_ids = client_msg.data.get("seed_contour_ids")
-    with get_context_session() as session:
-        contours_db = session.query(Contours).filter(Contours.id.in_(seed_contour_ids)).all()
-        contours = [Contour.from_db(contour_db) for contour_db in contours_db]
+    contours = await contours_db.get_contours(seed_contour_ids)
     height, width = state.image_db.height, state.image_db.width
     positive_exemplars = [contour.to_binary_mask_model(height, width) for contour in contours]
 
@@ -688,10 +686,9 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
     label_id = contour_labels.pop() if len(
         contour_labels) == 1 else None  # If only one label is present we take it as a concept, otherwise we ignore it
     if label_id is not None:
-        with get_context_session() as session:
-            label_db = session.query(Labels).filter_by(id=label_id).one_or_none()
-            concept = Label.from_db(label_db)
-    else: concept = None
+        concept = await labels_db.get_label(label_id)
+    else:
+        concept = None
     service_request = CompletionServiceRequest(
         image_url=state.image_db.file_path,
         model_registry_key=client_msg.data.get('model_key'),
@@ -716,12 +713,10 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
 
 async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage,
                      state: AnnotationSessionState):
-    with get_context_session() as session:
-        response = await add_contour(
-            mask_id=state.mask_id,
-            contour_to_add=object_to_add,
-            db=session,
-        )
+    response = await masks_db.add_contour_to_mask(
+        mask_id=state.mask_id,
+        contour_to_add=object_to_add,
+    )
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
@@ -735,8 +730,7 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
 
 async def replace_object(old_object_id, new_object: Contour, websocket: WebSocket, client_msg: ClientMessage,
                          state: AnnotationSessionState):
-    with get_context_session() as session:
-        response = await replace_contour(old_object_id, new_object, db=session)
+    response = await contours_db.replace_contour(old_object_id, new_object)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
@@ -750,8 +744,7 @@ async def replace_object(old_object_id, new_object: Contour, websocket: WebSocke
 
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle marking a mask as finished. """
-    with get_context_session() as session:
-        response = await mark_as_fully_annotated(state.mask_id, db=session)
+    response = await masks_db.mark_mask_as_complete(state.mask_id)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,

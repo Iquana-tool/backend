@@ -22,6 +22,11 @@ async def get_contour(contour_id: int, db: Session = Depends(get_session)) -> Co
     return Contour.from_db(existing_contour)
 
 
+async def get_contours(contour_ids: list[int], db: Session = Depends(get_session)):
+    contours_db = db.query(Contours).filter(Contours.id.in_(contour_ids)).all()
+    return [Contour.from_db(contour_db) for contour_db in contours_db]
+
+
 async def _check_contour_label(
         contour: Contour,
         new_label_id: int,

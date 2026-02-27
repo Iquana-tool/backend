@@ -114,6 +114,20 @@ async def get_contour_hierarchy_of_mask(mask_id: int, db: Session = Depends(get_
                                        )
 
 
+async def add_contours_from_hierarchy(
+        mask_id: int,
+        hierarchy: ContourHierarchy,
+        db: Session = Depends(get_session)
+):
+    """ Delete all contours of a mask and then add the hierarchy to it."""
+    # 1. Delete all contours of the mask
+    await delete_all_contours_of_mask(mask_id, db=db)
+
+    # 2. Populate with new contours from the given hierarchy
+    for root_contours in hierarchy.root_contours:
+        save_contour_tree(db, root_contours, mask_id)
+
+
 async def get_size_of_mask(mask_id: int, db: Session):
     print(mask_id)
     result = (db.query(Masks.id, Images.height, Images.width)
