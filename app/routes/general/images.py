@@ -1,3 +1,4 @@
+import json
 import logging
 
 from fastapi import APIRouter, UploadFile, File, Depends
@@ -16,8 +17,8 @@ router = APIRouter(prefix="/images", tags=["images"])
 @router.post("/upload")
 async def upload_image(
         dataset_id: int,
+        file: UploadFile = File(...),
         db: Session = Depends(get_session),
-        file: UploadFile = File(...)
 ):
     dataset = await datasets_db.get_dataset(dataset_id, db=db)
     image_id = await images_db.process_and_save_image(file, dataset_id, dataset.folder_path, db=db)
@@ -31,8 +32,8 @@ async def upload_image(
 @router.post("/upload_multi")
 async def upload_images(
         dataset_id: int,
+        files: list[UploadFile] = File(...),
         db: Session = Depends(get_session),
-        files: list[UploadFile] = File(...)
 ):
     dataset = await datasets_db.get_dataset(dataset_id, db=db)
     image_ids = []
@@ -119,7 +120,7 @@ async def get_base64_thumbnail(
 
 @router.get("/ids/b64")
 async def get_base64_images(
-        image_ids: list[int],
+        image_ids: str,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
@@ -134,6 +135,7 @@ async def get_base64_images(
     Returns:
         A dictionary mapping from image ID to base64 encoded image.
     """
+    image_ids = json.loads(image_ids)
     return {
         "success": True,
         "message": f"Successfully retrieved {len(image_ids)} images.",
@@ -143,7 +145,7 @@ async def get_base64_images(
 
 @router.get("/ids/thumbnails")
 async def get_base64_thumbnails(
-        image_ids: list[int],
+        image_ids: str,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
@@ -151,13 +153,13 @@ async def get_base64_thumbnails(
 
     Args:
         image_ids (str): JSON string containing a list of image IDs to retrieve.
-        low_res (bool): Whether to return low resolution images (thumbnails). Defaults to False.
         db (Session): Database session dependency.
         user (User): The current authenticated user.
 
     Returns:
         A dictionary mapping from image ID to base64 encoded image.
     """
+    image_ids = json.loads(image_ids)
     return {
         "success": True,
         "message": f"Successfully retrieved {len(image_ids)} images.",

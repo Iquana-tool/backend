@@ -100,7 +100,7 @@ async def get_all_datasets(
     Returns:
         dict: A dictionary containing the success status and the list of datasets.
     """
-    datasets = await datasets_db.get_datasets_of_user(user.username, db=db)
+    datasets = await datasets_db.get_datasets_of_user(user, db=db)
     return {"success": True, "datasets": [
         {
             "id": ds.id,

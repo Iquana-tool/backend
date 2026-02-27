@@ -9,6 +9,7 @@ import pandas as pd
 from iquana_toolbox.schemas.contours import Contour
 from iquana_toolbox.schemas.image import Image
 from iquana_toolbox.schemas.labels import LabelHierarchy
+from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database.contours import Contours
@@ -17,6 +18,7 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
+from app.services.auth import get_current_user
 from app.services.database_access.labels import get_hierarchical_label_name
 from config import DATASETS_DIR
 
@@ -110,10 +112,11 @@ async def get_annotation_progress_of_dataset(
 
 
 async def get_datasets_of_user(
-        user_name: str,
+        user: User,
         db: Session
 ):
-    return db.query(Users).filter_by(username=user_name).one().accessible_datasets
+    datasets = db.query(Datasets).filter(Datasets.id.in_(user.available_datasets))
+    return datasets
 
 
 async def get_label_hierarchy_of_dataset(
@@ -206,7 +209,7 @@ async def get_dataset_as_df(
     for row in data:
         contour: Contour = Contour.from_db(row[0])
         file_name: str = row[1]
-        label_name = get_hierarchical_label_name(contour.label_id)
+        label_name = get_hierarchical_label_name(contour.label_id, db)
 
         df_data.setdefault("file_name", []).append(file_name)
         df_data.setdefault("label", []).append(label_name)

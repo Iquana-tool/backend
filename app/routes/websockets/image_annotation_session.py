@@ -729,11 +729,10 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
         )
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
-        type=ServerMessageType.OBJECT_ADDED if response["success"] else ServerMessageType.ERROR,
-        success=response["success"],
-        message=f"Successfully added object with confidence score {object_to_add.confidence:.1%}" if response[
-            "success"] else response["message"],
-        data=response["added_contour"],
+        type=ServerMessageType.OBJECT_ADDED,
+        success=True,
+        message=f"Successfully added object with confidence score {object_to_add.confidence:.1%}",
+        data=response,
     ))
     return response
 

@@ -121,13 +121,13 @@ async def get_images_data(
     images_query = db.query(Images).filter(Images.id.in_(image_ids)).all()
     if as_thumbnail:
         images = {
-            image_query:
+            image_query.id:
                 ImageModel.from_db(image_query).load_thumbnail(as_base64)
             for image_query in images_query
         }
     else:
         images = {
-            image_query:
+            image_query.id:
                 ImageModel.from_db(image_query).load_image(as_base64)
             for image_query in images_query
         }
