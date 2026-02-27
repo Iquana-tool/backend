@@ -1,14 +1,11 @@
 import io
 import os
 import zipfile
-from collections import defaultdict
 from io import StringIO
 from logging import getLogger
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
-from iquana_toolbox.schemas.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 from starlette import status
@@ -18,7 +15,6 @@ from app.database import get_session
 from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
-from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
 from app.services.auth import get_current_user
