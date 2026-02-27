@@ -44,3 +44,58 @@ async def get_label_hierarchy(
     return LabelHierarchy.from_query(label_db)
 
 
+async def create_label(
+        label_name: str,
+        dataset_id: int,
+        parent_label_id: int = None,
+        label_value: int = None,
+        db: Session = Depends(get_session),
+):
+    # Check if class already exists
+    existing_class = db.query(Labels).filter_by(dataset_id=dataset_id, name=label_name).first()
+    if existing_class:
+        raise ValueError("Label already exists.")
+    if parent_label_id and not db.query(Labels).filter_by(id=parent_label_id).exists():
+        raise ValueError("Parent label not found.")
+    if not label_value:
+        label_value = db.query(Labels).filter_by(dataset_id=dataset_id).count() + 1  # Default value
+    # Create a new class
+    new_label = Labels(dataset_id=dataset_id,
+                       name=label_name,
+                       parent_id=parent_label_id,
+                       value=label_value)
+    db.add(new_label)
+    db.commit()
+    return new_label
+
+
+async def update_label(
+        label_id: int,
+        updates: dict,
+        db: Session = Depends(get_session),
+):
+    existing_class = db.query(Labels).filter_by(id=label_id).first()
+    for k, v in updates.items():
+        setattr(existing_class, k, v)
+    db.commit()
+
+
+async def replace_label(
+        label_id: int,
+        new_label: Label,
+        db: Session = Depends(get_session)
+):
+    existing_class = db.query(Labels).filter_by(id=label_id).first()
+    parent_id = existing_class.parent_id
+    db.delete(existing_class)
+    new_label.id = label_id
+    new_label.parent = parent_id
+    new_label_db = Labels.from_schema(new_label)
+    db.add(new_label_db)
+    db.commit()
+
+
+async def delete_label(label_id: int, db: Session = Depends(get_session)):
+    existing_label = db.query(Labels).filter_by(id=label_id).first()
+    db.delete(existing_label)
+    db.commit()
