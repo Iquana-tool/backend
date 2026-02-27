@@ -18,13 +18,14 @@ logger = getLogger(__name__)
 @router.get("/{contour_id}")
 async def get_contour(
         contour_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     try:
         return {
             "success": True,
             "message": "Contour retrieved successfully.",
-            "contour": await contours_db.get_contour(contour_id)
+            "contour": await contours_db.get_contour(contour_id, db)
         }
     except KeyError:
         raise HTTPException(status_code=404, detail="Contour not found.")
@@ -33,6 +34,7 @@ async def get_contour(
 @router.patch("/{contour_id}")
 async def modify_contour(
         contour_id,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user),
         **kwargs
 ):
@@ -48,7 +50,7 @@ async def modify_contour(
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
-    modified = await contours_db.modify_contour(contour_id, **kwargs)
+    modified = await contours_db.modify_contour(contour_id, db, **kwargs)
     return {
         "success": modified,
         "message": "Contour updated successfully." if modified else "Contour could not be updated.",
@@ -59,10 +61,11 @@ async def modify_contour(
 async def replace_contour(
         contour_id,
         new_contour: Contour,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """ Replace a contour with a new one. """
-    replaced = await contours_db.replace_contour(contour_id, new_contour)
+    replaced = await contours_db.replace_contour(contour_id, new_contour, db)
     return {
         "success": replaced,
         "message": "Successfully replaced contour." if replaced else "Could not replace contour.",
@@ -73,6 +76,7 @@ async def replace_contour(
 async def change_contour_label(
         contour_id: int,
         new_label_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """
@@ -92,7 +96,7 @@ async def change_contour_label(
 
     # 2. Add the user to the reviewed list
     # Get current reviewed_by users and add the current user if not already there
-    await contours_db.review_contour(contour_id, user)
+    await contours_db.review_contour(contour_id, user, db)
 
     # Update both label and reviewed_by
     return {
@@ -104,10 +108,11 @@ async def change_contour_label(
 @router.post("/{contour_id}/reviews/add")
 async def add_contour_review(
         contour_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user),
 ):
     """ Mark a contour as reviewed by adding the current user to reviewed_by list."""
-    await contours_db.review_contour(contour_id, user)
+    await contours_db.review_contour(contour_id, user, db)
 
     return {
         "success": True,
@@ -122,7 +127,7 @@ async def remove_contour_review(
         db: Session = Depends(get_session)
 ):
     """ Mark a contour as reviewed by adding the current user to reviewed_by list."""
-    await contours_db.remove_review(contour_id, user)
+    await contours_db.remove_review(contour_id, user, db)
 
     return {
         "success": True,
@@ -156,7 +161,7 @@ async def delete_contour(contour_id: int,
     Delete a contour and all its descendants (via CASCADE).
     Returns the list of deleted contour IDs.
     """
-    await contours_db.delete_contour(contour_id)
+    await contours_db.delete_contour(contour_id, db)
 
     return {
         "success": True,

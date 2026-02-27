@@ -19,6 +19,7 @@ async def create_label(
         dataset_id: int,
         parent_label_id: int = None,
         label_value: int = None,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """Create a new label for a dataset.
@@ -34,7 +35,7 @@ async def create_label(
     Returns:
         dict: A dictionary containing the success status, message, and class ID if created successfully.
     """
-    new_label = await labels_db.create_label(label_name, dataset_id, parent_label_id, label_value)
+    new_label = await labels_db.create_label(label_name, dataset_id, db, parent_label_id, label_value)
     return {
         "success": True,
         "message": "Label created successfully.",
@@ -45,6 +46,7 @@ async def create_label(
 @router.get("/{label_id}")
 async def get_label(
         label_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user),
 ):
     """Create a new label for a dataset.
@@ -61,7 +63,7 @@ async def get_label(
     return {
         "success": True,
         "message": "Label retrieved successfully.",
-        "class_id": await labels_db.get_label(label_id),
+        "class_id": await labels_db.get_label(label_id, db),
     }
 
 
@@ -69,6 +71,7 @@ async def get_label(
 async def modify_label(
         label_id: int,
         updates: dict = None,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user),
 ):
     """Create a new label for a dataset.
@@ -82,7 +85,7 @@ async def modify_label(
         dict: A dictionary containing the success status, message, and class ID if created successfully.
     """
     # Check if class already exists
-    await labels_db.update_label(label_id, updates)
+    await labels_db.update_label(label_id, updates, db)
     return {
         "success": True,
         "message": "Label updated successfully.",
@@ -90,10 +93,12 @@ async def modify_label(
 
 
 @router.put("/{label_id}")
-async def replace_label(label_id: int,
-                        new_label: Label,
-                        user: User = Depends(get_current_user),
-                        db: Session = Depends(get_session)):
+async def replace_label(
+        label_id: int,
+        new_label: Label,
+        user: User = Depends(get_current_user),
+        db: Session = Depends(get_session)
+):
     """Create a new label for a dataset.
 
     Args:
@@ -104,7 +109,7 @@ async def replace_label(label_id: int,
     Returns:
         dict: A dictionary containing the success status, message, and class ID if created successfully.
     """
-    await labels_db.replace_label(label_id, new_label)
+    await labels_db.replace_label(label_id, new_label, db)
     return {
         "success": True,
         "message": "Label replaced successfully.",
@@ -114,6 +119,7 @@ async def replace_label(label_id: int,
 @router.delete("/{label_id}")
 async def delete_label(
         label_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """
@@ -127,7 +133,7 @@ async def delete_label(
     Returns:
         dict: A dictionary containing the success status and message.
     """
-    await labels_db.delete_label(label_id)
+    await labels_db.delete_label(label_id, db)
     return {
         "success": True,
         "message": "Class deleted successfully."

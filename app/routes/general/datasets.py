@@ -31,6 +31,7 @@ logger = getLogger(__name__)
 async def create_dataset(name: str,
                          description: str,
                          dataset_type: Literal["image", "scan", "DICOM"],
+                         db: Session = Depends(get_session),
                          current_user=Depends(get_current_user)):
     """Create a new dataset.
 
@@ -49,7 +50,8 @@ async def create_dataset(name: str,
             "dataset_id": await datasets_db.create_new_dataset(
                 name=name,
                 description=description,
-                owner_username=current_user.username
+                owner_username=current_user.username,
+                db=db
             )
             }
 
@@ -58,6 +60,7 @@ async def create_dataset(name: str,
 async def share_dataset(
         dataset_id: int,
         share_with_username: str,
+        db: Session = Depends(get_session),
         user: "User" = Depends(get_current_user)
 ):
     """Share a dataset with another user by username.
@@ -71,19 +74,21 @@ async def share_dataset(
     Returns:
         dict: A dictionary containing the success status and message.
     """
-    if not await datasets_db.user_has_sharing_permission_for_dataset(dataset_id, user.username):
+    if not await datasets_db.user_has_sharing_permission_for_dataset(dataset_id, user.username, db=db, ):
         return HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                              detail="User does not have permission to share this dataset.")
     await datasets_db.share_dataset(
         dataset_id,
         share_with_username,
-        sharing_username=user.username
+        sharing_username=user.username,
+        db=db,
     )
     return {"success": True, "message": f"Dataset shared with {share_with_username}"}
 
 
 @router.get("/all")
 async def get_all_datasets(
+        db: Session = Depends(get_session),
         user: "User" = Depends(get_current_user)
 ):
     """Get all datasets owned by or shared with the current user.
@@ -95,7 +100,7 @@ async def get_all_datasets(
     Returns:
         dict: A dictionary containing the success status and the list of datasets.
     """
-    datasets = await datasets_db.get_datasets_of_user(user.username)
+    datasets = await datasets_db.get_datasets_of_user(user.username, db=db)
     return {"success": True, "datasets": [
         {
             "id": ds.id,
@@ -126,7 +131,7 @@ async def get_dataset(
     Returns:
         dict: A dictionary containing the success status and dataset information.
     """
-    dataset = await datasets_db.get_dataset(dataset_id)
+    dataset = await datasets_db.get_dataset(dataset_id, db=db)
     return {"success": True, "message": "Dataset found.", "dataset": dataset}
 
 
@@ -149,7 +154,7 @@ async def get_number_of_images(
 
     return {
         "success": True,
-        "number_of_images": await datasets_db.get_num_of_images_in_dataset(dataset_id)
+        "number_of_images": await datasets_db.get_num_of_images_in_dataset(dataset_id, db=db)
     }
 
 
@@ -174,7 +179,7 @@ async def get_annotation_progress(dataset_id: int,
             - missing (int): Number of images missing annotations.
             - total_images (int): Total number of images in the dataset.
     """
-    status_dict, num_masks = await datasets_db.get_annotation_progress_of_dataset(dataset_id)
+    status_dict, num_masks = await datasets_db.get_annotation_progress_of_dataset(dataset_id, db=db, )
     return {
         "success": True,
         "message": "Annotation progress retrieved successfully.",
@@ -201,7 +206,7 @@ async def delete_dataset(
     """
     if dataset_id not in user.owned_datasets:
         return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot delete dataset.")
-    await datasets_db.delete_dataset(dataset_id)
+    await datasets_db.delete_dataset(dataset_id, db=db, )
     return {"success": True, "message": "Dataset deleted successfully."}
 
 
@@ -209,6 +214,7 @@ async def delete_dataset(
 async def list_images(
         dataset_id: int,
         filter_for_status: Literal["not_started", "in_progress", "reviewable", "finished"] | None = None,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """List all images with masks of certain status for a given image ID.
@@ -224,7 +230,8 @@ async def list_images(
     """
     image_data = await datasets_db.get_image_and_mask_ids_of_dataset(
         dataset_id,
-        filter_for_status
+        filter_for_status=filter_for_status,
+        db=db,
     )
     return {
         "success": True,
@@ -237,6 +244,7 @@ async def list_images(
 async def get_base64_images_of_dataset(
         dataset_id: int,
         limit: int = None,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """Get all images of a dataset.
@@ -252,7 +260,8 @@ async def get_base64_images_of_dataset(
     """
     response = await datasets_db.get_images_of_dataset(
         dataset_id,
-        limit,
+        limit=limit,
+        db=db,
         as_thumbnail=False,
         as_base64=True
     )
@@ -267,6 +276,7 @@ async def get_base64_images_of_dataset(
 async def get_base64_thumbnails_of_dataset(
         dataset_id: int,
         limit: int = None,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """Get all images of a dataset.
@@ -282,7 +292,8 @@ async def get_base64_thumbnails_of_dataset(
     """
     response = await datasets_db.get_images_of_dataset(
         dataset_id,
-        limit,
+        db=db,
+        limit=limit,
         as_thumbnail=True,
         as_base64=True
     )
@@ -296,6 +307,7 @@ async def get_base64_thumbnails_of_dataset(
 @router.get("/{dataset_id}/labels")
 async def get_labels(
         dataset_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """Retrieve all labels for a given dataset.
@@ -308,7 +320,7 @@ async def get_labels(
     Returns:
         dict: A dictionary containing the success status and the labels hierarchy.
     """
-    labels_hierarchy = await labels_db.get_label_hierarchy(dataset_id)
+    labels_hierarchy = await labels_db.get_label_hierarchy(dataset_id, db=db, )
     return {
         "success": True,
         "message": f"Retrieved {len(labels_hierarchy)} labels for dataset {dataset_id}.",
@@ -364,6 +376,7 @@ async def download_dataset_quantification(
         exclude_unreviewed: bool = True,
         exclude_not_fully_annotated: bool = True,
         file_format: Literal["json", "csv"] = "json",
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """
@@ -384,7 +397,7 @@ async def download_dataset_quantification(
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
 
-    dataset_name = (await datasets_db.get_dataset(dataset_id)).name
+    dataset_name = (await datasets_db.get_dataset(dataset_id, db=db, )).name
     df = await datasets_db.get_dataset_as_df(dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db)
     if df.empty:
         return {

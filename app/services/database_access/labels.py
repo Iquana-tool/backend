@@ -101,7 +101,10 @@ async def replace_label(
     db.commit()
 
 
-async def delete_label(label_id: int, db: Session = Depends(get_session)):
+async def delete_label(
+        label_id: int,
+        db: Session
+):
     existing_label = db.query(Labels).filter_by(id=label_id).first()
     db.delete(existing_label)
     db.commit()

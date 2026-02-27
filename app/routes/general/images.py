@@ -14,9 +14,13 @@ router = APIRouter(prefix="/images", tags=["images"])
 
 
 @router.post("/upload")
-async def upload_image(dataset_id: int, file: UploadFile = File(...)):
-    dataset = await datasets_db.get_dataset(dataset_id)
-    image_id = await images_db.process_and_save_image(file, dataset_id, dataset.folder_path)
+async def upload_image(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        file: UploadFile = File(...)
+):
+    dataset = await datasets_db.get_dataset(dataset_id, db=db)
+    image_id = await images_db.process_and_save_image(file, dataset_id, dataset.folder_path, db=db)
     return {
         "success": True,
         "message": f"Uploaded image {image_id}.",
@@ -25,13 +29,17 @@ async def upload_image(dataset_id: int, file: UploadFile = File(...)):
 
 
 @router.post("/upload_multi")
-async def upload_images(dataset_id: int, files: list[UploadFile] = File(...)):
-    dataset = await datasets_db.get_dataset(dataset_id)
+async def upload_images(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        files: list[UploadFile] = File(...)
+):
+    dataset = await datasets_db.get_dataset(dataset_id, db=db)
     image_ids = []
 
     for file in files:
         # Now we only query the dataset folder ONCE at the top
-        image_id = await images_db.process_and_save_image(file, dataset_id, dataset.folder_path)
+        image_id = await images_db.process_and_save_image(file, dataset_id, dataset.folder_path, db=db)
         image_ids.append(image_id)
 
     return {
@@ -44,6 +52,7 @@ async def upload_images(dataset_id: int, files: list[UploadFile] = File(...)):
 @router.delete("/{image_id}")
 async def delete_image(
         image_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """Delete an image and its associated masks.
@@ -55,15 +64,15 @@ async def delete_image(
     Returns:
         A dictionary indicating success and a message.
     """
-    await images_db.delete_image(image_id)
+    await images_db.delete_image(image_id, db=db)
     return {"success": True,
             "message": f"Deleted image {image_id}."}
-
 
 
 @router.get("/{image_id}/b64")
 async def get_base64_image(
         image_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """Get images via ids.
@@ -80,7 +89,7 @@ async def get_base64_image(
     return {
         "success": True,
         "message": f"Successfully retrieved image {image_id}.",
-        image_id: await images_db.get_image_data(image_id, as_thumbnail=False,as_base64=True)
+        image_id: await images_db.get_image_data(image_id, as_thumbnail=False, as_base64=True, db=db)
     }
 
 
@@ -104,13 +113,14 @@ async def get_base64_thumbnail(
     return {
         "success": True,
         "message": f"Successfully retrieved image {image_id}.",
-        image_id: await images_db.get_image_data(image_id, as_thumbnail=True, as_base64=True)
+        image_id: await images_db.get_image_data(image_id, as_thumbnail=True, as_base64=True, db=db)
     }
 
 
 @router.get("/ids/b64")
 async def get_base64_images(
         image_ids: list[int],
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """Get images via a list of image IDs. This gets the images in batches to avoid sending too many requests at once.
@@ -127,13 +137,14 @@ async def get_base64_images(
     return {
         "success": True,
         "message": f"Successfully retrieved {len(image_ids)} images.",
-        "images": await images_db.get_images_data(image_ids, as_thumbnail=False, as_base64=True)
+        "images": await images_db.get_images_data(image_ids, as_thumbnail=False, as_base64=True, db=db)
     }
 
 
 @router.get("/ids/thumbnails")
 async def get_base64_thumbnails(
         image_ids: list[int],
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """Get images via a list of image IDs. This gets the images in batches to avoid sending too many requests at once.
@@ -150,17 +161,20 @@ async def get_base64_thumbnails(
     return {
         "success": True,
         "message": f"Successfully retrieved {len(image_ids)} images.",
-        "images": await images_db.get_images_data(image_ids, as_thumbnail=True, as_base64=True)
+        "images": await images_db.get_images_data(image_ids, as_thumbnail=True, as_base64=True, db=db)
     }
 
 
 @router.get("/{image_id}/masks")
-async def get_mask_for_image(image_id: int,
-                             user: User = Depends(get_current_user)):
+async def get_mask_for_image(
+        image_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
     """ Get the mask image for a given image. """
     return {
         "success": True,
-        "masks": await images_db.get_masks_of_image(image_id)
+        "masks": await images_db.get_masks_of_image(image_id, db=db)
     }
 
 
@@ -168,6 +182,7 @@ async def get_mask_for_image(image_id: int,
 async def post_semantic_mask_to_image(
         image_id: int,
         mask: UploadFile = File(...),
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """

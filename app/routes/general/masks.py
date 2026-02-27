@@ -1,23 +1,13 @@
 import logging
-import os
-from io import StringIO
-from pathlib import Path
 
-import pandas as pd
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
 from iquana_toolbox.schemas.contours import Contour
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
-from starlette.responses import StreamingResponse, FileResponse
 
 from app.database import get_session
-from app.database.contours import Contours
-from app.database.images import Images
-from app.database.masks import Masks
 from app.services.auth import get_current_user
-from app.services.database_access import datasets as datasets_db
 from app.services.database_access import masks as masks_db
-from app.services.util import get_mask_path_from_image_path
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
@@ -26,6 +16,7 @@ router = APIRouter(prefix="/masks", tags=["masks"])
 @router.get("/{mask_id}")
 async def get_mask(
         mask_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """ Get a mask by its ID.
@@ -40,13 +31,14 @@ async def get_mask(
 
     return {
         "success": True,
-        "mask": await masks_db.get_mask(mask_id)
+        "mask": await masks_db.get_mask(mask_id, db)
     }
 
 
 @router.get("/{mask_id}/status")
 async def get_mask_annotation_status(
         mask_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """ Check the annotation status of a mask by its ID.
@@ -61,13 +53,14 @@ async def get_mask_annotation_status(
     return {
         "success": True,
         "message": "Mask status retrieved successfully.",
-        "status": (await masks_db.get_mask(mask_id)).status
+        "status": (await masks_db.get_mask(mask_id, db)).status
     }
 
 
 @router.delete("/{mask_id}")
 async def delete_mask(
         mask_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """ Delete a mask and all its contours by its ID.
@@ -79,7 +72,7 @@ async def delete_mask(
     Returns:
         dict: A dictionary containing the success status and message.
     """
-    await masks_db.delete_mask(mask_id)
+    await masks_db.delete_mask(mask_id, db)
     return {
         "success": True,
         "message": "Mask deleted successfully."
@@ -89,6 +82,7 @@ async def delete_mask(
 @router.patch("/{mask_id}/status/complete")
 async def mark_as_fully_annotated(
         mask_id: int,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """ Mark a mask as finished, generate it as an image file and upload it to the AI external service.
@@ -101,7 +95,7 @@ async def mark_as_fully_annotated(
     Returns:
         dict: A dictionary containing the success status and mask ID.
     """
-    await masks_db.mark_mask_as_complete(mask_id)
+    await masks_db.mark_mask_as_complete(mask_id, db)
     return {
         "success": True,
         "message": "Mask marked as finished successfully.",
@@ -126,7 +120,7 @@ async def unmark_as_fully_annotated(
         dict: A dictionary containing the success status and mask ID.
     """
     # Check if mask exists
-    await masks_db.mark_mask_as_incomplete(mask_id)
+    await masks_db.mark_mask_as_incomplete(mask_id, db)
     return {
         "success": True,
         "message": "Mask marked as not fully annotated successfully.",
@@ -137,6 +131,7 @@ async def unmark_as_fully_annotated(
 async def get_contours_of_mask(
         mask_id: int,
         flattened: bool = True,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """ Export quantification data for the given mask_id and labels.
@@ -153,7 +148,7 @@ async def get_contours_of_mask(
         dict: A dictionary containing the success status and message if error, or a hierarchical JSON structure of
         contours for the given mask_id.
     """
-    hierarchy = await masks_db.get_contour_hierarchy_of_mask(mask_id)
+    hierarchy = await masks_db.get_contour_hierarchy_of_mask(mask_id, db)
     return {
         "success": True,
         "message": f"Contours {'hierarchy' if not flattened else ''} retrieved.",
@@ -166,6 +161,7 @@ async def add_contour(
         mask_id: int,
         contour_to_add: Contour,
         check_hierarchy: bool = True,
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """
@@ -182,7 +178,7 @@ async def add_contour(
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the added contour.
     """
-    added_contour = await masks_db.add_contour_to_mask(mask_id, contour_to_add, check_hierarchy=check_hierarchy)
+    added_contour = await masks_db.add_contour_to_mask(mask_id, contour_to_add, check_hierarchy=check_hierarchy, db=db)
     return {
         "success": True,
         "message": "Contour added successfully.",
@@ -194,6 +190,7 @@ async def add_contour(
 async def add_contours(
         mask_id: int,
         contours_to_add: list[Contour],
+        db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """
@@ -209,7 +206,7 @@ async def add_contours(
     Returns:
         dict: A dictionary containing the success status, message, and lists of added and failed contour IDs.
     """
-    hierarchy = await masks_db.get_contour_hierarchy_of_mask(mask_id)
+    hierarchy = await masks_db.get_contour_hierarchy_of_mask(mask_id, db)
     added = []
     for contour_to_add in contours_to_add:
         logger.info(f"Added {len(added)} / {len(contours_to_add)} contours.")
@@ -217,7 +214,7 @@ async def add_contours(
         fitted_contour, changed = hierarchy.add_contour(contour_to_add)
 
         # 2. Add the (fitted) contour to the db; don't need to check the hierarchy here
-        await masks_db.add_contour_to_mask(mask_id, fitted_contour, check_hierarchy=False)
+        await masks_db.add_contour_to_mask(mask_id, fitted_contour, check_hierarchy=False, db=db)
 
         # 3. Add to a list for us to return
         added.append(fitted_contour)
@@ -239,11 +236,13 @@ async def add_contours(
 
 
 @router.delete("/{mask_id}/contours")
-async def delete_all_contours_of_mask(mask_id: int,
-                                      user: User = Depends(get_current_user),
-                                      db: Session = Depends(get_session)):
+async def delete_all_contours_of_mask(
+        mask_id: int,
+        user: User = Depends(get_current_user),
+        db: Session = Depends(get_session)
+):
     """ Deletes all contours of a mask. """
-    await masks_db.delete_all_contours_of_mask(mask_id)
+    await masks_db.delete_all_contours_of_mask(mask_id, db)
     return {
         "success": True,
         "message": f"Deleted all contours of mask {mask_id}"
@@ -255,7 +254,7 @@ async def delete_unreviewed_contours_of_mask(mask_id: int,
                                              user: User = Depends(get_current_user),
                                              db: Session = Depends(get_session)):
     """ Deletes all temporary contours of a mask. """
-    await masks_db.delete_all_contours_of_mask(mask_id, unreviewed_only=True)
+    await masks_db.delete_all_contours_of_mask(mask_id, unreviewed_only=True, db=db)
     return {
         "success": True,
         "message": f"Deleted all unreviewed contours of mask {mask_id}"
