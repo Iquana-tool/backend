@@ -61,7 +61,7 @@ async def create_label(
     existing_class = db.query(Labels).filter_by(dataset_id=dataset_id, name=label_name).first()
     if existing_class:
         raise ValueError("Label already exists.")
-    if parent_label_id and not db.query(Labels).filter_by(id=parent_label_id).exists():
+    if parent_label_id and db.query(Labels.id).filter_by(id=parent_label_id).scalar() is not None:
         raise ValueError("Parent label not found.")
     if not label_value:
         label_value = db.query(Labels).filter_by(dataset_id=dataset_id).count() + 1  # Default value
