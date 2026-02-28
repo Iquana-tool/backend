@@ -366,7 +366,7 @@ async def get_dataset_quantification(
         return {
             "success": True,
             "message": "Successfully exported the dataset as json.",
-            "data": df.to_json(),
+            "data": df.to_json(orient="records", default_handler=str),
         }
 
 
@@ -409,7 +409,7 @@ async def download_dataset_quantification(
         file_data = None
         match file_format:
             case "json":
-                file_data = df.to_json(orient="records")
+                file_data = df.to_json(orient="records", default_handler=str)
             case "csv":
                 file_data = StringIO(df.to_csv(index=False))
             case _:
