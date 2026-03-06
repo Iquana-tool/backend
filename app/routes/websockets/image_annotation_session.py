@@ -466,7 +466,7 @@ async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, 
         type=ServerMessageType.OBJECT_REMOVED,
         success=True,
         message="Object removed from mask.",
-        data=None,
+        data={"deleted_contours": [contour_id]},
     ))
 
 
