@@ -16,6 +16,7 @@ from pydantic_core.core_schema import ValidationInfo
 from starlette.websockets import WebSocketDisconnect
 
 from app.database import get_context_session
+from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
 from app.services.ai_services.base_service import BaseService
@@ -183,6 +184,10 @@ async def startup(websocket: WebSocket, state: AnnotationSessionState):
     await state.check_and_register_backend(CompletionService(), Backends.COMPLETION_SEGMENTATION.value)
     await state.check_and_register_backend(SemanticSegmentationService(), Backends.SEMANTIC_SEGMENTATION.value)
 
+    with get_context_session() as db:
+        mask_db = db.query(Masks).filter_by(id=state.mask_id).first()
+        mask_status = mask_db.status if mask_db else None
+
     await send_msg(
         websocket,
         ServerMessage(
@@ -195,6 +200,8 @@ async def startup(websocket: WebSocket, state: AnnotationSessionState):
             data={
                 "running": list(state._running_backends.keys()),
                 "failed": list(state._failed_backends.keys()),
+                "mask_id": state.mask_id,
+                "mask_status": mask_status,
             }
         )
     )
@@ -471,26 +478,28 @@ async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, 
 
 
 async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle Modifying an object. """
+    """ Handle Modifying an object. Supports updating label_id and reviewed_by via WebSocket.
+        label_id changes are validated against the dataset's label hierarchy.
+    """
     contour_id = client_msg.data.get("contour_id")
     fields_to_be_updated = client_msg.data.get("fields_to_be_updated")
-    if "label" in fields_to_be_updated:
-        fields_to_be_updated.pop("label")
-        await send_msg(websocket, ServerMessage(
-            id=client_msg.id,
-            type=ServerMessageType.WARNING,
-            message=f"You are trying to update the label of an object, this is not supported yet."
-                    f"{'\nUpdating remaining fields.' if fields_to_be_updated else 'Nothing else to update.'}",
-            success=False,
-            data=None
-        ))
 
-    #  actual authenticated username
+    # Resolve "current_user" placeholder to the actual authenticated user ID
     if "reviewed_by" in fields_to_be_updated and fields_to_be_updated["reviewed_by"]:
         fields_to_be_updated["reviewed_by"] = [
             state.user_id if username == "current_user" else username
             for username in fields_to_be_updated["reviewed_by"]
         ]
+
+    # If assigning a label_id, also add the current user to reviewed_by automatically
+    if "label_id" in fields_to_be_updated:
+        with get_context_session() as db:
+            existing = db.query(Contours).filter_by(id=contour_id).first()
+            if existing:
+                current_reviewers = [u.username for u in existing.reviewed_by]
+                if state.user_id not in current_reviewers:
+                    current_reviewers.append(state.user_id)
+                fields_to_be_updated["reviewed_by"] = current_reviewers
 
     if fields_to_be_updated:
         with get_context_session() as db:

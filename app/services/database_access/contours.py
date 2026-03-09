@@ -115,19 +115,38 @@ async def modify_contour(
         **kwargs
 ):
     """
-        Modify a contour by its contour id and kwargs. Checks whether the keyword exists, then updates the field.
-        Note: This method calls the db quite a lot and should be avoided. Rather instantiate a new model schema and call
-        replace_contour.
+        Modify a contour by its contour id and kwargs.
+        For simple field updates (label_id, reviewed_by, etc.) this performs an
+        in-place UPDATE rather than delete+re-insert, which preserves relationships
+        and is significantly faster.
     """
+
     contour_db = db.query(Contours).filter_by(id=contour_id).first()
-    contour = Contour.from_db(contour_db)
+    if not contour_db:
+        raise KeyError(f"Contour with id {contour_id} does not exist")
+
     for key, value in kwargs.items():
-        if key in contour.__dict__:
-            if key == "label_id":
-                contour = await _check_contour_label(contour, value, db)
+        if key == "label_id":
+            # Validate label against dataset hierarchy before setting
+            contour_schema = Contour.from_db(contour_db)
+            contour_schema = await _check_contour_label(contour_schema, value, db)
+            contour_db.label_id = contour_schema.label_id
+        elif key == "reviewed_by":
+            # reviewed_by is a list of usernames → resolve to User objects
+            if value:
+                reviewers = db.query(Users).filter(
+                    Users.username.in_(value)
+                ).all()
+                contour_db.reviewed_by = reviewers
             else:
-                setattr(contour, key, value)
-    return await replace_contour(contour_db.id, contour, db)
+                contour_db.reviewed_by = []
+        elif hasattr(contour_db, key):
+            setattr(contour_db, key, value)
+
+    db.flush()
+    db.commit()
+
+    return True
 
 
 async def replace_contour(

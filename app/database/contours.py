@@ -67,6 +67,8 @@ class Contours(database):
 
 def save_contour_tree(session, contour_schema: Contour, mask_id: int, parent_id=None):
     """Recursively saves a contour and all its children to the DB."""
+    from app.database.users import Users  # local import to avoid circular deps
+
     # 1. Convert schema to DB model
     db_contour = Contours.from_schema(contour_schema, mask_id)
     db_contour.parent_id = parent_id
@@ -75,7 +77,14 @@ def save_contour_tree(session, contour_schema: Contour, mask_id: int, parent_id=
     session.add(db_contour)
     session.flush()
 
-    # 3. Recurse for children
+    # 3. Restore reviewed_by relationship from schema (list of usernames)
+    if contour_schema.reviewed_by:
+        reviewers = session.query(Users).filter(
+            Users.username.in_(contour_schema.reviewed_by)
+        ).all()
+        db_contour.reviewed_by = reviewers
+
+    # 4. Recurse for children
     for child_schema in contour_schema.children:
         save_contour_tree(session, child_schema, mask_id, parent_id=db_contour.id)
 
