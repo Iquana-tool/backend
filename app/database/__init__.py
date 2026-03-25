@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-from config import DATABASE_FILE, DATA_DIR
+from config import DATABASE_URL, DATA_DIR
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -13,11 +13,7 @@ logger.setLevel(logging.DEBUG)
 # Define the declarative general
 database = declarative_base()
 
-# Create an engine
-if not os.path.exists(DATABASE_FILE):
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-engine = create_engine("sqlite:///" + DATABASE_FILE,
+engine = create_engine(DATABASE_URL,
                        pool_size=20,  # Default is usually 5
                        max_overflow=50,  # Increase from default 10
                        pool_pre_ping=True,  # Validate connections
