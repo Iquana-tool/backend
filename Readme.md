@@ -1,7 +1,7 @@
 # FastAPI Backend for Coral Analysis
 
 ## 📌 Overview
-This repository contains a FastAPI backend for coral analysis, integrating **Segment Anything Model 2 (SAM2)** for image segmentation. It follows a modular structure with clear separation between **routes, services, models, and schemas** to ensure scalability and maintainability.
+This repository contains a FastAPI backend for image analysis. It follows a modular structure with clear separation between **routes, services, models, and schemas** to ensure scalability and maintainability.
 
 ---
 ## 🏗️ Project Structure

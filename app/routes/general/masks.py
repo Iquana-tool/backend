@@ -178,7 +178,23 @@ async def add_contour(
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the added contour.
     """
-    added_contour = await masks_db.add_contour_to_mask(mask_id, contour_to_add, check_hierarchy=check_hierarchy, db=db)
+    contours_query = db.query(Contours).filter_by(mask_id=mask_id).all()
+    id, height, width = (db.query(Masks.id, Images.height, Images.width)
+                         .join(Images, Masks.image_id == Images.id)
+                         .filter(Masks.id == mask_id).first())
+    hierarchy = ContourHierarchy.from_query(contours_query,
+                                            height=height,
+                                            width=width)
+    added_contour, changed = hierarchy.add_contour(contour_to_add)
+    # Add contour to the database, preserving parent_id from the schema
+    entry = save_contour_tree(db, added_contour, mask_id, parent_id=added_contour.parent_id)
+    db.commit()
+    added_contour.id = entry.id
+
+    # SVG path computation for the frontend
+    # Get image dimensions and compute path
+    added_contour.compute_path(width, height)
+
     return {
         "success": True,
         "message": "Contour added successfully.",
