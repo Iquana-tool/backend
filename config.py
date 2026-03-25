@@ -13,6 +13,7 @@ THUMBNAILS_DIR = os.getenv("THUMBNAILS_DIR", os.path.join(DATA_DIR, "thumbnails"
 # URLS <- probably should be replaced with editable YAML
 DATABASE_URL = os.getenv("DATABASE_FILE", "sqlite:///" + os.path.join(DATA_DIR, "database.db"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+MLFLOW_URL = os.getenv("MLFLOW_URL", "http://localhost:5000")
 SEMANTIC_SEGMENTATION_BACKEND_URL = os.environ.get("SEMANTIC_SEGMENTATION_BACKEND_URL")
 PROMPTED_SEGMENTATION_BACKEND_URL = os.environ.get("PROMPTED_SEGMENTATION_BACKEND_URL")
 COMPLETION_SEGMENTATION_BACKEND_URL = os.environ.get("COMPLETION_SEGMENTATION_BACKEND_URL")

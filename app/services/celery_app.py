@@ -2,7 +2,7 @@ from celery import Celery
 from config import REDIS_URL
 
 celery_app = Celery(
-    "iquana_main_api",
+    "iquana_celery",
     broker=f"{REDIS_URL}/0",
     backend=f"{REDIS_URL}/1",
 )
