@@ -7,13 +7,18 @@ from .contours import Contours
 
 
 class Masks(database):
-    """ Represents a mask in the database. A mask holds all added contours."""
+    """
+        Masks table in the database. Masks are a collection of contours. Images can have multiple masks, eg. for
+        different labeling schemes or different annotators.
+    """
     __tablename__ = 'masks'
     id = Column(Integer, primary_key=True, autoincrement=True)
     image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'),
                       nullable=False)
     fully_annotated = Column(Boolean, default=False, nullable=False)  # Users can mark a mask as fully annotated indicating that all objects are there.
     file_path = Column(String, nullable=False)  # Where this mask should be saved
+
+    image = relationship("Images")
     contours = relationship("Contours", backref="mask")
 
     @hybrid_property

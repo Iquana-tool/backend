@@ -1,7 +1,7 @@
 from iquana_toolbox.schemas.contours import Contour
 from sqlalchemy import Column, Integer, ForeignKey, Float, JSON, Boolean, String, Table, case
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, Mapped
 
 from app.database import database
 
@@ -17,21 +17,22 @@ reviewer_contour_association = Table('reviewer_contour_association',
 class Contours(database):
     """Contours table to store contour information for masks."""
     __tablename__ = 'contours'
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    mask_id = Column(Integer, ForeignKey('masks.id', ondelete='CASCADE'),
+    id: Mapped[int] = Column(Integer, primary_key=True, autoincrement=True)
+    mask_id: Mapped[int] = Column(Integer, ForeignKey('masks.id', ondelete='CASCADE'),
                      nullable=False)
-    parent_id = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'))
+    parent_id: Mapped[int] = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'))
     temporary = Column(Boolean, nullable=False, default=False)  # Whether a contour is temporary or not.
-    added_by = Column(String(255), nullable=False)  # Who added this contour: User, SAM2, UNET, DINO etc.
-    confidence_score = Column(Float, nullable=False)  # Confidence score provided by a model, for users this is set to 1
+    added_by: Mapped[str] = Column(String(255), nullable=False)  # Who added this contour: User, SAM2, UNET, DINO etc.
+    confidence_score: Mapped[float] = Column(Float, nullable=False)  # Confidence score provided by a model, for users this is set to 1
     # Allowing labels to be null, this allows contours without labels to exist, such that users can label them later.
-    label_id = Column(Integer, ForeignKey('labels.id', ondelete='CASCADE'), nullable=True)
-    area = Column(Float, nullable=False)
-    perimeter = Column(Float, nullable=False)
-    circularity = Column(Float, nullable=False)
-    diameter = Column(Float, nullable=False)
+    label_id: Mapped[int] = Column(Integer, ForeignKey('labels.id', ondelete='CASCADE'), nullable=True)
+    area: Mapped[float] = Column(Float, nullable=False)
+    perimeter: Mapped[float] = Column(Float, nullable=False)
+    circularity: Mapped[float] = Column(Float, nullable=False)
+    diameter: Mapped[float] = Column(Float, nullable=False)
     x = Column(JSON, nullable=False)
     y = Column(JSON, nullable=False)
+
     # Easy access to children, this makes accessing children much faster
     children = relationship("Contours", backref="parent", remote_side=[id], single_parent=True)
     reviewed_by = relationship("Users", secondary=reviewer_contour_association, back_populates="reviewed_objects")
@@ -66,6 +67,8 @@ class Contours(database):
 
 def save_contour_tree(session, contour_schema: Contour, mask_id: int, parent_id=None):
     """Recursively saves a contour and all its children to the DB."""
+    from app.database.users import Users  # local import to avoid circular deps
+
     # 1. Convert schema to DB model
     db_contour = Contours.from_schema(contour_schema, mask_id)
     db_contour.parent_id = parent_id
@@ -74,7 +77,14 @@ def save_contour_tree(session, contour_schema: Contour, mask_id: int, parent_id=
     session.add(db_contour)
     session.flush()
 
-    # 3. Recurse for children
+    # 3. Restore reviewed_by relationship from schema (list of usernames)
+    if contour_schema.reviewed_by:
+        reviewers = session.query(Users).filter(
+            Users.username.in_(contour_schema.reviewed_by)
+        ).all()
+        db_contour.reviewed_by = reviewers
+
+    # 4. Recurse for children
     for child_schema in contour_schema.children:
         save_contour_tree(session, child_schema, mask_id, parent_id=db_contour.id)
 
