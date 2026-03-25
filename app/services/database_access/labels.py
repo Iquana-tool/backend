@@ -1,10 +1,8 @@
 from logging import getLogger
 
-from fastapi import Depends
-from iquana_toolbox.schemas.labels import Label, LabelHierarchy
+from iquana_toolbox.schemas.database.labels import Label, LabelHierarchy
 from sqlalchemy.orm import Session
 
-from app.database import get_session
 from app.database.labels import Labels
 
 logger = getLogger(__name__)

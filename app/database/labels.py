@@ -1,4 +1,4 @@
-from iquana_toolbox.schemas.labels import Label
+from iquana_toolbox.schemas.database.labels import Label
 from sqlalchemy import Column, Integer, ForeignKey, String
 
 from app.database import database

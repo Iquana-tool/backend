@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from logging import getLogger
 
 import httpx
-from iquana_toolbox.schemas.service_requests import BaseImageRequest
+from iquana_toolbox.schemas.networking.http.services import BaseImageRequest
 
 from app.database import get_context_session
 from app.database.contours import Contours

@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends
-from iquana_toolbox.schemas.labels import Label
+from iquana_toolbox.schemas.database.labels import Label
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 

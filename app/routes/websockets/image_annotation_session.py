@@ -4,12 +4,12 @@ from logging import getLogger
 
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
-from iquana_toolbox.schemas.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
-from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
-from iquana_toolbox.schemas.contours import Contour
+from iquana_toolbox.schemas.networking.websockets.annotation_session import ServerMessageType, ClientMessageType, ServerMessage, ClientMessage
+from iquana_toolbox.schemas.database.contour_hierarchy import ContourHierarchy
+from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.prompts import Prompts
-from iquana_toolbox.schemas.service_requests import CompletionRequest as CompletionServiceRequest
-from iquana_toolbox.schemas.service_requests import PromptedSegmentationRequest, SemanticSegmentationRequest
+from iquana_toolbox.schemas.networking.http.services import CompletionRequest as CompletionServiceRequest
+from iquana_toolbox.schemas.networking.http.services import PromptedSegmentationRequest, SemanticSegmentationRequest
 from pydantic import field_validator, BaseModel, Field, PrivateAttr
 from pydantic_core import ValidationError
 from pydantic_core.core_schema import ValidationInfo

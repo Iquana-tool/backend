@@ -1,25 +1,23 @@
 import json
-import os
 from logging import getLogger
 
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from iquana_toolbox.schemas.labels import LabelHierarchy
-from iquana_toolbox.schemas.service_requests import SemanticSegmentationRequest
+from iquana_toolbox.schemas.database.labels import LabelHierarchy
+from iquana_toolbox.schemas.networking.http.services import SemanticSegmentationRequest
 from iquana_toolbox.schemas.training import SemanticTrainingRequest, TrainingProgress, SemanticTrainingConfig
 from iquana_toolbox.schemas.user import User
 from redis.asyncio import Redis
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
-from app.services.celery_app import celery_app
 from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
 from app.services.auth import get_current_user
+from app.services.celery_app import celery_app
 from app.services.redis import get_redis
 
 logger = getLogger(__name__)

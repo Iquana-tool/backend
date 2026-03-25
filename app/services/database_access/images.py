@@ -6,7 +6,7 @@ from typing import Union
 
 import numpy as np
 from PIL import Image
-from iquana_toolbox.schemas.image import Image as ImageModel
+from iquana_toolbox.schemas.database.image import Image as ImageModel
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
 

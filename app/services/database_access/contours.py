@@ -1,6 +1,6 @@
 from logging import getLogger
 
-from iquana_toolbox.schemas.contours import Contour
+from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 

@@ -1,7 +1,7 @@
 from logging import getLogger
 
 import httpx
-from iquana_toolbox.schemas.service_requests import SemanticSegmentationRequest
+from iquana_toolbox.schemas.networking.http.services import SemanticSegmentationRequest
 from iquana_toolbox.schemas.training import SemanticTrainingRequest
 
 from app.services.ai_services.base_service import BaseService

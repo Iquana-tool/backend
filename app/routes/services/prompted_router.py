@@ -2,7 +2,7 @@ from logging import getLogger
 
 from fastapi import APIRouter, Depends
 from iquana_toolbox.schemas.user import User
-from iquana_toolbox.schemas.service_requests import PromptedSegmentationRequest
+from iquana_toolbox.schemas.networking.http.services import PromptedSegmentationRequest
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.auth import get_current_user
 

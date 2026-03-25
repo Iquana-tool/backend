@@ -6,9 +6,9 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
-from iquana_toolbox.schemas.contours import Contour
-from iquana_toolbox.schemas.image import Image
-from iquana_toolbox.schemas.labels import LabelHierarchy
+from iquana_toolbox.schemas.database.contours import Contour
+from iquana_toolbox.schemas.database.image import Image
+from iquana_toolbox.schemas.database.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 

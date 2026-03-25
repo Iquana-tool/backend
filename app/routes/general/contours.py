@@ -2,7 +2,7 @@ from logging import getLogger
 
 from fastapi import APIRouter
 from fastapi import Depends, HTTPException
-from iquana_toolbox.schemas.contours import Contour
+from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 

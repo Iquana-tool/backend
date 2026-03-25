@@ -1,7 +1,7 @@
 from logging import getLogger
 
 import httpx
-from iquana_toolbox.schemas.service_requests import PromptedSegmentationRequest
+from iquana_toolbox.schemas.networking.http.services import PromptedSegmentationRequest
 
 from app.services.ai_services.base_service import BaseService
 from config import PROMPTED_SEGMENTATION_BACKEND_URL as BASE_URL

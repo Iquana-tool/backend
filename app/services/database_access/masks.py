@@ -4,8 +4,8 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from iquana_toolbox.schemas.contour_hierarchy import ContourHierarchy
-from iquana_toolbox.schemas.contours import Contour
+from iquana_toolbox.schemas.database.contour_hierarchy import ContourHierarchy
+from iquana_toolbox.schemas.database.contours import Contour
 from sqlalchemy.orm import Session
 
 from app.database.contours import Contours, save_contour_tree

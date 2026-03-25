@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from iquana_toolbox.schemas.service_requests import CompletionRequest
+from iquana_toolbox.schemas.networking.http.services import CompletionRequest
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
