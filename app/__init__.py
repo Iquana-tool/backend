@@ -39,11 +39,14 @@ def create_app():
 
     init_db()
 
+    root_path = os.getenv("FASTAPI_ROOT_PATH", "").strip()
+
     app = FastAPI(
         title="Coral Segmentation API",
         description="FastAPI backend for interactive coral prompted_segmentation",
         version="0.1.0",
-        root_path="/demos/coral/api",  # Handle proxy prefix
+        # Keep empty for local runs; set FASTAPI_ROOT_PATH behind reverse proxy.
+        root_path=root_path,
     )
 
     # Configure CORS
