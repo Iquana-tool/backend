@@ -42,7 +42,7 @@ def create_app():
     root_path = os.getenv("FASTAPI_ROOT_PATH", "").strip()
 
     app = FastAPI(
-        title="Coral Segmentation API",
+        title="IQUANA API",
         description="FastAPI backend for interactive coral prompted_segmentation",
         version="0.1.0",
         # Keep empty for local runs; set FASTAPI_ROOT_PATH behind reverse proxy.
