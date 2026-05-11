@@ -119,16 +119,7 @@ class AnnotationSessionState(BaseModel):
 
     async def focus_contour(self, contour_id: int):
         self.focussed_contour_id = contour_id
-        successful = []
-        unsuccessful = []
-        for key, service in self._running_backends.items():
-            response = await service.focus_contour(self.user_id, self.focussed_contour_id)
-            if not response["success"]:
-                logger.error(f"{key} ran into an error. Focussing might not have work.")
-                unsuccessful.append(key)
-            else:
-                successful.append(key)
-        return successful, unsuccessful
+        return True
 
     async def unfocus_contour(self):
         self.focussed_contour_id = None
@@ -357,20 +348,17 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
 async def handle_focus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the client sending a focus image request"""
     focussed_contour_id = client_msg.data.get("focussed_contour_id")
-    successful, unsuccessful = await state.focus_contour(focussed_contour_id)
-    if len(unsuccessful) == 0:
+    successful = await state.focus_contour(focussed_contour_id)
+    if successful:
         message_type = ServerMessageType.SUCCESS
         message = "All services focussed!"
-    elif len(successful) == 0:
+    else:
         message_type = ServerMessageType.ERROR
         message = f"Failed to focus any service!"
-    else:
-        message_type = ServerMessageType.WARNING
-        message = f"Failed to focus some services! Failed services: {unsuccessful}"
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=message_type,
-        success=len(unsuccessful) == 0,
+        success=successful,
         message=message,
         data=None
     ))
