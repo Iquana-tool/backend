@@ -578,6 +578,8 @@ async def handle_prompted_segmentation(
     else:
         previous_mask = None
 
+    # Nested segmentation is currently ignored!
+
     prompted_request = PromptedSegmentationRequest(
         user_id=str(state.user_id),
         image_url=state.image_db.file_path,
