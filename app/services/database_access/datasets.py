@@ -1,8 +1,10 @@
 import os
 import shutil
 from collections import defaultdict
+from datetime import datetime, timezone
+import json
 from logging import getLogger
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -225,3 +227,156 @@ async def get_dataset_as_df(
         df_data.setdefault("coords_x", []).append(contour.x)
         df_data.setdefault("coords_y", []).append(contour.y)
     return pd.DataFrame(df_data)
+
+
+def _build_coco_polygon(
+        x_coords: list[float],
+        y_coords: list[float],
+        width: int,
+        height: int,
+) -> list[float]:
+    """Convert contour points to a flat COCO polygon list."""
+    if not x_coords or not y_coords:
+        return []
+
+    # Contours are usually stored normalized in [0, 1], but support legacy pixel coordinates.
+    is_normalized = (
+            max(abs(float(v)) for v in x_coords) <= 1.5
+            and max(abs(float(v)) for v in y_coords) <= 1.5
+    )
+    scale_x = float(width) if is_normalized else 1.0
+    scale_y = float(height) if is_normalized else 1.0
+
+    polygon = []
+    for x, y in zip(x_coords, y_coords):
+        polygon.append(float(x) * scale_x)
+        polygon.append(float(y) * scale_y)
+    return polygon
+
+
+async def export_dataset_contours_to_coco(
+        dataset_id: int,
+        db: Session,
+        exclude_not_fully_annotated: bool = True,
+        exclude_unreviewed: bool = True,
+        output_file_path: str | None = None,
+        log_to_mlflow: bool = False,
+        mlflow_run_id: str | None = None,
+) -> dict[str, Any]:
+    """Export all contours of a dataset to COCO JSON and save to disk."""
+    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
+    if not dataset:
+        return {"success": False, "message": "Dataset not found.", "dataset_id": dataset_id}
+
+    query = (
+        db.query(Contours, Images, Labels)
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .outerjoin(Labels, Labels.id == Contours.label_id)
+        .filter(Images.dataset_id == dataset_id)
+    )
+    if exclude_not_fully_annotated:
+        query = query.filter(Masks.fully_annotated == True)
+    if exclude_unreviewed:
+        query = query.filter(Contours.reviewed_by.any())
+
+    rows = query.all()
+
+    images_by_id: dict[int, dict[str, Any]] = {}
+    categories_by_id: dict[int, dict[str, Any]] = {}
+    annotations: list[dict[str, Any]] = []
+
+    for contour, image, label in rows:
+        if contour.label_id is None or label is None:
+            continue
+
+        if image.id not in images_by_id:
+            images_by_id[image.id] = {
+                "id": image.id,
+                "file_name": image.file_name,
+                "width": image.width,
+                "height": image.height,
+            }
+
+        if label.id not in categories_by_id:
+            categories_by_id[label.id] = {
+                "id": label.id,
+                "name": label.name,
+                "supercategory": "none",
+            }
+
+        polygon = _build_coco_polygon(contour.x, contour.y, image.width, image.height)
+        if len(polygon) < 6:
+            continue
+
+        x_points = polygon[0::2]
+        y_points = polygon[1::2]
+        min_x, max_x = min(x_points), max(x_points)
+        min_y, max_y = min(y_points), max(y_points)
+        bbox = [min_x, min_y, max_x - min_x, max_y - min_y]
+
+        annotations.append({
+            "id": contour.id,
+            "image_id": image.id,
+            "category_id": label.id,
+            "segmentation": [polygon],
+            "area": float(contour.area) if contour.area is not None else float(bbox[2] * bbox[3]),
+            "bbox": bbox,
+            "iscrowd": 0,
+        })
+
+    now_utc = datetime.now(timezone.utc)
+
+    coco_payload: dict[str, Any] = {
+        "info": {
+            "description": dataset.description or f"COCO export for dataset {dataset.name}",
+            "version": "1.0",
+            "year": now_utc.year,
+            "date_created": now_utc.isoformat(),
+        },
+        "licenses": [],
+        "images": list(images_by_id.values()),
+        "annotations": annotations,
+        "categories": list(categories_by_id.values()),
+    }
+
+    if output_file_path is None:
+        output_file_path = os.path.join(str(dataset.folder_path), f"{dataset.name.replace(' ', '_')}_coco.json")
+    output_dir = os.path.dirname(output_file_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    with open(output_file_path, "w", encoding="utf-8") as fp:
+        json.dump(coco_payload, fp, indent=2)
+
+    mlflow_result = "not_requested"
+    if log_to_mlflow:
+        try:
+            import mlflow
+
+            active_run = mlflow.active_run()
+            if active_run is not None:
+                mlflow.log_artifact(output_file_path, artifact_path="coco_exports")
+            elif mlflow_run_id:
+                with mlflow.start_run(run_id=mlflow_run_id):
+                    mlflow.log_artifact(output_file_path, artifact_path="coco_exports")
+            else:
+                with mlflow.start_run(run_name=f"dataset_{dataset_id}_coco_export"):
+                    mlflow.log_artifact(output_file_path, artifact_path="coco_exports")
+            mlflow_result = "logged"
+        except Exception as exc:
+            logger.warning("Could not log COCO export to MLflow: %s", exc)
+            mlflow_result = f"failed: {exc}"
+
+    return {
+        "success": True,
+        "message": "COCO export written to disk.",
+        "dataset_id": dataset_id,
+        "output_file_path": output_file_path,
+        "num_images": len(images_by_id),
+        "num_annotations": len(annotations),
+        "num_categories": len(categories_by_id),
+        "mlflow": mlflow_result,
+    }
+
+
