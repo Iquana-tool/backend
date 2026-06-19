@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.services.ai_services.completion_segmentation import CompletionService
 from app.services.auth import get_current_user
+from app.services.model_registry import list_available_models
 
 completion_service = CompletionService()
 router = APIRouter(prefix="/completion_segmentation", tags=["Completion Segmentation"])
@@ -13,8 +14,8 @@ router = APIRouter(prefix="/completion_segmentation", tags=["Completion Segmenta
 
 @router.get("/models")
 async def get_available_models(user: User = Depends(get_current_user)):
-    """Retrieve the list of available prompted segmentation models from the backend."""
-    return await completion_service.get_models()
+    """Retrieve available instance-discovery models directly from MLflow."""
+    return list_available_models("instance-discovery")
 
 
 @router.post("/run")

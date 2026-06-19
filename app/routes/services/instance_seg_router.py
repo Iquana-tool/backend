@@ -17,6 +17,7 @@ from app.database.labels import Labels
 from app.database.masks import Masks
 from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
 from app.services.auth import get_current_user
+from app.services.model_registry import list_available_models
 from app.services.celery_app import celery_app
 from app.services.redis import get_redis
 
@@ -38,8 +39,8 @@ async def run_inference(
 async def get_models(
         user: User = Depends(get_current_user)
 ):
-    """Retrieve all available models for this dataset."""
-    return await service.get_models()
+    """Retrieve available instance segmentation models directly from MLflow."""
+    return list_available_models("instance-segmentation")
 
 
 @router.delete("/models/{model_registry_key}")
