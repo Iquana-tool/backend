@@ -98,17 +98,6 @@ class AnnotationSessionState(BaseModel):
             mask_db = session.query(Masks).filter_by(id=self.mask_id).one()
         return mask_db
 
-    async def upload_image(self):
-        for key, service in self._running_backends.items():
-            try:
-                response = await service.upload_image(self.user_id, self.image_id)
-                if not response["success"]:
-                    self._running_backends.pop(key, None)
-                    self._failed_backends[key] = service
-            except Exception as e:
-                logger.error(
-                    f"Could not preload an image for service {key}. Maybe this service does not implement this endpoint.")
-
     async def check_and_register_backend(self, service: BaseService, key):
         if not await service.check_backend():
             logger.error(f"{key} is not reachable. Please make sure it is running.")
@@ -196,10 +185,6 @@ async def startup(websocket: WebSocket, state: AnnotationSessionState):
             }
         )
     )
-
-    # Upload the image to all running backends
-    # This is theoretically not needed anymore
-    await state.upload_image()
 
     logger.info("Annotation session initialized.")
     with get_context_session() as db:
