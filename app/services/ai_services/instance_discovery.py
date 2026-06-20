@@ -1,7 +1,7 @@
 from logging import getLogger
 
 import httpx
-from iquana_toolbox.schemas.networking.http.services import CompletionRequest
+from iquana_toolbox.schemas.networking.http.services import InstanceDiscoveryRequest
 
 from app.services.ai_services.base_service import BaseService
 from config import COMPLETION_SEGMENTATION_BACKEND_URL as BASE_URL
@@ -13,10 +13,10 @@ class CompletionService(BaseService):
     def __init__(self):
         super().__init__(BASE_URL)
 
-    async def inference(self, request: CompletionRequest):
+    async def inference(self, request: InstanceDiscoveryRequest):
         """Segment an image using 2D prompts.
         Args:
-            request (CompletionRequest): Request object.
+            request (InstanceDiscoveryRequest): Request object.
         Returns:
             dict: A response dict
         """

@@ -21,10 +21,11 @@ from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.masks import Masks
 from app.routes.websockets.messaging import send_msg
-from app.services.ai_services.completion_segmentation import CompletionService
+from app.services.ai_services.instance_discovery import CompletionService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
-from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
 from app.services.annotation_session.operations import (
+    assign_hierarchy_parents,
+    filter_exemplar_overlaps,
     run_completion_segmentation,
     run_prompted_segmentation,
     run_semantic_segmentation,
@@ -245,42 +246,6 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
         ))
 
 
-async def handle_semantic_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle the selection of an automatic model. """
-    selected_model = client_msg.data.get("selected_model")
-    response = await state._running_backends[Backends.SEMANTIC_SEGMENTATION.value].select_model(state.user_id,
-                                                                                                selected_model)
-    await send_msg(websocket, ServerMessage(
-        id=client_msg.id,
-        type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
-        success=response["success"],
-        message=response["message"],
-        data=None
-    ))
-
-
-async def handle_semantic_segmentation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle prompted_segmentation using an automatic model. """
-    model_registry_key = client_msg.data.get("model_registry_key")
-    result = await run_semantic_segmentation(
-        service=state._running_backends[Backends.SEMANTIC_SEGMENTATION.value],
-        image_url=state.image_db.file_path,
-        model_registry_key=model_registry_key,
-        user_id=state.user_id,
-    )
-
-    # Send the new hierarchy first
-    await send_msg(websocket, ServerMessage(
-        id=client_msg.id,
-        type=ServerMessageType.OBJECTS if result.success else ServerMessageType.ERROR,
-        success=result.success,
-        message=result.message,
-        data=result.hierarchy
-    ))
-    with get_context_session() as db:
-        await masks_db.add_contours_from_hierarchy(state.mask_id, result.hierarchy, db)
-
-
 async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the selection of a prompted model. """
     selected_model = client_msg.data.get("selected_model")
@@ -320,6 +285,13 @@ async def handle_prompted_segmentation(
 
     # Nested segmentation is currently ignored!
 
+    # When annotating inside a focussed object (e.g. patches inside a football), the model
+    # may return the parent itself as a candidate. Pass the focussed contour so the
+    # operation can discard candidates that just re-segment it.
+    focus_contour = None
+    if state.focussed_contour_id is not None and state.contour_hierarchy is not None:
+        focus_contour = state.contour_hierarchy.id_to_contour.get(state.focussed_contour_id)
+
     result = await run_prompted_segmentation(
         service=state._running_backends[Backends.PROMPTED_SEGMENTATION.value],
         image_url=state.image_db.file_path,
@@ -330,8 +302,20 @@ async def handle_prompted_segmentation(
         user_id=state.user_id,
         previous_mask=previous_mask,
         parent_id=state.focussed_contour_id,
+        focus_contour=focus_contour,
     )
     contour_model = result.contour
+
+    if contour_model is None:
+        # Every candidate duplicated the focussed object -> nothing new to add.
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.SUCCESS,
+            success=True,
+            message="No new object added: all candidates duplicated the focussed object.",
+            data={"candidate_count": len(result.candidates)},
+        ))
+        return
 
     if using_refinement:
         # Make sure the label stays after refinement
@@ -348,8 +332,8 @@ async def handle_prompted_segmentation(
         await add_object(contour_model, websocket, client_msg, state)
 
 
-async def handle_completion_select_model(websocket: WebSocket, client_msg: ClientMessage,
-                                         state: AnnotationSessionState):
+async def handle_discovery_select_model(websocket: WebSocket, client_msg: ClientMessage,
+                                        state: AnnotationSessionState):
     """ Handle the selection of a completion model. """
     if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
         model_identifier = client_msg.data.get("model_identifier")
@@ -372,7 +356,7 @@ async def handle_completion_select_model(websocket: WebSocket, client_msg: Clien
         ))
 
 
-async def handle_completion_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_discovery_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle enabling of completion model. Leads to a state change. """
     if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
         state._running_backends[Backends.COMPLETION_SEGMENTATION.value].enable()
@@ -393,7 +377,7 @@ async def handle_completion_enable(websocket: WebSocket, client_msg: ClientMessa
         ))
 
 
-async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_discovery_disable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle disabling of completion model. Leads to a state change. """
     if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
         state._running_backends[Backends.COMPLETION_SEGMENTATION.value].disable()
@@ -414,7 +398,7 @@ async def handle_completion_disable(websocket: WebSocket, client_msg: ClientMess
         ))
 
 
-async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_discovery(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the completion of a completion model. """
     seed_contour_ids = client_msg.data.get("seed_contour_ids")
     with get_context_session() as db:
@@ -441,6 +425,18 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
         positive_exemplars=positive_exemplars,
         concept=concept,
     )
+
+    # Instance discovery may re-detect the seed exemplars themselves; drop those.
+    discovered = filter_exemplar_overlaps(result.contours, contours)
+
+    # Place the discovered instances in the hierarchy: tag them with the concept label and
+    # nest each one under the existing contour (of the correct parent label) that contains
+    # it. Contours without a valid parent stay at root level.
+    with get_context_session() as db:
+        hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
+        label_hierarchy = await labels_db.get_label_hierarchy(state.image_db.dataset_id, db)
+    discovered = assign_hierarchy_parents(discovered, hierarchy, label_hierarchy, label_id)
+
     # Report how many new instances were found so the client can tell the user
     # when a model returned nothing (objects themselves follow as OBJECT_ADDED).
     await send_msg(websocket, ServerMessage(
@@ -448,9 +444,9 @@ async def handle_completion(websocket: WebSocket, client_msg: ClientMessage, sta
         id=client_msg.id,
         type=ServerMessageType.SUCCESS,
         message=result.message,
-        data={"added_count": len(result.contours)},
+        data={"added_count": len(discovered)},
     ))
-    for contour in result.contours:
+    for contour in discovered:
         await add_object(contour, websocket, client_msg, state)
 
 

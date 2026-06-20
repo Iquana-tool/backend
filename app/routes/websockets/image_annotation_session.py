@@ -75,22 +75,18 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                         await handlers.handle_object_delete(websocket, client_msg, state)
                     case ClientMessageType.OBJECT_MODIFY:
                         await handlers.handle_object_modify(websocket, client_msg, state)
-                    case ClientMessageType.SEMANTIC_SELECT_MODEL:
-                        await handlers.handle_semantic_select_model(websocket, client_msg, state)
-                    case ClientMessageType.SEMANTIC_INFERENCE:
-                        await handlers.handle_semantic_segmentation(websocket, client_msg, state)
                     case ClientMessageType.PROMPTED_SELECT_MODEL:
                         await handlers.handle_prompted_select_model(websocket, client_msg, state)
                     case ClientMessageType.PROMPTED_INFERENCE:
                         await handlers.handle_prompted_segmentation(websocket, client_msg, state)
                     case ClientMessageType.COMPLETION_SELECT_MODEL:
-                        await handlers.handle_completion_select_model(websocket, client_msg, state)
+                        await handlers.handle_discovery_select_model(websocket, client_msg, state)
                     case ClientMessageType.COMPLETION_ENABLE:
-                        await handlers.handle_completion_enable(websocket, client_msg, state)
+                        await handlers.handle_discovery_enable(websocket, client_msg, state)
                     case ClientMessageType.COMPLETION_DISABLE:
-                        await handlers.handle_completion_disable(websocket, client_msg, state)
+                        await handlers.handle_discovery_disable(websocket, client_msg, state)
                     case ClientMessageType.COMPLETION_INFERENCE:
-                        await handlers.handle_completion(websocket, client_msg, state)
+                        await handlers.handle_discovery(websocket, client_msg, state)
                     case ClientMessageType.FINISH_ANNOTATION:
                         await handlers.handle_finish_annotation(websocket, client_msg, state)
                     case ClientMessageType.OBJECT_CONFLICT_RESOLUTION:

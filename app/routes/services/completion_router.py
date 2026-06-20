@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends
-from iquana_toolbox.schemas.networking.http.services import CompletionRequest
+from iquana_toolbox.schemas.networking.http.services import InstanceDiscoveryRequest
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.services.ai_services.completion_segmentation import CompletionService
+from app.services.ai_services.instance_discovery import CompletionService
 from app.services.auth import get_current_user
 from app.services.model_registry import list_available_models
 
@@ -20,7 +20,7 @@ async def get_available_models(user: User = Depends(get_current_user)):
 
 @router.post("/run")
 async def infer_completion(
-        request: CompletionRequest,
+        request: InstanceDiscoveryRequest,
         user: User = Depends(get_current_user),
         db: Session = Depends(get_session),
 ):

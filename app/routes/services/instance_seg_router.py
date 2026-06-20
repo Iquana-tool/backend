@@ -1,170 +1,77 @@
-import json
 from logging import getLogger
 
-from celery.result import AsyncResult
 from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
-from iquana_toolbox.schemas.database.labels import LabelHierarchy
-from iquana_toolbox.schemas.networking.http.services import SemanticSegmentationRequest
-from iquana_toolbox.schemas.training import SemanticTrainingRequest, TrainingProgress, SemanticTrainingConfig
+from iquana_toolbox.schemas.networking.http.services import InstanceSegmentationRequest
 from iquana_toolbox.schemas.user import User
-from redis.asyncio import Redis
-from sqlalchemy.orm import Session
 
-from app.database import get_session
-from app.database.images import Images
-from app.database.labels import Labels
-from app.database.masks import Masks
-from app.services.ai_services.semantic_segmentation import SemanticSegmentationService
 from app.services.auth import get_current_user
-from app.services.model_registry import list_available_models
-from app.services.celery_app import celery_app
-from app.services.redis import get_redis
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/semantic_segmentation", tags=["semantic_segmentation"])
-service: SemanticSegmentationService = SemanticSegmentationService()
+
+# NOTE: Instance segmentation is not implemented yet. Every endpoint below is a stub that
+# raises NotImplementedError until the service is built out. Keep the routes registered so
+# the API surface is visible and the wiring stays in place.
 
 
 @router.post("/run")
 async def run_inference(
-        request: SemanticSegmentationRequest,
+        request: InstanceSegmentationRequest,
         user: User = Depends(get_current_user),
-        db: Session = Depends(get_session)):
-    """  Run inference on a single image. """
-    return await service.inference(request)
+):
+    """ Run inference on a single image. """
+    raise NotImplementedError("Instance segmentation inference is not implemented yet.")
 
 
 @router.get("/models")
 async def get_models(
-        user: User = Depends(get_current_user)
+        user: User = Depends(get_current_user),
 ):
-    """Retrieve available instance segmentation models directly from MLflow."""
-    return list_available_models("instance-segmentation")
+    """Retrieve available instance segmentation models."""
+    raise NotImplementedError("Listing instance segmentation models is not implemented yet.")
 
 
 @router.delete("/models/{model_registry_key}")
-async def delete_model(model_registry_key: str,
-                       user: User = Depends(get_current_user)):
+async def delete_model(
+        model_registry_key: str,
+        user: User = Depends(get_current_user),
+):
     """ Delete a model based on its id. """
-    return await service.delete_model(model_registry_key)
+    raise NotImplementedError("Deleting an instance segmentation model is not implemented yet.")
 
 
-@router.get("/training/{task_id}",
-            description="Queries the celery backend to get an update on the training status. For continuous updates, please "
-                        "use the /training/{task_id}/stream endpoint.")
+@router.get("/training/{task_id}")
 async def get_training_status(
         task_id: str,
-        user: User = Depends(get_current_user)
+        user: User = Depends(get_current_user),
 ):
-    """ Get the status of a training job by its ID. Accesses the celery queue. """
-    result = AsyncResult(task_id)
-
-    return {
-        "success": True,
-        "message": "Successfully fetched training status.",
-        "result": {
-            "task_id": task_id,
-            "status": result.status,  # PENDING, STARTED, SUCCESS, FAILURE
-            "progress": result.info
-        }
-    }
+    """ Get the status of a training job by its ID. """
+    raise NotImplementedError("Instance segmentation training status is not implemented yet.")
 
 
 @router.get("/training/{task_id}/stream")
 async def get_training_status_stream(
         task_id: str,
         user: User = Depends(get_current_user),
-        redis_client: Redis = Depends(get_redis)
 ):
-    """
-    Streams status updates by subscribing to a Redis channel.
-    Channel name: task_progress_{task_id}
-    """
-    channel_name = f"task_progress_{task_id}"
-
-    async def event_generator():
-        pubsub = redis_client.pubsub()
-        await pubsub.subscribe(channel_name)
-
-        try:
-            # You might want to send an initial "connected" message
-            yield f"data: {json.dumps({'status': 'connected', 'channel': channel_name})}\n\n"
-
-            async for message in pubsub.listen():
-                if message["type"] == "message":
-                    progress = TrainingProgress.model_validate(message["data"])
-                    yield progress.model_dump_json() + "\n"
-
-                    if progress.status != "PROGRESS":
-                        break
-
-        finally:
-            await pubsub.unsubscribe(channel_name)
-            await pubsub.close()
-
-    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+    """ Stream status updates for a training job. """
+    raise NotImplementedError("Instance segmentation training stream is not implemented yet.")
 
 
 @router.delete("/training/{task_id}")
 async def cancel_training_of_model(
         task_id: str,
-        user: User = Depends(get_current_user)
+        user: User = Depends(get_current_user),
 ):
-    """ Cancel a training job by its ID."""
-    result = AsyncResult(task_id)
-
-    # terminate=True sends a SIGTERM to the worker process
-    result.revoke(terminate=True)
-
-    return {"message": f"Task {task_id} has been revoked."}
+    """ Cancel a training job by its ID. """
+    raise NotImplementedError("Cancelling instance segmentation training is not implemented yet.")
 
 
 @router.post("/training/start")
 async def start_training(
         model_registry_key: str,
         dataset_id: int | str,
-        training_config: SemanticTrainingConfig,
-        db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: User = Depends(get_current_user),
 ):
-    """ Start training a model for automatic prompted_segmentation.
-    This endpoint prepares the request with necessary parameters and forwards it to the Automatic Segmentation Service.
-    """
-    # Build the training request, which consists of the training_data and training_config
-    # First get all images and masks urls of the dataset
-    file_urls = (db.query(
-        Images.file_path.label("image_url"),
-        Masks.file_path.label("mask_url")
-    ).join(
-        Masks, Masks.image_id == Images.id
-    ).filter(
-        Images.dataset_id == dataset_id,
-        Masks.fully_annotated == True,
-    ).all())
-    labels = db.query(Labels).filter_by(dataset_id=dataset_id)
-    label_hierarchy = LabelHierarchy.from_query(labels)
-
-    if len(file_urls) == 0:
-        return {
-            "success": False,
-            "message": f"No data to train on for dataset {dataset_id}!"
-        }
-
-    request = SemanticTrainingRequest(
-        model_registry_key=model_registry_key,
-        image_urls=[row.image_url for row in file_urls],
-        mask_urls=[row.mask_url for row in file_urls],
-        label_hierarchy=label_hierarchy,
-        **training_config.model_dump(),
-    )
-    task = celery_app.send_task(
-        "semantic_segmentation.train_model",
-        args=[request.model_dump_json()],
-        queue="semantic_queue"
-    )
-    return {
-        "success": True,
-        "message": "Training task enqueued.",
-        "result": {"task_id": task.task_id, "state": task.state, "data": task.info}
-    }
+    """ Start training an instance segmentation model. """
+    raise NotImplementedError("Starting instance segmentation training is not implemented yet.")

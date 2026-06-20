@@ -16,7 +16,7 @@ class InstanceSegmentationService(BaseService):
     async def inference(self, request: InstanceSegmentationRequest):
         """Segment an image using 2D prompts.
         Args:
-            request (CompletionRequest): Request object.
+            request (InstanceSegmentationRequest): Request object.
         Returns:
             dict: A response dict
         """
