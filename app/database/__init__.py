@@ -2,13 +2,33 @@ import logging
 import os
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+import sqlite3
+
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from config import DATABASE_URL, DATA_DIR
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+
+@event.listens_for(Engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    """Enable foreign key enforcement on every SQLite connection.
+
+    SQLite disables foreign key constraints by default, which means the
+    ``ON DELETE CASCADE`` rules declared on our tables are silently ignored.
+    Without this, deleting a dataset/image/label/mask leaves orphaned rows
+    (images, labels, masks, contours) behind. The check keeps this a no-op for
+    non-SQLite backends.
+    """
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
 
 # Define the declarative general
 database = declarative_base()

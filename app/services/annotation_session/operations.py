@@ -23,7 +23,8 @@ from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.database.labels import LabelHierarchy
 from iquana_toolbox.schemas.prompts import Prompts
 from iquana_toolbox.schemas.networking.http.services import (
-    InstanceDiscoveryRequest,
+    InstanceSuggestionRequest,
+    InstanceSegmentationRequest,
     PromptedSegmentationRequest,
     SemanticSegmentationRequest,
 )
@@ -81,6 +82,13 @@ class PromptedSegmentationResult:
 @dataclass
 class SemanticSegmentationResult:
     hierarchy: ContourHierarchy
+    success: bool
+    message: str
+
+
+@dataclass
+class InstanceSegmentationResult:
+    contours: list[Contour]
     success: bool
     message: str
 
@@ -244,6 +252,37 @@ async def run_semantic_segmentation(
     )
 
 
+async def run_instance_segmentation(
+        *,
+        service: BaseService,
+        image_url: str,
+        image_width: int,
+        image_height: int,
+        model_registry_key: str,
+        user_id: str,
+) -> InstanceSegmentationResult:
+    """Run instance segmentation and parse the detected instance contours.
+
+    The (multiclass) model returns every detected instance as a flat list of contours.
+    Each contour's SVG path is computed for the frontend. Persistence -- including
+    whether to replace the existing contours -- is the caller's responsibility.
+    """
+    request = InstanceSegmentationRequest(
+        model_registry_key=model_registry_key,
+        image_url=image_url,
+        user_id=user_id,
+    )
+    response = await service.inference(request)
+    contours = [Contour.model_validate(item) for item in (response["result"] or [])]
+    for contour in contours:
+        contour.compute_path(image_width=image_width, image_height=image_height)
+    return InstanceSegmentationResult(
+        contours=contours,
+        success=response["success"],
+        message=response["message"],
+    )
+
+
 async def run_completion_segmentation(
         *,
         service: BaseService,
@@ -261,7 +300,7 @@ async def run_completion_segmentation(
     are applied by the caller, which has access to the seed contours and the mask /
     label hierarchies.
     """
-    request = InstanceDiscoveryRequest(
+    request = InstanceSuggestionRequest(
         image_url=image_url,
         model_registry_key=model_key,
         user_id=user_id,

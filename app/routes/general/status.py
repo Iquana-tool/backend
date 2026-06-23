@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from redis.asyncio import Redis
 
-from app.services.ai_services.instance_discovery import CompletionService
+from app.services.ai_services.instance_suggestion import CompletionService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.ai_services.instance_segmentation import InstanceSegmentationService
 from app.services.redis import get_redis

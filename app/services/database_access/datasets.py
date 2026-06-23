@@ -254,34 +254,37 @@ def _build_coco_polygon(
     return polygon
 
 
-async def export_dataset_contours_to_coco(
-        dataset_id: int,
-        db: Session,
-        exclude_not_fully_annotated: bool = True,
-        exclude_unreviewed: bool = True,
-        output_file_path: str | None = None,
-        log_to_mlflow: bool = False,
-        mlflow_run_id: str | None = None,
-) -> dict[str, Any]:
-    """Export all contours of a dataset to COCO JSON and save to disk."""
-    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
-    if not dataset:
-        return {"success": False, "message": "Dataset not found.", "dataset_id": dataset_id}
+# Which contours of a (possibly nested) annotation tree to emit. COCO is flat, so
+# the caller decides how the hierarchy collapses:
+#   - "all":       every contour becomes its own annotation (parents overlap children)
+#   - "leaves":    only contours that are not a parent within the result set
+#   - "top_level": only contours without a parent
+ContourSelection = Literal["all", "leaves", "top_level"]
 
-    query = (
-        db.query(Contours, Images, Labels)
-        .join(Masks, Masks.id == Contours.mask_id)
-        .join(Images, Images.id == Masks.image_id)
-        .outerjoin(Labels, Labels.id == Contours.label_id)
-        .filter(Images.dataset_id == dataset_id)
-    )
-    if exclude_not_fully_annotated:
-        query = query.filter(Masks.fully_annotated == True)
-    if exclude_unreviewed:
-        query = query.filter(Contours.reviewed_by.any())
 
-    rows = query.all()
+def _filter_contour_rows(
+        rows: list[tuple[Any, Any, Any]],
+        contour_selection: ContourSelection,
+) -> list[tuple[Any, Any, Any]]:
+    """Filter (contour, image, label) rows according to the hierarchy selection."""
+    if contour_selection == "leaves":
+        parent_ids = {contour.parent_id for contour, _, _ in rows if contour.parent_id is not None}
+        return [row for row in rows if row[0].id not in parent_ids]
+    if contour_selection == "top_level":
+        return [row for row in rows if row[0].parent_id is None]
+    return rows
 
+
+def build_coco_payload(
+        dataset: "Datasets",
+        rows: list[tuple[Any, Any, Any]],
+) -> tuple[dict[str, Any], set[int]]:
+    """Build a COCO JSON payload from pre-fetched (contour, image, label) rows.
+
+    This is the single source of truth for the COCO document, shared by the ZIP
+    export and the annotations-only endpoint. Returns the payload and the set of
+    image ids it actually references, so callers can keep bundled images in sync.
+    """
     images_by_id: dict[int, dict[str, Any]] = {}
     categories_by_id: dict[int, dict[str, Any]] = {}
     annotations: list[dict[str, Any]] = []
@@ -315,12 +318,20 @@ async def export_dataset_contours_to_coco(
         min_y, max_y = min(y_points), max(y_points)
         bbox = [min_x, min_y, max_x - min_x, max_y - min_y]
 
+        # contour.area is computed from the normalized [0, 1] coordinates, so it is a
+        # fraction of the image. COCO expects pixel^2, so scale by the image size to
+        # stay consistent with the (pixel) segmentation and bbox above.
+        if contour.area is not None:
+            area = float(contour.area) * float(image.width) * float(image.height)
+        else:
+            area = float(bbox[2] * bbox[3])
+
         annotations.append({
             "id": contour.id,
             "image_id": image.id,
             "category_id": label.id,
             "segmentation": [polygon],
-            "area": float(contour.area) if contour.area is not None else float(bbox[2] * bbox[3]),
+            "area": area,
             "bbox": bbox,
             "iscrowd": 0,
         })
@@ -339,6 +350,63 @@ async def export_dataset_contours_to_coco(
         "annotations": annotations,
         "categories": list(categories_by_id.values()),
     }
+    return coco_payload, set(images_by_id.keys())
+
+
+async def export_dataset_contours_to_coco(
+        dataset_id: int,
+        db: Session,
+        exclude_not_fully_annotated: bool = True,
+        exclude_unreviewed: bool = True,
+        contour_selection: ContourSelection = "all",
+        output_file_path: str | None = None,
+        write_to_disk: bool = True,
+        log_to_mlflow: bool = False,
+        mlflow_run_id: str | None = None,
+) -> dict[str, Any]:
+    """Export all contours of a dataset to a COCO payload.
+
+    Builds the COCO JSON via :func:`build_coco_payload` and, when ``write_to_disk``
+    (or ``log_to_mlflow``) is set, persists it to disk and optionally logs it to
+    MLflow. The returned dict always carries the in-memory ``coco_payload`` and the
+    set of referenced ``image_ids``.
+    """
+    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
+    if not dataset:
+        return {"success": False, "message": "Dataset not found.", "dataset_id": dataset_id}
+
+    query = (
+        db.query(Contours, Images, Labels)
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .outerjoin(Labels, Labels.id == Contours.label_id)
+        .filter(Images.dataset_id == dataset_id)
+    )
+    if exclude_not_fully_annotated:
+        query = query.filter(Masks.fully_annotated == True)
+    if exclude_unreviewed:
+        query = query.filter(Contours.reviewed_by.any())
+
+    rows = _filter_contour_rows(query.all(), contour_selection)
+    coco_payload, image_ids = build_coco_payload(dataset, rows)
+
+    result: dict[str, Any] = {
+        "success": True,
+        "message": "COCO export created.",
+        "dataset_id": dataset_id,
+        "coco_payload": coco_payload,
+        "image_ids": image_ids,
+        "output_file_path": None,
+        "num_images": len(coco_payload["images"]),
+        "num_annotations": len(coco_payload["annotations"]),
+        "num_categories": len(coco_payload["categories"]),
+        "mlflow": "not_requested",
+    }
+
+    # The JSON is only persisted when a caller needs a file on disk (e.g. the ZIP
+    # export bundles it, or MLflow logging requires an artifact path).
+    if not (write_to_disk or log_to_mlflow):
+        return result
 
     if output_file_path is None:
         output_file_path = os.path.join(str(dataset.folder_path), f"{dataset.name.replace(' ', '_')}_coco.json")
@@ -348,8 +416,9 @@ async def export_dataset_contours_to_coco(
 
     with open(output_file_path, "w", encoding="utf-8") as fp:
         json.dump(coco_payload, fp, indent=2)
+    result["output_file_path"] = output_file_path
+    result["message"] = "COCO export written to disk."
 
-    mlflow_result = "not_requested"
     if log_to_mlflow:
         try:
             import mlflow
@@ -363,20 +432,11 @@ async def export_dataset_contours_to_coco(
             else:
                 with mlflow.start_run(run_name=f"dataset_{dataset_id}_coco_export"):
                     mlflow.log_artifact(output_file_path, artifact_path="coco_exports")
-            mlflow_result = "logged"
+            result["mlflow"] = "logged"
         except Exception as exc:
             logger.warning("Could not log COCO export to MLflow: %s", exc)
-            mlflow_result = f"failed: {exc}"
+            result["mlflow"] = f"failed: {exc}"
 
-    return {
-        "success": True,
-        "message": "COCO export written to disk.",
-        "dataset_id": dataset_id,
-        "output_file_path": output_file_path,
-        "num_images": len(images_by_id),
-        "num_annotations": len(annotations),
-        "num_categories": len(categories_by_id),
-        "mlflow": mlflow_result,
-    }
+    return result
 
 

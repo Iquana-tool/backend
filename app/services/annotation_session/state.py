@@ -18,6 +18,7 @@ class Backends(StrEnum):
     PROMPTED_SEGMENTATION = "prompted_segmentation"
     COMPLETION_SEGMENTATION = "completion_segmentation"
     SEMANTIC_SEGMENTATION = "semantic_segmentation"
+    INSTANCE_SEGMENTATION = "instance_segmentation"
 
 
 class AnnotationSessionState(BaseModel):

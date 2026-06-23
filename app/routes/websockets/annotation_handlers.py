@@ -21,14 +21,15 @@ from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.masks import Masks
 from app.routes.websockets.messaging import send_msg
-from app.services.ai_services.instance_discovery import CompletionService
+from app.services.ai_services.instance_suggestion import CompletionService
+from app.services.ai_services.instance_segmentation import InstanceSegmentationService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.annotation_session.operations import (
     assign_hierarchy_parents,
     filter_exemplar_overlaps,
     run_completion_segmentation,
+    run_instance_segmentation,
     run_prompted_segmentation,
-    run_semantic_segmentation,
 )
 from app.services.annotation_session.state import AnnotationSessionState, Backends
 from app.services.auth import get_current_user
@@ -44,10 +45,9 @@ async def startup(websocket: WebSocket, state: AnnotationSessionState):
     """
     print(f"Annotation session initialized: {state.model_dump()}")
     # Check for running backends
-    # await state.check_and_register_backend(S, "semantic_service")
     await state.check_and_register_backend(PromptedSegmentationService(), Backends.PROMPTED_SEGMENTATION.value)
     await state.check_and_register_backend(CompletionService(), Backends.COMPLETION_SEGMENTATION.value)
-    await state.check_and_register_backend(SemanticSegmentationService(), Backends.SEMANTIC_SEGMENTATION.value)
+    await state.check_and_register_backend(InstanceSegmentationService(), Backends.INSTANCE_SEGMENTATION.value)
 
     with get_context_session() as db:
         mask_db = db.query(Masks).filter_by(id=state.mask_id).first()
@@ -155,23 +155,19 @@ async def handle_unselect_refinement_object(websocket: WebSocket, client_msg: Cl
 
 
 async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle adding an object to the mask."""
-    contour = Contour.model_validate_json(client_msg.data)
-    contour, _ = state.contour_hierarchy.add_contour(contour)
-
-    # Send the message with the new object, before adding it to the db
-    await send_msg(websocket, ServerMessage(
-        id=client_msg.id,
-        type=ServerMessageType.OBJECT_ADDED,
-        message="Added contour to mask.",
-        success=True,
-        data=state.contour_hierarchy.model_dump(),
-    ))
-
-    # We add the contour to the db
-    # Check_hierarchy=False, because we already fitted it into the hierarchy copy in the session state
-    with get_context_session() as db:
-        await masks_db.add_contour_to_mask(state.mask_id, contour, check_hierarchy=False, db=db)
+    """ Handle adding a manually drawn object to the mask."""
+    # client_msg.data is already a parsed dict (the WebSocket layer decodes the
+    # JSON envelope), so validate it as an object — not as a JSON string.
+    contour = Contour.model_validate(client_msg.data)
+    # Persist via the shared helper, exactly like the AI add flow: it inserts the
+    # contour into the DB first (which assigns the real integer id and computes
+    # its SVG path) and then broadcasts the single new object.
+    #
+    # The previous implementation broadcast the id-less session hierarchy *before*
+    # the DB insert, which made the client invent a bogus (decimal) id for the new
+    # object and rebuild from the full hierarchy — blanking every other object's
+    # label until the next page reload.
+    await add_object(contour, websocket, client_msg, state)
 
 
 async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -332,8 +328,8 @@ async def handle_prompted_segmentation(
         await add_object(contour_model, websocket, client_msg, state)
 
 
-async def handle_discovery_select_model(websocket: WebSocket, client_msg: ClientMessage,
-                                        state: AnnotationSessionState):
+async def handle_suggestion_select_model(websocket: WebSocket, client_msg: ClientMessage,
+                                         state: AnnotationSessionState):
     """ Handle the selection of a completion model. """
     if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
         model_identifier = client_msg.data.get("model_identifier")
@@ -356,7 +352,7 @@ async def handle_discovery_select_model(websocket: WebSocket, client_msg: Client
         ))
 
 
-async def handle_discovery_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_suggestion_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle enabling of completion model. Leads to a state change. """
     if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
         state._running_backends[Backends.COMPLETION_SEGMENTATION.value].enable()
@@ -377,7 +373,7 @@ async def handle_discovery_enable(websocket: WebSocket, client_msg: ClientMessag
         ))
 
 
-async def handle_discovery_disable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_suggestion_disable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle disabling of completion model. Leads to a state change. """
     if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
         state._running_backends[Backends.COMPLETION_SEGMENTATION.value].disable()
@@ -398,7 +394,7 @@ async def handle_discovery_disable(websocket: WebSocket, client_msg: ClientMessa
         ))
 
 
-async def handle_discovery(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the completion of a completion model. """
     seed_contour_ids = client_msg.data.get("seed_contour_ids")
     with get_context_session() as db:
@@ -426,16 +422,16 @@ async def handle_discovery(websocket: WebSocket, client_msg: ClientMessage, stat
         concept=concept,
     )
 
-    # Instance discovery may re-detect the seed exemplars themselves; drop those.
-    discovered = filter_exemplar_overlaps(result.contours, contours)
+    # Instance suggestion may re-detect the seed exemplars themselves; drop those.
+    suggested = filter_exemplar_overlaps(result.contours, contours)
 
-    # Place the discovered instances in the hierarchy: tag them with the concept label and
+    # Place the suggested instances in the hierarchy: tag them with the concept label and
     # nest each one under the existing contour (of the correct parent label) that contains
     # it. Contours without a valid parent stay at root level.
     with get_context_session() as db:
         hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
         label_hierarchy = await labels_db.get_label_hierarchy(state.image_db.dataset_id, db)
-    discovered = assign_hierarchy_parents(discovered, hierarchy, label_hierarchy, label_id)
+    suggested = assign_hierarchy_parents(suggested, hierarchy, label_hierarchy, label_id)
 
     # Report how many new instances were found so the client can tell the user
     # when a model returned nothing (objects themselves follow as OBJECT_ADDED).
@@ -444,10 +440,83 @@ async def handle_discovery(websocket: WebSocket, client_msg: ClientMessage, stat
         id=client_msg.id,
         type=ServerMessageType.SUCCESS,
         message=result.message,
-        data={"added_count": len(discovered)},
+        data={"added_count": len(suggested)},
     ))
     for contour in discovered:
         await add_object(contour, websocket, client_msg, state)
+
+
+async def handle_instance_select_model(websocket: WebSocket, client_msg: ClientMessage,
+                                       state: AnnotationSessionState):
+    """ Handle the selection of an instance segmentation model. """
+    if Backends.INSTANCE_SEGMENTATION.value in state._running_backends:
+        selected_model = client_msg.data.get("selected_model")
+        response = await state._running_backends[Backends.INSTANCE_SEGMENTATION.value].select_model(state.user_id,
+                                                                                                   selected_model)
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
+            success=response["success"],
+            message=response["message"],
+            data=None
+        ))
+    else:
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.ERROR,
+            success=False,
+            message="Failed to select instance segmentation model. Backend is not running.",
+            data=None
+        ))
+
+
+async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientMessage,
+                                       state: AnnotationSessionState):
+    """ Handle instance segmentation inference.
+
+        Instance segmentation re-segments the whole image, so the detected instances
+        replace every contour currently on the mask (the client warns the user about
+        this before requesting it).
+    """
+    if Backends.INSTANCE_SEGMENTATION.value not in state._running_backends:
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.ERROR,
+            success=False,
+            message="Failed to run instance segmentation. Backend is not running.",
+            data=None
+        ))
+        return
+
+    model_registry_key = client_msg.data.get("model_registry_key")
+    result = await run_instance_segmentation(
+        service=state._running_backends[Backends.INSTANCE_SEGMENTATION.value],
+        image_url=state.image_db.file_path,
+        image_width=state.image_db.width,
+        image_height=state.image_db.height,
+        model_registry_key=model_registry_key,
+        user_id=state.user_id,
+    )
+
+    # Replace the existing contours with the freshly detected instances.
+    with get_context_session() as db:
+        await masks_db.delete_all_contours_of_mask(state.mask_id, db=db)
+        for contour in result.contours:
+            await masks_db.add_contour_to_mask(state.mask_id, contour, db=db)
+        hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
+    state.contour_hierarchy = hierarchy
+
+    # Send the full hierarchy so the client refreshes its object list in one go.
+    # Use OBJECTS (not OBJECT_ADDED): the client resolves label names against the
+    # dataset's label map on the OBJECTS path, so the detected instances keep their
+    # labels. The matching message id also resolves the caller's pending request.
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.OBJECTS,
+        success=result.success,
+        message=result.message or f"Instance segmentation detected {len(result.contours)} objects.",
+        data=hierarchy.model_dump(),
+    ))
 
 
 async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage,

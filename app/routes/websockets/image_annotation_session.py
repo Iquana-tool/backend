@@ -80,13 +80,17 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                     case ClientMessageType.PROMPTED_INFERENCE:
                         await handlers.handle_prompted_segmentation(websocket, client_msg, state)
                     case ClientMessageType.COMPLETION_SELECT_MODEL:
-                        await handlers.handle_discovery_select_model(websocket, client_msg, state)
+                        await handlers.handle_suggestion_select_model(websocket, client_msg, state)
                     case ClientMessageType.COMPLETION_ENABLE:
-                        await handlers.handle_discovery_enable(websocket, client_msg, state)
+                        await handlers.handle_suggestion_enable(websocket, client_msg, state)
                     case ClientMessageType.COMPLETION_DISABLE:
-                        await handlers.handle_discovery_disable(websocket, client_msg, state)
+                        await handlers.handle_suggestion_disable(websocket, client_msg, state)
                     case ClientMessageType.COMPLETION_INFERENCE:
-                        await handlers.handle_discovery(websocket, client_msg, state)
+                        await handlers.handle_suggestion(websocket, client_msg, state)
+                    case ClientMessageType.INSTANCE_SELECT_MODEL:
+                        await handlers.handle_instance_select_model(websocket, client_msg, state)
+                    case ClientMessageType.INSTANCE_INFERENCE:
+                        await handlers.handle_instance_segmentation(websocket, client_msg, state)
                     case ClientMessageType.FINISH_ANNOTATION:
                         await handlers.handle_finish_annotation(websocket, client_msg, state)
                     case ClientMessageType.OBJECT_CONFLICT_RESOLUTION:
@@ -95,7 +99,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                         # Ignore erroneous messages from the client
                         pass
             except Exception as e:
-                # Handle errors
+                # A single message failing should not tear down the session. Report the error
+                # back to the client and keep the connection open for further messages.
                 logger.error(f"Ran into an error handling message: {e} \n Message: {client_msg}")
                 await send_msg(websocket, ServerMessage(
                     id=client_msg.id,
@@ -104,7 +109,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                     success=False,
                     data=None
                 ))
-                raise e
+                # Loop continues; the websocket stays connected.
     except WebSocketDisconnect:
         # Client disconnected normally, just log and exit
         logger.info(f"WebSocket disconnected for user {user_id} and image {image_id}")

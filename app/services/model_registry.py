@@ -17,17 +17,19 @@ logger = getLogger(__name__)
 MODEL_REGISTRY = MLFlowModelRegistry(MLFLOW_URL)
 
 
-def _model_infos_via_tags(tags: dict):
-    """Look up models by tags across toolbox versions.
+def _search_registered_models_by_tags(tags: dict):
+    """Return registered models matching ``tags`` (hits carry a ``.name``).
 
-    The toolbox renamed ``get_models_via_tags`` -> ``get_model_infos_via_tags``.
-    The backend and the AI services may not pin the same toolbox revision, so
-    resolve whichever exists rather than committing to one name.
+    We search MLflow directly instead of going through the toolbox's
+    ``get_model_infos_via_tags``. That helper eagerly rebuilds a ``ModelInfo``
+    from each registered model's tags, which fails when the tag set lacks the
+    (now required) ``ModelInfo`` fields like ``registry_key`` / ``name`` /
+    ``description`` / ``usage_tip`` -- tags only carry the filterable subset
+    (task/status/...). We only need the names here; the full info is read from
+    artifact metadata by ``_full_model_info``, which is the source of truth.
     """
-    getter = getattr(MODEL_REGISTRY, "get_model_infos_via_tags", None) or getattr(
-        MODEL_REGISTRY, "get_models_via_tags"
-    )
-    return getter(tags=tags)
+    filter_string = " AND ".join(f"tags.{key} = '{value}'" for key, value in tags.items())
+    return MODEL_REGISTRY.client.search_registered_models(filter_string=filter_string)
 
 
 def _registry_key(model) -> str:
@@ -68,10 +70,10 @@ def list_available_models(task: str) -> dict:
 
     Args:
         task: The model ``task`` tag, e.g. ``"prompted-segmentation"``,
-            ``"instance-discovery"`` or ``"instance-segmentation"``.
+            ``"instance-suggestion"`` or ``"instance-segmentation"``.
     """
     mlflow.set_tracking_uri(MLFLOW_URL)
-    matched = _model_infos_via_tags({"task": task, "status": "ready"})
+    matched = _search_registered_models_by_tags({"task": task, "status": "ready"})
     models = [_full_model_info(_registry_key(m)) for m in matched]
     return {
         "success": True,

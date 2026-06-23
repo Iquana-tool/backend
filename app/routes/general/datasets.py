@@ -10,18 +10,17 @@ from fastapi import APIRouter, Depends, HTTPException
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 from starlette import status
-from starlette.responses import StreamingResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from app.database import get_session
 from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
-from app.database.masks import Masks
 from app.database.users import Users
 from app.services.auth import get_current_user
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import labels as labels_db
-from app.services.database_access.datasets import export_dataset_contours_to_coco
+from app.services.database_access.datasets import ContourSelection, export_dataset_contours_to_coco
 from app.services.util import get_mask_path_from_image_path
 
 # Create a router for the export functionality
@@ -421,11 +420,73 @@ async def download_dataset_quantification(
         return response
 
 
+@router.get("/{dataset_id}/coco/annotations")
+async def get_coco_annotations(
+        dataset_id: int,
+        exclude_not_fully_annotated: bool = True,
+        exclude_unreviewed: bool = True,
+        contour_selection: ContourSelection = "all",
+        log_to_mlflow: bool = False,
+        mlflow_run_id: str | None = None,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """
+    Return the dataset annotations as a COCO JSON document, without any images.
+
+    Shares the COCO-building logic with the ZIP export, so the annotations are
+    identical to what `GET /{dataset_id}/coco` bundles.
+    Args:
+        dataset_id (int): The ID of the dataset to export.
+        exclude_not_fully_annotated (bool): Whether to exclude not fully annotated masks.
+        exclude_unreviewed (bool): Whether to exclude unreviewed contours.
+        contour_selection ("all" | "leaves" | "top_level"): Which contours of the
+            annotation hierarchy to emit. "all" keeps every contour (parents overlap
+            their children), "leaves" keeps only the innermost contours, "top_level"
+            keeps only contours without a parent.
+        log_to_mlflow (bool): Whether to log the export to MLflow.
+        mlflow_run_id (str | None): The MLflow run ID.
+        db (Session, optional): The database session. Defaults to Depends(get_session).
+        user (User): The current authenticated user.
+
+    Returns:
+        JSONResponse: The COCO annotations document.
+    """
+    # Check user access to the dataset
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    dataset = await datasets_db.get_dataset(dataset_id, db=db)
+    if not dataset:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
+
+    result = await export_dataset_contours_to_coco(
+        dataset_id,
+        db,
+        exclude_not_fully_annotated,
+        exclude_unreviewed,
+        contour_selection=contour_selection,
+        write_to_disk=False,
+        log_to_mlflow=log_to_mlflow,
+        mlflow_run_id=mlflow_run_id,
+    )
+
+    if not result.get("success"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.get("message"))
+
+    file_name = f"{dataset.name.replace(' ', '_')}_coco.json"
+    return JSONResponse(
+        content=result["coco_payload"],
+        headers={"Content-Disposition": f"attachment; filename={file_name}"},
+    )
+
+
 @router.get("/{dataset_id}/coco")
 async def get_coco_dataset(
         dataset_id: int,
         exclude_not_fully_annotated: bool = True,
         exclude_unreviewed: bool = True,
+        contour_selection: ContourSelection = "all",
         include_images: bool = True,
         log_to_mlflow: bool = False,
         mlflow_run_id: str | None = None,
@@ -439,6 +500,10 @@ async def get_coco_dataset(
         dataset_id (int): The ID of the dataset to download.
         exclude_not_fully_annotated (bool): Whether to exclude not fully annotated masks.
         exclude_unreviewed (bool): Whether to exclude unreviewed contours.
+        contour_selection ("all" | "leaves" | "top_level"): Which contours of the
+            annotation hierarchy to emit. "all" keeps every contour (parents overlap
+            their children), "leaves" keeps only the innermost contours, "top_level"
+            keeps only contours without a parent.
         include_images (bool): Whether to include images in the dataset.
         log_to_mlflow (bool): Whether to log the dataset to MLflow.
         mlflow_run_id (str | None): The MLflow run ID.
@@ -462,6 +527,7 @@ async def get_coco_dataset(
         db,
         exclude_not_fully_annotated,
         exclude_unreviewed,
+        contour_selection=contour_selection,
         log_to_mlflow=log_to_mlflow,
         mlflow_run_id=mlflow_run_id,
     )
@@ -479,14 +545,10 @@ async def get_coco_dataset(
         # Add the COCO JSON file
         zipf.write(coco_json_path, arcname=os.path.basename(coco_json_path))
 
-        # Add images if requested
-        if include_images:
-            images_query = db.query(Images).filter_by(dataset_id=dataset_id)
-
-            if exclude_not_fully_annotated:
-                images_query = images_query.join(Masks).filter(Masks.fully_annotated == True)
-
-            images = images_query.all()
+        # Add only the images referenced by the COCO JSON, so the bundle stays in sync
+        # with the annotations (same filters, no duplicates).
+        if include_images and result["image_ids"]:
+            images = db.query(Images).filter(Images.id.in_(list(result["image_ids"]))).all()
 
             for image in images:
                 if os.path.exists(image.file_path):
