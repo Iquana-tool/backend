@@ -94,7 +94,7 @@ class InstanceSegmentationResult:
 
 
 @dataclass
-class CompletionResult:
+class SuggestionResult:
     contours: list[Contour]
     success: bool
     message: str
@@ -283,7 +283,7 @@ async def run_instance_segmentation(
     )
 
 
-async def run_completion_segmentation(
+async def run_suggestion_segmentation(
         *,
         service: BaseService,
         image_url: str,
@@ -292,8 +292,8 @@ async def run_completion_segmentation(
         positive_exemplars: list,
         concept=None,
         negative_exemplars: list | None = None,
-) -> CompletionResult:
-    """Run annotation completion and parse the discovered contours.
+) -> SuggestionResult:
+    """Run annotation suggestion and parse the discovered contours.
 
     Returns the raw discovered contours. Exemplar-overlap filtering
     (``filter_exemplar_overlaps``) and hierarchy placement (``assign_hierarchy_parents``)
@@ -310,7 +310,7 @@ async def run_completion_segmentation(
     )
     response = await service.inference(request)
     contours = [Contour.model_validate(contour_json) for contour_json in (response["result"] or [])]
-    return CompletionResult(
+    return SuggestionResult(
         contours=contours,
         success=response["success"],
         message=response["message"],

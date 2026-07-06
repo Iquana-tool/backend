@@ -13,7 +13,8 @@ from app.routes.general.images import router as image_router
 from app.routes.general.labels import router as label_router
 from app.routes.general.masks import router as mask_router
 from app.routes.general.status import router as status_router
-from app.routes.services.completion_router import router as completion_segmentation_router
+from app.routes.services.suggestion_router import router as suggestion_segmentation_router
+from app.routes.services.label_space_router import router as label_space_router
 from app.routes.services.prompted_router import router as prompted_segmentation_router
 from app.routes.services.instance_seg_router import router as instance_segmentation_router
 from app.routes.websockets.image_annotation_session import router as image_annotation_session_router
@@ -75,7 +76,8 @@ def create_app():
 
     # Services; Add your own service here!
     app.include_router(prompted_segmentation_router)
-    app.include_router(completion_segmentation_router)
+    app.include_router(suggestion_segmentation_router)
     app.include_router(instance_segmentation_router)
+    app.include_router(label_space_router)
 
     return app

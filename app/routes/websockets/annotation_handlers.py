@@ -21,13 +21,13 @@ from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.masks import Masks
 from app.routes.websockets.messaging import send_msg
-from app.services.ai_services.instance_suggestion import CompletionService
+from app.services.ai_services.instance_suggestion import SuggestionService
 from app.services.ai_services.instance_segmentation import InstanceSegmentationService
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.annotation_session.operations import (
     assign_hierarchy_parents,
     filter_exemplar_overlaps,
-    run_completion_segmentation,
+    run_suggestion_segmentation,
     run_instance_segmentation,
     run_prompted_segmentation,
 )
@@ -46,7 +46,7 @@ async def startup(websocket: WebSocket, state: AnnotationSessionState):
     print(f"Annotation session initialized: {state.model_dump()}")
     # Check for running backends
     await state.check_and_register_backend(PromptedSegmentationService(), Backends.PROMPTED_SEGMENTATION.value)
-    await state.check_and_register_backend(CompletionService(), Backends.COMPLETION_SEGMENTATION.value)
+    await state.check_and_register_backend(SuggestionService(), Backends.SUGGESTION_SEGMENTATION.value)
     await state.check_and_register_backend(InstanceSegmentationService(), Backends.INSTANCE_SEGMENTATION.value)
 
     with get_context_session() as db:
@@ -260,7 +260,7 @@ async def handle_prompted_segmentation(
         websocket: WebSocket,
         client_msg: ClientMessage,
         state: AnnotationSessionState,
-        override_completion_disable=False,
+        override_suggestion_disable=False,
 ):
     """ Handle prompted_segmentation using a prompted model. """
     model_identifier = client_msg.data.get("model_key")
@@ -330,10 +330,10 @@ async def handle_prompted_segmentation(
 
 async def handle_suggestion_select_model(websocket: WebSocket, client_msg: ClientMessage,
                                          state: AnnotationSessionState):
-    """ Handle the selection of a completion model. """
-    if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
+    """ Handle the selection of a suggestion model. """
+    if Backends.SUGGESTION_SEGMENTATION.value in state._running_backends:
         model_identifier = client_msg.data.get("model_identifier")
-        response = await state._running_backends[Backends.COMPLETION_SEGMENTATION.value].select_model(state.user_id,
+        response = await state._running_backends[Backends.SUGGESTION_SEGMENTATION.value].select_model(state.user_id,
                                                                                            model_identifier)
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
@@ -347,20 +347,20 @@ async def handle_suggestion_select_model(websocket: WebSocket, client_msg: Clien
             id=client_msg.id,
             type=ServerMessageType.ERROR,
             success=False,
-            message="Failed to enable annotation completion. Backend is not running.",
+            message="Failed to enable annotation suggestion. Backend is not running.",
             data=None
         ))
 
 
 async def handle_suggestion_enable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle enabling of completion model. Leads to a state change. """
-    if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
-        state._running_backends[Backends.COMPLETION_SEGMENTATION.value].enable()
+    """ Handle enabling of suggestion model. Leads to a state change. """
+    if Backends.SUGGESTION_SEGMENTATION.value in state._running_backends:
+        state._running_backends[Backends.SUGGESTION_SEGMENTATION.value].enable()
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.SUCCESS,
             success=True,
-            message="Enabled annotation completion",
+            message="Enabled annotation suggestion",
             data=None
         ))
     else:
@@ -368,20 +368,20 @@ async def handle_suggestion_enable(websocket: WebSocket, client_msg: ClientMessa
             id=client_msg.id,
             type=ServerMessageType.ERROR,
             success=False,
-            message="Failed to enable annotation completion. Backend is not running.",
+            message="Failed to enable annotation suggestion. Backend is not running.",
             data=None
         ))
 
 
 async def handle_suggestion_disable(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle disabling of completion model. Leads to a state change. """
-    if Backends.COMPLETION_SEGMENTATION.value in state._running_backends:
-        state._running_backends[Backends.COMPLETION_SEGMENTATION.value].disable()
+    """ Handle disabling of suggestion model. Leads to a state change. """
+    if Backends.SUGGESTION_SEGMENTATION.value in state._running_backends:
+        state._running_backends[Backends.SUGGESTION_SEGMENTATION.value].disable()
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.SUCCESS,
             success=True,
-            message="Disabled annotation completion",
+            message="Disabled annotation suggestion",
             data=None
         ))
     else:
@@ -389,13 +389,13 @@ async def handle_suggestion_disable(websocket: WebSocket, client_msg: ClientMess
             id=client_msg.id,
             type=ServerMessageType.ERROR,
             success=False,
-            message="Failed to disable annotation completion. Backend is not running.",
+            message="Failed to disable annotation suggestion. Backend is not running.",
             data=None
         ))
 
 
 async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle the completion of a completion model. """
+    """ Handle the suggestion of a suggestion model. """
     seed_contour_ids = client_msg.data.get("seed_contour_ids")
     with get_context_session() as db:
         contours = await contours_db.get_contours(seed_contour_ids, db)
@@ -413,8 +413,8 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
     else:
         concept = None
 
-    result = await run_completion_segmentation(
-        service=state._running_backends[Backends.COMPLETION_SEGMENTATION.value],
+    result = await run_suggestion_segmentation(
+        service=state._running_backends[Backends.SUGGESTION_SEGMENTATION.value],
         image_url=state.image_db.file_path,
         model_key=client_msg.data.get('model_key'),
         user_id=state.user_id,
@@ -442,7 +442,7 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
         message=result.message,
         data={"added_count": len(suggested)},
     ))
-    for contour in discovered:
+    for contour in suggested:
         await add_object(contour, websocket, client_msg, state)
 
 

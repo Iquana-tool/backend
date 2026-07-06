@@ -16,7 +16,7 @@ logger = getLogger(__name__)
 
 class Backends(StrEnum):
     PROMPTED_SEGMENTATION = "prompted_segmentation"
-    COMPLETION_SEGMENTATION = "completion_segmentation"
+    SUGGESTION_SEGMENTATION = "suggestion_segmentation"
     SEMANTIC_SEGMENTATION = "semantic_segmentation"
     INSTANCE_SEGMENTATION = "instance_segmentation"
 

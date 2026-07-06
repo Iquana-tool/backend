@@ -79,13 +79,13 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                         await handlers.handle_prompted_select_model(websocket, client_msg, state)
                     case ClientMessageType.PROMPTED_INFERENCE:
                         await handlers.handle_prompted_segmentation(websocket, client_msg, state)
-                    case ClientMessageType.COMPLETION_SELECT_MODEL:
+                    case ClientMessageType.SUGGESTION_SELECT_MODEL:
                         await handlers.handle_suggestion_select_model(websocket, client_msg, state)
-                    case ClientMessageType.COMPLETION_ENABLE:
+                    case ClientMessageType.SUGGESTION_ENABLE:
                         await handlers.handle_suggestion_enable(websocket, client_msg, state)
-                    case ClientMessageType.COMPLETION_DISABLE:
+                    case ClientMessageType.SUGGESTION_DISABLE:
                         await handlers.handle_suggestion_disable(websocket, client_msg, state)
-                    case ClientMessageType.COMPLETION_INFERENCE:
+                    case ClientMessageType.SUGGESTION_INFERENCE:
                         await handlers.handle_suggestion(websocket, client_msg, state)
                     case ClientMessageType.INSTANCE_SELECT_MODEL:
                         await handlers.handle_instance_select_model(websocket, client_msg, state)
