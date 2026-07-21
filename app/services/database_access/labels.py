@@ -73,6 +73,65 @@ async def create_label(
     return new_label
 
 
+async def bulk_create_labels(
+        dataset_id: int,
+        draft_labels: list,
+        db: Session,
+):
+    """Persist a whole draft label hierarchy for a dataset in one transaction.
+
+    ``draft_labels`` is a list of objects exposing ``name`` and ``children``
+    (e.g. :class:`app.schemas.label_space.DraftLabel`). The tree is inserted
+    depth-first; parent ids are resolved as each node is flushed. Label values
+    continue from the dataset's current maximum.
+
+    Names must be unique across the whole dataset (existing labels included),
+    mirroring the constraint enforced by :func:`create_label`.
+
+    Returns:
+        int: The number of labels created.
+    """
+    existing = db.query(Labels).filter_by(dataset_id=dataset_id).all()
+    existing_names = {label.name for label in existing}
+    next_value = max((label.value for label in existing), default=0) + 1
+
+    seen: set[str] = set()
+    created_count = 0
+
+    def insert(node, parent_id):
+        nonlocal next_value, created_count
+        name = (node.name or "").strip()
+        if not name:
+            raise ValueError("Label names must not be empty.")
+        if name in existing_names or name in seen:
+            raise ValueError(
+                f"Duplicate label name: '{name}'. Names must be unique within a dataset."
+            )
+        seen.add(name)
+        label = Labels(
+            dataset_id=dataset_id,
+            name=name,
+            parent_id=parent_id,
+            value=next_value,
+        )
+        next_value += 1
+        db.add(label)
+        db.flush()  # assign label.id so children can reference it
+        created_count += 1
+        for child in getattr(node, "children", []) or []:
+            insert(child, label.id)
+
+    try:
+        for root in draft_labels:
+            insert(root, None)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return created_count
+
+
 async def update_label(
         label_id: int,
         updates: dict,

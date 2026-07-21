@@ -31,6 +31,8 @@ async def delete_mask(
         db: Session
 ):
     mask = db.query(Masks).filter_by(id=mask_id).one_or_none()
+    if mask is None:
+        return
     db.delete(mask)
     db.commit()
 
