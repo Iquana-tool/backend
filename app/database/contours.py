@@ -1,7 +1,7 @@
 from iquana_toolbox.schemas.database.contours import Contour
 from sqlalchemy import Column, Integer, ForeignKey, Float, JSON, Boolean, String, Table, case
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import relationship, Mapped
+from sqlalchemy.orm import relationship, backref, Mapped
 
 from app.database import database
 
@@ -33,8 +33,12 @@ class Contours(database):
     x = Column(JSON, nullable=False)
     y = Column(JSON, nullable=False)
 
-    # Easy access to children, this makes accessing children much faster
-    children = relationship("Contours", backref="parent", remote_side=[id], single_parent=True)
+    # Easy access to children, this makes accessing children much faster.
+    # The "parent" backref is the one-to-many (collection) side, so passive_deletes
+    # goes there: deleting a contour lets the DB's ON DELETE CASCADE remove the child
+    # contours instead of SQLAlchemy nulling their parent_id (which would orphan them).
+    children = relationship("Contours", backref=backref("parent", passive_deletes=True),
+                            remote_side=[id], single_parent=True)
     reviewed_by = relationship("Users", secondary=reviewer_contour_association, back_populates="reviewed_objects")
 
 
