@@ -63,3 +63,4 @@ debug.log
 build_key
 build_key*
 /mlartifacts/
+/mlflow.db
