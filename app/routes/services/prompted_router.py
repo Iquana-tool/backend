@@ -5,6 +5,7 @@ from iquana_toolbox.schemas.user import User
 from iquana_toolbox.schemas.networking.http.services import PromptedSegmentationRequest
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.auth import get_current_user
+from app.services.model_registry import list_available_models
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/prompted_segmentation", tags=["prompted_segmentation"])
@@ -30,8 +31,8 @@ async def health_check(user: User = Depends(get_current_user)):
 
 @router.get("/models")
 async def get_available_models(user: User = Depends(get_current_user)):
-    """Retrieve the list of available prompted segmentation models from the backend."""
-    return await service.get_models()
+    """Retrieve available prompted segmentation models directly from MLflow."""
+    return list_available_models("prompted-segmentation")
 
 
 @router.post('/run')

@@ -19,7 +19,9 @@ class Masks(database):
     file_path = Column(String, nullable=False)  # Where this mask should be saved
 
     image = relationship("Images")
-    contours = relationship("Contours", backref="mask")
+    # passive_deletes=True: rely on the DB's ON DELETE CASCADE to remove contours
+    # instead of SQLAlchemy trying to NULL out the (non-nullable) contours.mask_id.
+    contours = relationship("Contours", backref="mask", passive_deletes=True)
 
     @hybrid_property
     def status(self) -> str:

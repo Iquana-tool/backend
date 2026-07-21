@@ -13,7 +13,9 @@ logger = getLogger(__name__)
 
 
 class BaseService(ABC):
-    """Base class for all service classes."""
+    """Base HTTP communciation class for all services. Each service should inherit from this class and implement the
+    inference method. The base class provides common methods for checking backend health, selecting
+    models, and cropping images based on contours. """
     def __init__(self, backend_url):
         self.backend_url = backend_url
         self.enabled = True
@@ -36,26 +38,6 @@ class BaseService(ABC):
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
             logger.error(f"Error checking prompted prompted_segmentation backend: {e}")
             return False
-
-    async def upload_image(self, user_id: str, image_id: int):
-        """Upload an image to the prompted prompted_segmentation backend.
-        :param user_id: The user id.
-        :param image_id: The image id.
-        :returns dict: A dictionary containing the success status and message.
-        """
-        url = f"{self.backend_url}/annotation_session/images/preload"
-        with get_context_session() as session:
-            image_path = session.query(Images.file_path).filter_by(id=image_id).first()
-            image_path = image_path[0]
-
-        request = BaseImageRequest(
-            image_url=image_path,
-            user_id=user_id,
-        )
-        async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(url, json=request.model_dump())
-            response.raise_for_status()
-        return response.json()
 
     async def select_model(self, user_id: str, model_identifier: str):
         """

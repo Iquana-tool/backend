@@ -1,11 +1,12 @@
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from iquana_toolbox.schemas.database.labels import Label
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
+from app.schemas.label_space import LabelSpaceDraft
 from app.services.auth import get_current_user
 from app.services.database_access import labels as labels_db
 
@@ -40,6 +41,39 @@ async def create_label(
         "success": True,
         "message": "Label created successfully.",
         "class_id": new_label.id
+    }
+
+
+@router.post("/bulk_create")
+async def bulk_create_labels(
+        dataset_id: int,
+        draft: LabelSpaceDraft,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user),
+):
+    """Persist an approved draft label hierarchy for a dataset in one transaction.
+
+    Used by the "Describe your label space" assistant to apply a reviewed draft.
+    Label names must be unique across the dataset; on a conflict nothing is
+    created and a 400 is returned so the user can resolve it in the review step.
+
+    Args:
+        dataset_id (int): The dataset the labels belong to.
+        draft (LabelSpaceDraft): The nested label hierarchy to create.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: success status, message and the number of labels created.
+    """
+    try:
+        created_count = await labels_db.bulk_create_labels(dataset_id, draft.labels, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "success": True,
+        "message": f"Created {created_count} labels.",
+        "created_count": created_count,
     }
 
 
