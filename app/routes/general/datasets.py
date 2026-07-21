@@ -10,17 +10,17 @@ from fastapi import APIRouter, Depends, HTTPException
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 from starlette import status
-from starlette.responses import StreamingResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from app.database import get_session
 from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
-from app.database.masks import Masks
 from app.database.users import Users
 from app.services.auth import get_current_user
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import labels as labels_db
+from app.services.database_access.datasets import ContourSelection, export_dataset_contours_to_coco
 from app.services.util import get_mask_path_from_image_path
 
 # Create a router for the export functionality
@@ -420,65 +420,149 @@ async def download_dataset_quantification(
         return response
 
 
-@router.get("/{dataset_id}/ml_dataset", deprecated=True)
-async def get_segmentation_dataset(
+@router.get("/{dataset_id}/coco/annotations")
+async def get_coco_annotations(
         dataset_id: int,
-        include_label_ids: list[int] = None,
-        exclude: list[Literal["unreviewed", "not_fully_annotated"]] = ["unreviewed", "not_fully_annotated"],
-        as_download: bool = False,
+        exclude_not_fully_annotated: bool = True,
+        exclude_unreviewed: bool = True,
+        contour_selection: ContourSelection = "all",
+        log_to_mlflow: bool = False,
+        mlflow_run_id: str | None = None,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
     """
-    Download all images and masks as a ZIP file for the given dataset_id.
+    Return the dataset annotations as a COCO JSON document, without any images.
 
+    Shares the COCO-building logic with the ZIP export, so the annotations are
+    identical to what `GET /{dataset_id}/coco` bundles.
     Args:
-        dataset_id (int): The ID of the dataset.
-        exclude_unreviewed_annotations (bool): Whether to exclude unreviewed annotations.
-        db (Session): The database session.
+        dataset_id (int): The ID of the dataset to export.
+        exclude_not_fully_annotated (bool): Whether to exclude not fully annotated masks.
+        exclude_unreviewed (bool): Whether to exclude unreviewed contours.
+        contour_selection ("all" | "leaves" | "top_level"): Which contours of the
+            annotation hierarchy to emit. "all" keeps every contour (parents overlap
+            their children), "leaves" keeps only the innermost contours, "top_level"
+            keeps only contours without a parent.
+        log_to_mlflow (bool): Whether to log the export to MLflow.
+        mlflow_run_id (str | None): The MLflow run ID.
+        db (Session, optional): The database session. Defaults to Depends(get_session).
         user (User): The current authenticated user.
 
     Returns:
-        StreamingResponse: A ZIP file containing all images and masks.
+        JSONResponse: The COCO annotations document.
     """
-    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
+    # Check user access to the dataset
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    dataset = await datasets_db.get_dataset(dataset_id, db=db)
     if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
 
-    query = db.query(Images.file_path).join(Masks).filter(Images.dataset_id == dataset_id)
+    result = await export_dataset_contours_to_coco(
+        dataset_id,
+        db,
+        exclude_not_fully_annotated,
+        exclude_unreviewed,
+        contour_selection=contour_selection,
+        write_to_disk=False,
+        log_to_mlflow=log_to_mlflow,
+        mlflow_run_id=mlflow_run_id,
+    )
 
-    if "not_fully_annotated" in exclude:
-        query = query.filter(Masks.fully_annotated == True)
-    if "unreviewed" in exclude:
-        query = query.filter(Masks.fully_annotated == True, Masks.contours.any(Contours.reviewed_by.any())).all()
-    masks = query.all()
-    if not masks:
-        raise HTTPException(status_code=404, detail="No finished masks found for this dataset.")
+    if not result.get("success"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.get("message"))
 
-    zip_filename = f"{dataset.name.replace(' ', '_')}.zip"
+    file_name = f"{dataset.name.replace(' ', '_')}_coco.json"
+    return JSONResponse(
+        content=result["coco_payload"],
+        headers={"Content-Disposition": f"attachment; filename={file_name}"},
+    )
 
-    # Create a streaming response with a ZIP file
+
+@router.get("/{dataset_id}/coco")
+async def get_coco_dataset(
+        dataset_id: int,
+        exclude_not_fully_annotated: bool = True,
+        exclude_unreviewed: bool = True,
+        contour_selection: ContourSelection = "all",
+        include_images: bool = True,
+        log_to_mlflow: bool = False,
+        mlflow_run_id: str | None = None,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """
+    Download the dataset in COCO format as a ZIP file. The ZIP file will contain a JSON file with the annotations and
+    optionally the images.
+    Args:
+        dataset_id (int): The ID of the dataset to download.
+        exclude_not_fully_annotated (bool): Whether to exclude not fully annotated masks.
+        exclude_unreviewed (bool): Whether to exclude unreviewed contours.
+        contour_selection ("all" | "leaves" | "top_level"): Which contours of the
+            annotation hierarchy to emit. "all" keeps every contour (parents overlap
+            their children), "leaves" keeps only the innermost contours, "top_level"
+            keeps only contours without a parent.
+        include_images (bool): Whether to include images in the dataset.
+        log_to_mlflow (bool): Whether to log the dataset to MLflow.
+        mlflow_run_id (str | None): The MLflow run ID.
+        db (Session, optional): The database session. Defaults to Depends(get_session).
+        user (User): The current authenticated user.
+
+    Returns:
+        StreamingResponse: A StreamingResponse object containing the dataset as a zip file.
+    """
+    # Check user access to the dataset
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    dataset = await datasets_db.get_dataset(dataset_id, db=db)
+    if not dataset:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
+
+    # Export contours to COCO format
+    result = await export_dataset_contours_to_coco(
+        dataset_id,
+        db,
+        exclude_not_fully_annotated,
+        exclude_unreviewed,
+        contour_selection=contour_selection,
+        log_to_mlflow=log_to_mlflow,
+        mlflow_run_id=mlflow_run_id,
+    )
+
+    if not result.get("success"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.get("message"))
+
+    coco_json_path = result["output_file_path"]
+
+    # Create ZIP file with COCO JSON and optionally images
+    zip_filename = f"{dataset.name.replace(' ', '_')}_coco.zip"
     buffer = io.BytesIO()
+
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for mask in masks:
-            image = db.query(Images).filter_by(file_path=mask.file_path).first()
-            if not image:
-                continue
+        # Add the COCO JSON file
+        zipf.write(coco_json_path, arcname=os.path.basename(coco_json_path))
 
-            mask_file_path = get_mask_path_from_image_path(image.file_path)
-            if not os.path.exists(mask_file_path):
-                logger.error(f"Mask file not found at {mask_file_path}.")
-                continue
+        # Add only the images referenced by the COCO JSON, so the bundle stays in sync
+        # with the annotations (same filters, no duplicates).
+        if include_images and result["image_ids"]:
+            images = db.query(Images).filter(Images.id.in_(list(result["image_ids"]))).all()
 
-            zipf.write(mask_file_path, os.path.join("masks", os.path.basename(mask_file_path)))
-            zipf.write(image.file_path, os.path.join("images", os.path.basename(image.file_path)))
+            for image in images:
+                if os.path.exists(image.file_path):
+                    zipf.write(image.file_path, arcname=os.path.join("images", os.path.basename(image.file_path)))
+                else:
+                    logger.warning(f"Image file not found at {image.file_path}.")
 
     # Seek to the start of the buffer
     buffer.seek(0)
 
-    # Create a streaming response
+    # Create and return streaming response
     return StreamingResponse(
         buffer,
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
     )
+

@@ -1,15 +1,14 @@
 services:
-  coral-back:
+  iquana-backend:
     build:
       context: .
       dockerfile: Dockerfile
-    image: coral-back
-    container_name: coral-back
+    image: iquana-backend:latest
+    container_name: iquana-backend
     ports:
       - "8000:8000"
     volumes:
       - ./data:/data
-      - ./app/services/prompted_segmentation/weights:/app/services/prompted_segmentation/weights
       - ./logs:/app/logs
     environment:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:7000}
@@ -19,6 +18,3 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
-    # Optional: Can use env_file to load from .env
-    # env_file:
-    #   - .env
