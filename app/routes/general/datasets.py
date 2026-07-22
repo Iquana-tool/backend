@@ -7,21 +7,20 @@ from typing import Literal
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
-from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 from starlette import status
 from starlette.responses import JSONResponse, StreamingResponse
 
 from app.database import get_session
-from app.database.contours import Contours
-from app.database.datasets import Datasets
 from app.database.images import Images
-from app.database.users import Users
+from app.schemas.auth_user import AuthenticatedUser
+from app.schemas.permissions import DatasetRole, Permission
 from app.services.auth import get_current_user
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import labels as labels_db
+from app.services.database_access import members as members_db
 from app.services.database_access.datasets import ContourSelection, export_dataset_contours_to_coco
-from app.services.util import get_mask_path_from_image_path
+from app.services.permissions import ensure_permission, require, require_global
 
 # Create a router for the export functionality
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -33,27 +32,28 @@ async def create_dataset(name: str,
                          description: str,
                          dataset_type: Literal["image", "scan", "DICOM"],
                          db: Session = Depends(get_session),
-                         current_user=Depends(get_current_user)):
-    """Create a new dataset.
+                         current_user: AuthenticatedUser = Depends(
+                             require_global(Permission.DATASET_CREATE))):
+    """Create a new dataset. The creator becomes its owner.
 
     Args:
         name (str): The name of the dataset.
         description (str): A brief description of the dataset.
         dataset_type (Literal["image", "scan", "DICOM"]): The type of dataset.
-        current_user (Users): Auth bearer token.
+        current_user (AuthenticatedUser): Caller, who must be allowed to create datasets.
 
     Returns:
         dict: A dictionary containing the success status and message, or error details.
     """
-
+    dataset = await datasets_db.create_new_dataset(
+        name=name,
+        description=description,
+        owner_username=current_user.username,
+        db=db
+    )
     return {"success": True,
             "message": "Dataset created successfully.",
-            "dataset_id": await datasets_db.create_new_dataset(
-                name=name,
-                description=description,
-                owner_username=current_user.username,
-                db=db
-            )
+            "dataset_id": dataset
             }
 
 
@@ -61,42 +61,49 @@ async def create_dataset(name: str,
 async def share_dataset(
         dataset_id: int,
         share_with_username: str,
+        role: str = "curator",
         db: Session = Depends(get_session),
-        user: "User" = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.MEMBER_GRANT))
 ):
     """Share a dataset with another user by username.
+
+    Kept for backwards compatibility; it now grants a role rather than blanket
+    access. `PUT /datasets/{id}/members` is the fuller version, with per-member
+    permission overrides.
 
     Args:
         dataset_id (int): The ID of the dataset to share.
         share_with_username (str): The username to share with.
+        role (str): Dataset role to grant. Defaults to curator, matching the
+            unrestricted access that sharing used to imply.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and message.
     """
-    if not await datasets_db.user_has_sharing_permission_for_dataset(dataset_id, user.username, db=db, ):
-        return HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                             detail="User does not have permission to share this dataset.")
-    await datasets_db.share_dataset(
-        dataset_id,
-        share_with_username,
-        sharing_username=user.username,
-        db=db,
-    )
-    return {"success": True, "message": f"Dataset shared with {share_with_username}"}
+    try:
+        dataset_role = DatasetRole(role)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=f"Unknown role '{role}'. One of: "
+                                   f"{', '.join(r.value for r in DatasetRole)}.")
+    members_db.grant_role(dataset_id, share_with_username, dataset_role,
+                          granted_by=user.username, db=db)
+    return {"success": True,
+            "message": f"Dataset shared with {share_with_username} as {dataset_role.value}."}
 
 
 @router.get("/all")
 async def get_all_datasets(
         db: Session = Depends(get_session),
-        user: "User" = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(get_current_user)
 ):
-    """Get all datasets owned by or shared with the current user.
+    """Get all datasets the current user has any role on.
 
     Args:
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and the list of datasets.
@@ -110,7 +117,10 @@ async def get_all_datasets(
             "dataset_type": ds.dataset_type,
             "folder_path": ds.folder_path,
             "created_by": ds.created_by,
-            "shared_with": [u.username for u in ds.shared_with]
+            "shared_with": [u.username for u in ds.shared_with],
+            # What *this* caller may do, so the UI can hide actions it would reject.
+            "my_role": user.role_for(ds.id).value if user.role_for(ds.id) else None,
+            "my_permissions": sorted(p.value for p in user.permissions_for(ds.id)),
         }
         for ds in datasets
     ]}
@@ -120,34 +130,67 @@ async def get_all_datasets(
 async def get_dataset(
         dataset_id: int,
         db: Session = Depends(get_session),
-        user: "User" = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_READ))
 ):
     """Get dataset information.
 
     Args:
         dataset_id (int): The ID of the dataset.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and dataset information.
     """
     dataset = await datasets_db.get_dataset(dataset_id, db=db)
-    return {"success": True, "message": "Dataset found.", "dataset": dataset}
+    return {
+        "success": True,
+        "message": "Dataset found.",
+        "dataset": dataset,
+        "my_role": user.role_for(dataset_id).value if user.role_for(dataset_id) else None,
+        "my_permissions": sorted(p.value for p in user.permissions_for(dataset_id)),
+    }
+
+
+@router.patch("/{dataset_id}/settings")
+async def update_dataset_settings(
+        dataset_id: int,
+        require_independent_review: bool | None = None,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE))
+):
+    """Update per-dataset review policy.
+
+    With `require_independent_review` on, a contour cannot be approved by whoever
+    created it, so `finished` means a second pair of eyes actually saw the work.
+    Off by default, because a single owner annotating their own dataset would
+    otherwise never be able to finish it.
+    """
+    dataset = await datasets_db.get_dataset(dataset_id, db=db)
+    if dataset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
+    if require_independent_review is not None:
+        dataset.require_independent_review = require_independent_review
+        db.commit()
+    return {
+        "success": True,
+        "message": "Dataset settings updated.",
+        "require_independent_review": dataset.require_independent_review,
+    }
 
 
 @router.get("/{dataset_id}/images/count")
 async def get_number_of_images(
         dataset_id: int,
         db: Session = Depends(get_session),
-        user: "User" = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_READ))
 ):
     """Get the number of images in a dataset.
 
     Args:
         dataset_id (int): The ID of the dataset.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the number of images.
@@ -161,13 +204,13 @@ async def get_number_of_images(
 
 @router.get("/{dataset_id}/progress")
 async def get_annotation_progress(dataset_id: int,
-                                  user: User = Depends(get_current_user),
+                                  user: AuthenticatedUser = Depends(require(Permission.DATASET_READ)),
                                   db: Session = Depends(get_session)):
     """Get the annotation progress of a dataset.
 
     Args:
         dataset_id (int): The ID of the dataset to check.
-        user (Users): Authentication bearer token.
+        user (AuthenticatedUser): The current authenticated user.
         db (Session): The database session.
 
     Returns:
@@ -193,20 +236,18 @@ async def get_annotation_progress(dataset_id: int,
 async def delete_dataset(
         dataset_id: int,
         db: Session = Depends(get_session),
-        user: "User" = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_DELETE))
 ):
     """Delete a dataset.
 
     Args:
         dataset_id (int): The ID of the dataset to delete.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and message.
     """
-    if dataset_id not in user.owned_datasets:
-        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User cannot delete dataset.")
     await datasets_db.delete_dataset(dataset_id, db=db, )
     return {"success": True, "message": "Dataset deleted successfully."}
 
@@ -214,9 +255,9 @@ async def delete_dataset(
 @router.get("/{dataset_id}/images")
 async def list_images(
         dataset_id: int,
-        filter_for_status: Literal["not_started", "in_progress", "reviewable", "finished"] | None = None,
+        filter_for_status: Literal["not_started", "in_progress", "rejected", "reviewable", "finished"] | None = None,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ))
 ):
     """List all images with masks of certain status for a given image ID.
 
@@ -224,7 +265,7 @@ async def list_images(
         dataset_id: Dataset ID to retrieve images from.
         filter_for_status: The status of the masks to filter by.
         db: Database session dependency.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         A list of image IDs.
@@ -246,7 +287,7 @@ async def get_base64_images_of_dataset(
         dataset_id: int,
         limit: int = None,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.IMAGE_READ))
 ):
     """Get all images of a dataset.
 
@@ -254,7 +295,7 @@ async def get_base64_images_of_dataset(
         dataset_id: ID of the dataset to retrieve images from.
         limit: Optional limit on the number of images to return. If not provided, all images will be returned.
         db: Database session dependency.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         A dict mapping from image ID to base64 encoded image.
@@ -278,7 +319,7 @@ async def get_base64_thumbnails_of_dataset(
         dataset_id: int,
         limit: int = None,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.IMAGE_READ))
 ):
     """Get all images of a dataset.
 
@@ -286,7 +327,7 @@ async def get_base64_thumbnails_of_dataset(
         dataset_id: ID of the dataset to retrieve images from.
         limit: Optional limit on the number of images to return. If not provided, all images will be returned.
         db: Database session dependency.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         A dict mapping from image ID to base64 encoded image.
@@ -309,14 +350,14 @@ async def get_base64_thumbnails_of_dataset(
 async def get_labels(
         dataset_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_READ))
 ):
     """Retrieve all labels for a given dataset.
 
     Args:
         dataset_id (int): The ID of the dataset.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and the labels hierarchy.
@@ -336,7 +377,7 @@ async def get_dataset_quantification(
         exclude_unreviewed: bool = True,
         exclude_not_fully_annotated: bool = True,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.EXPORT_QUANTIFICATION))
 ):
     """
     Export quantification data for the given dataset_id and labels.
@@ -347,14 +388,12 @@ async def get_dataset_quantification(
         exclude_unreviewed (bool): Whether to exclude unreviewed contours.
         as_download (bool, optional): Whether to export as CSV. Defaults to False. If False, returns the data as a json.
         db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and message if error, or a
         StreamingResponse with the CSV file.
     """
-    if dataset_id not in user.available_datasets:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
     df: pd.DataFrame = await datasets_db.get_dataset_as_df(dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db)
     if df.empty:
         return {
@@ -378,7 +417,7 @@ async def download_dataset_quantification(
         exclude_not_fully_annotated: bool = True,
         file_format: Literal["json", "csv"] = "json",
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.EXPORT_QUANTIFICATION))
 ):
     """
     Export quantification data for the given dataset_id and labels.
@@ -389,14 +428,12 @@ async def download_dataset_quantification(
         exclude_unreviewed (bool): Whether to exclude unreviewed contours.
         file_format (Literal["json", "csv"]): File format to export to.
         db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and message if error, or a
         StreamingResponse with the CSV file.
     """
-    if dataset_id not in user.available_datasets:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
 
     dataset_name = (await datasets_db.get_dataset(dataset_id, db=db, )).name
     df = await datasets_db.get_dataset_as_df(dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db)
@@ -429,7 +466,7 @@ async def get_coco_annotations(
         log_to_mlflow: bool = False,
         mlflow_run_id: str | None = None,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.EXPORT_ANNOTATIONS))
 ):
     """
     Return the dataset annotations as a COCO JSON document, without any images.
@@ -447,14 +484,12 @@ async def get_coco_annotations(
         log_to_mlflow (bool): Whether to log the export to MLflow.
         mlflow_run_id (str | None): The MLflow run ID.
         db (Session, optional): The database session. Defaults to Depends(get_session).
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         JSONResponse: The COCO annotations document.
     """
     # Check user access to the dataset
-    if dataset_id not in user.available_datasets:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
 
     dataset = await datasets_db.get_dataset(dataset_id, db=db)
     if not dataset:
@@ -491,7 +526,7 @@ async def get_coco_dataset(
         log_to_mlflow: bool = False,
         mlflow_run_id: str | None = None,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.EXPORT_ANNOTATIONS))
 ):
     """
     Download the dataset in COCO format as a ZIP file. The ZIP file will contain a JSON file with the annotations and
@@ -504,18 +539,19 @@ async def get_coco_dataset(
             annotation hierarchy to emit. "all" keeps every contour (parents overlap
             their children), "leaves" keeps only the innermost contours, "top_level"
             keeps only contours without a parent.
-        include_images (bool): Whether to include images in the dataset.
+        include_images (bool): Whether to include images in the dataset. Bundling the
+            raw imagery needs `export.images` on top of `export.annotations`, so
+            collaborators can be given the annotations without the pixels.
         log_to_mlflow (bool): Whether to log the dataset to MLflow.
         mlflow_run_id (str | None): The MLflow run ID.
         db (Session, optional): The database session. Defaults to Depends(get_session).
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         StreamingResponse: A StreamingResponse object containing the dataset as a zip file.
     """
-    # Check user access to the dataset
-    if dataset_id not in user.available_datasets:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+    if include_images:
+        ensure_permission(user, dataset_id, Permission.EXPORT_IMAGES)
 
     dataset = await datasets_db.get_dataset(dataset_id, db=db)
     if not dataset:

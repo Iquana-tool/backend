@@ -14,6 +14,8 @@ import numpy as np
 from PIL import Image as PILImage
 from iquana_toolbox.quantification import QuantContext, get_metric
 from iquana_toolbox.schemas.database.contours import Contour
+from iquana_toolbox.schemas.database.quantification import QuantificationModel
+from sqlalchemy import Select
 from sqlalchemy.orm import Session
 
 from app.database.contour_metrics import ContourMetrics
@@ -121,6 +123,40 @@ def build_quant_context(image, contours: list[Contour], image_loader=None) -> Qu
         scale_y=scale_y,
         unit=unit,
         image_loader=image_loader,
+    )
+
+
+def quantify_contour_row(contour, image) -> QuantificationModel:
+    """Recompute a stored contour's geometry in physical units.
+
+    The database keeps NORMALIZED ([0, 1]) coordinates, so they are projected back to
+    pixels with the image's dimensions before any geometry is computed - computing on the
+    normalized values directly would anisotropically distort shapes on non-square images.
+    Shared by the dual-write path in ``app.database.contours.save_contour_tree`` and
+    ``scripts/backfill_contour_metrics`` so the legacy columns and the tall
+    ``contour_metrics`` rows are always filled from exactly the same math.
+
+    Args:
+        contour: A ``Contours`` ORM row (normalized ``x`` / ``y`` coordinate lists).
+        image: The ``Images`` row the contour belongs to (dimensions + physical scale).
+
+    Returns:
+        The recomputed :class:`QuantificationModel`, in the image's physical length unit.
+    """
+    x = contour.x if isinstance(contour.x, list) else list(contour.x or [])
+    y = contour.y if isinstance(contour.y, list) else list(contour.y or [])
+    if len(x) == 0:
+        points_px = np.empty((0, 2), dtype=np.float64)
+    else:
+        points_px = np.stack([
+            np.asarray(x, dtype=np.float64) * image.width,
+            np.asarray(y, dtype=np.float64) * image.height,
+        ], axis=-1)
+    return QuantificationModel.from_contour(
+        points_px,
+        scale_x=image.scale_x,
+        scale_y=image.scale_y,
+        unit=image.unit or "px",
     )
 
 
@@ -236,7 +272,24 @@ def mark_appearance_stale(session: Session, contour_id: int) -> int:
     ).update({ContourMetrics.stale: True}, synchronize_session=False)
 
 
-def mark_contextual_stale(session: Session, contour_ids: Iterable[int]) -> int:
+def _id_filter(contour_ids: "Iterable[int] | Select"):
+    """Normalize a contour-id argument for use with ``IN``.
+
+    Accepts either a concrete collection of ids or a ``SELECT`` that yields them. The
+    subquery form matters on the bulk write path: resolving a sibling group in SQL keeps
+    the group from being materialized into python once per saved contour, which is what
+    turns a large mask import into quadratic work.
+
+    Returns:
+        A list of ids, a :class:`Select`, or ``None`` when there is nothing to match.
+    """
+    if isinstance(contour_ids, Select):
+        return contour_ids
+    ids = list(contour_ids)
+    return ids or None
+
+
+def mark_contextual_stale(session: Session, contour_ids: "Iterable[int] | Select") -> int:
     """Mark the CONTEXTUAL-tier metric rows of ``contour_ids`` as ``stale=True``.
 
     Low-level primitive shared by the group-invalidation helper in
@@ -246,16 +299,17 @@ def mark_contextual_stale(session: Session, contour_ids: Iterable[int]) -> int:
 
     Args:
         session: The database session (caller controls commit).
-        contour_ids: The contours whose contextual rows should be invalidated.
+        contour_ids: The contours whose contextual rows should be invalidated, either as
+            a collection of ids or as a ``SELECT`` yielding them (see :func:`_id_filter`).
 
     Returns:
         The number of rows marked stale.
     """
-    contour_ids = list(contour_ids)
-    if not contour_ids:
+    id_filter = _id_filter(contour_ids)
+    if id_filter is None:
         return 0
     return session.query(ContourMetrics).filter(
-        ContourMetrics.contour_id.in_(contour_ids),
+        ContourMetrics.contour_id.in_(id_filter),
         ContourMetrics.metric_key.in_(CONTEXTUAL_METRIC_KEYS),
     ).update({ContourMetrics.stale: True}, synchronize_session=False)
 
@@ -275,16 +329,17 @@ def mark_relational_stale(session: Session, contour_ids: Iterable[int]) -> int:
 
     Args:
         session: The database session (caller controls commit).
-        contour_ids: The contours (parents) whose relational rows should be invalidated.
+        contour_ids: The contours (parents) whose relational rows should be invalidated,
+            either as a collection of ids or as a ``SELECT`` yielding them.
 
     Returns:
         The number of rows marked stale.
     """
-    contour_ids = list(contour_ids)
-    if not contour_ids:
+    id_filter = _id_filter(contour_ids)
+    if id_filter is None:
         return 0
     return session.query(ContourMetrics).filter(
-        ContourMetrics.contour_id.in_(contour_ids),
+        ContourMetrics.contour_id.in_(id_filter),
         ContourMetrics.metric_key.in_(RELATIONAL_METRIC_KEYS),
     ).update({ContourMetrics.stale: True}, synchronize_session=False)
 

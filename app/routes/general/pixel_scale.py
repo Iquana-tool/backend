@@ -1,16 +1,26 @@
+"""Pixel-scale endpoints.
+
+NOTE: this router is still not registered in `create_app()` — it never was, and
+wiring it up would expose endpoints the frontend does not call yet. Its
+`APIRouter("/scale")` call (a positional argument FastAPI rejects) is fixed and
+the permission dependencies are in place, so registering it later is a one-line
+change rather than a new hole. Setting the scale rewrites every quantification
+number in the dataset, hence `pixel_scale.set` rather than annotation rights.
+"""
 from logging import getLogger
 
 from fastapi import APIRouter, Depends, HTTPException
 from iquana_toolbox.schemas.scale import ScaleInput
-from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.images import Images
-from app.services.auth import get_current_user
+from app.schemas.auth_user import AuthenticatedUser
+from app.schemas.permissions import Permission
+from app.services.permissions import require
 from app.services.scale_computation import compute_pixel_scale_from_points
 
-router = APIRouter("/scale", tags=["scale"])
+router = APIRouter(prefix="/scale", tags=["scale"])
 logger = getLogger(__name__)
 
 
@@ -18,7 +28,7 @@ logger = getLogger(__name__)
 async def get_pixel_scale(
     image_id: int,
     db: Session = Depends(get_session),
-    user: User = Depends(get_current_user)
+    user: AuthenticatedUser = Depends(require(Permission.IMAGE_READ, "image_id"))
 ):
     """
     Get the pixel scale for a given image.
@@ -26,7 +36,7 @@ async def get_pixel_scale(
     Args:
         image_id (int): The ID of the image.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: The pixel scale information.
@@ -49,7 +59,8 @@ async def set_pixel_scale(scale_x: float,
                           scale_y: float,
                           unit: str,
                           image_id: int,
-                          user: User = Depends(get_current_user),
+                          user: AuthenticatedUser = Depends(
+                              require(Permission.PIXEL_SCALE_SET, "image_id")),
                           db: Session = Depends(get_session)):
     """
     Set the pixel scale for an image.
@@ -60,7 +71,7 @@ async def set_pixel_scale(scale_x: float,
         unit (str): The unit of measurement (e.g., mm).
         image_id (int): The ID of the image to set the scale for.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A success message with the scale information.
@@ -94,7 +105,7 @@ async def set_pixel_scale(scale_x: float,
 
 @router.post('/set_pixel_scale_via_drawn_line')
 async def set_pixel_scale_via_drawn_line(scale_input: ScaleInput,
-    user: User = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require(Permission.PIXEL_SCALE_SET, "image_id")),
     db: Session = Depends(get_session)):
     """
     Set the pixel scale based on a known distance between two points drawn on the image.
@@ -102,7 +113,7 @@ async def set_pixel_scale_via_drawn_line(scale_input: ScaleInput,
     Args:
         scale_input (ScaleInput): Input containing the coordinates of the two points and the known distance.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A success message with the computed scale information.

@@ -46,8 +46,31 @@ database.metadata.create_all(engine)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _import_models():
+    """Import every model module so `create_all` sees the full metadata.
+
+    Tables referenced only by string in relationships (e.g. ``dataset_members``)
+    are otherwise never imported, which leaves SQLAlchemy unable to resolve the
+    mapper and the table missing from a fresh database.
+    """
+    from app.database import (  # noqa: F401  (imported for their side effects)
+        contour_metrics,
+        contours,
+        dataset_members,
+        datasets,
+        images,
+        labels,
+        masks,
+        quantification_profiles,
+        rejections,
+        scans,
+        users,
+    )
+
+
 def init_db():
     logger.debug("\tInitializing database")
+    _import_models()
     database.metadata.create_all(bind=engine)
 
 

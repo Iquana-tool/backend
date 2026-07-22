@@ -27,8 +27,13 @@ class AnnotationSessionState(BaseModel):
     mask_id: int | None = Field(..., title="Mask ID",
                                 description="The mask id. If None, will be validated and the correct"
                                             "id is fetched from the db.")
-    # User ID might not be too interesting to save
+    # Always the authenticated username, resolved from the connection's bearer
+    # token rather than from the URL. Contours created in this session are
+    # attributed to it.
     user_id: str = Field(..., title="User ID")
+    dataset_id: int | None = Field(default=None, title="Dataset ID",
+                                   description="Dataset the image belongs to, resolved once at "
+                                               "connection time for permission checks.")
     contour_hierarchy: ContourHierarchy | None = Field(default=None, title="Contour Hierarchy")
     focussed_contour_id: int | None = Field(default=None, title="Contour ID")
     refinement_contour_id: int | None = Field(default=None, title="Contour ID")

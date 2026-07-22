@@ -6,12 +6,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db
+from app.routes.general.admin import router as admin_router
 from app.routes.general.auth import router as auth_router
 from app.routes.general.contours import router as contour_router
 from app.routes.general.datasets import router as dataset_router
 from app.routes.general.images import router as image_router
 from app.routes.general.labels import router as label_router
 from app.routes.general.masks import router as mask_router
+from app.routes.general.members import invite_router, router as member_router
+from app.routes.general.reviews import router as review_router
 from app.routes.general.status import router as status_router
 from app.routes.services.suggestion_router import router as suggestion_segmentation_router
 from app.routes.services.label_space_router import router as label_space_router
@@ -67,7 +70,12 @@ def create_app():
     # General Routers
     app.include_router(status_router)
     app.include_router(auth_router)
+    app.include_router(admin_router)
     app.include_router(dataset_router)
+    # Shares the /datasets prefix with the dataset router; the paths do not overlap.
+    app.include_router(member_router)
+    app.include_router(invite_router)
+    app.include_router(review_router)
     app.include_router(image_router)
     app.include_router(image_annotation_session_router)
     app.include_router(mask_router)

@@ -31,13 +31,35 @@ from app.services.annotation_session.operations import (
     run_instance_segmentation,
     run_prompted_segmentation,
 )
+from app.schemas.permissions import Permission
 from app.services.annotation_session.state import AnnotationSessionState, Backends
-from app.services.auth import get_current_user
+from app.services.auth import load_user
 from app.services.database_access import contours as contours_db
 from app.services.database_access import labels as labels_db
 from app.services.database_access import masks as masks_db
 
 logger = getLogger(__name__)
+
+
+def session_user(state: AnnotationSessionState, db):
+    """Reload the session's authenticated user, with their current permissions.
+
+    Permissions are re-read per message rather than cached on the session, so
+    revoking someone's access takes effect on their next action instead of only
+    when they next reconnect.
+    """
+    return load_user(state.user_id, db)
+
+
+async def _deny(websocket: WebSocket, client_msg: ClientMessage, permission: Permission):
+    """Refuse one action without tearing down the session."""
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.ERROR,
+        success=False,
+        message=f"You do not have permission to do this ({permission.value}).",
+        data=None,
+    ))
 
 
 async def startup(websocket: WebSocket, state: AnnotationSessionState):
@@ -176,12 +198,23 @@ async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage
     """
     contour_id = client_msg.data.get("contour_id")
     with get_context_session() as db:
-        response = await contours_db.review_contour(contour_id, user=await get_current_user(), db=db)
+        # This used to call get_current_user() outside FastAPI's dependency
+        # injection, which handed it Depends() sentinels instead of a token and a
+        # session. Resolve the session's user directly instead.
+        user = session_user(state, db)
+        if user is None or not user.has_permission(state.dataset_id, Permission.REVIEW_APPROVE):
+            await _deny(websocket, client_msg, Permission.REVIEW_APPROVE)
+            return
+        try:
+            reviewed = await contours_db.review_contour(contour_id, user=user, db=db, strict=True)
+            message = "Object finalised." if reviewed else "Object could not be finalised."
+        except (PermissionError, KeyError) as exc:
+            reviewed, message = False, str(exc)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
-        type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
-        message=response["message"],
-        success=response["success"],
+        type=ServerMessageType.OBJECT_MODIFIED if reviewed else ServerMessageType.ERROR,
+        message=message,
+        success=reviewed,
         data={
             "contour_id": contour_id,
             "reviewed_by": state.user_id,
@@ -208,28 +241,39 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
         label_id changes are validated against the dataset's label hierarchy.
     """
     contour_id = client_msg.data.get("contour_id")
-    fields_to_be_updated = client_msg.data.get("fields_to_be_updated")
+    fields_to_be_updated = dict(client_msg.data.get("fields_to_be_updated") or {})
 
-    # Resolve "current_user" placeholder to the actual authenticated user ID
-    if "reviewed_by" in fields_to_be_updated and fields_to_be_updated["reviewed_by"]:
-        fields_to_be_updated["reviewed_by"] = [
-            state.user_id if username == "current_user" else username
-            for username in fields_to_be_updated["reviewed_by"]
-        ]
+    # `reviewed_by` is never taken from the client: accepting it let a client mark
+    # a contour as reviewed by arbitrary users. Approvals go through
+    # review_contour(), which enforces the dataset's review policy.
+    wants_review = bool(fields_to_be_updated.pop("reviewed_by", None))
+    fields_to_be_updated.pop("author_username", None)
+    assigns_label = "label_id" in fields_to_be_updated
 
-    # If assigning a label_id, also add the current user to reviewed_by automatically
-    if "label_id" in fields_to_be_updated:
-        with get_context_session() as db:
-            existing = db.query(Contours).filter_by(id=contour_id).first()
-            if existing:
-                current_reviewers = [u.username for u in existing.reviewed_by]
-                if state.user_id not in current_reviewers:
-                    current_reviewers.append(state.user_id)
-                fields_to_be_updated["reviewed_by"] = current_reviewers
+    with get_context_session() as db:
+        user = session_user(state, db)
+        if user is None or not user.has_permission(state.dataset_id, Permission.ANNOTATION_EDIT_OWN):
+            await _deny(websocket, client_msg, Permission.ANNOTATION_EDIT_OWN)
+            return
 
-    if fields_to_be_updated:
-        with get_context_session() as db:
+        existing = db.query(Contours).filter_by(id=contour_id).first()
+        authored_by_someone_else = (existing is not None
+                                    and existing.author_username not in (None, state.user_id))
+        if authored_by_someone_else and not user.has_permission(state.dataset_id,
+                                                                Permission.ANNOTATION_EDIT_ANY):
+            await _deny(websocket, client_msg, Permission.ANNOTATION_EDIT_ANY)
+            return
+
+        if fields_to_be_updated:
             await contours_db.modify_contour(contour_id, db=db, **fields_to_be_updated)
+
+        # Assigning a label counts as a review only for callers entitled to give
+        # one; for everyone else the label change simply stands on its own.
+        if (wants_review or assigns_label) and user.has_permission(state.dataset_id,
+                                                                   Permission.REVIEW_APPROVE):
+            await contours_db.review_contour(contour_id, user=user, db=db, strict=False)
+
+    if fields_to_be_updated or wants_review:
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.OBJECT_MODIFIED,
@@ -526,6 +570,7 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
             mask_id=state.mask_id,
             contour_to_add=object_to_add,
             db=db,
+            author_username=state.user_id,
         )
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
@@ -540,7 +585,8 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
 async def replace_object(old_object_id, new_object: Contour, websocket: WebSocket, client_msg: ClientMessage,
                          state: AnnotationSessionState):
     with get_context_session() as db:
-        success = await contours_db.replace_contour(old_object_id, new_object, db)
+        success = await contours_db.replace_contour(old_object_id, new_object, db,
+                                                   author_username=state.user_id)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_MODIFIED if success else ServerMessageType.ERROR,
@@ -552,15 +598,22 @@ async def replace_object(old_object_id, new_object: Contour, websocket: WebSocke
 
 
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle marking a mask as finished. """
+    """ Handle submitting a mask for review, i.e. marking it fully annotated. """
     with get_context_session() as db:
-        response = await masks_db.mark_mask_as_complete(state.mask_id, db)
+        user = session_user(state, db)
+        if user is None or not user.has_permission(state.dataset_id, Permission.MASK_SUBMIT):
+            await _deny(websocket, client_msg, Permission.MASK_SUBMIT)
+            return
+        # mark_mask_as_complete returns None; the old code subscripted it as a dict
+        # and raised a TypeError on every finish.
+        await masks_db.mark_mask_as_complete(state.mask_id, db)
+        status = db.query(Masks).filter_by(id=state.mask_id).one().status
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
-        type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
-        success=response["success"],
-        message=response["message"],
-        data=None
+        type=ServerMessageType.SUCCESS,
+        success=True,
+        message="Mask submitted for review.",
+        data={"mask_id": state.mask_id, "status": status},
     ))
 
 

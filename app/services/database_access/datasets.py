@@ -4,16 +4,17 @@ from collections import defaultdict
 from datetime import datetime, timezone
 import json
 from logging import getLogger
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 import numpy as np
 import pandas as pd
 from PIL import Image as PILImage
+from iquana_toolbox.quantification import METRIC_REGISTRY
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.database.image import Image
 from iquana_toolbox.schemas.database.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session, aliased
 
 from app.database.contour_metrics import ContourMetrics
@@ -23,8 +24,8 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
-from app.services.auth import get_current_user
 from app.services.database_access.labels import get_hierarchical_label_name
+from app.services.database_access.members import ensure_owner_membership
 from config import DATASETS_DIR
 
 logger = getLogger(__name__)
@@ -57,34 +58,11 @@ async def create_new_dataset(
     db.add(new_dataset)
     db.commit()
     db.refresh(new_dataset)
+
+    # Ownership is a membership row so it can later be transferred; `created_by`
+    # stays as the immutable record of who made the dataset.
+    ensure_owner_membership(new_dataset.id, owner_username, db)
     return new_dataset
-
-
-async def share_dataset(
-        dataset_id: int,
-        share_with_username: str,
-        sharing_username: str,
-        db: Session
-):
-    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
-    if dataset.created_by != sharing_username:
-        raise PermissionError("Only the owner can share a dataset")
-    user_to_share = db.query(Users).filter_by(username=share_with_username).first()
-    if not user_to_share:
-        raise ValueError("User to share with not found")
-    if not user_to_share in dataset.shared_with:
-        dataset.shared_with.append(user_to_share)
-        db.commit()
-
-
-async def user_has_sharing_permission_for_dataset(
-        dataset_id: int,
-        sharing_username: str,
-        db: Session
-):
-    """ Check whether a user can share a dataset. """
-    dataset = db.query(Datasets).filter_by(id=dataset_id).first()
-    return sharing_username == dataset.created_by
 
 
 async def get_dataset(
@@ -120,8 +98,10 @@ async def get_datasets_of_user(
         user: User,
         db: Session
 ):
-    datasets = db.query(Datasets).filter(Datasets.id.in_(user.available_datasets))
-    return datasets
+    """Every dataset the user holds a role on. Admins see all of them."""
+    if getattr(user, "is_admin", False):
+        return db.query(Datasets)
+    return db.query(Datasets).filter(Datasets.id.in_(user.available_datasets))
 
 
 async def get_label_hierarchy_of_dataset(
@@ -136,8 +116,24 @@ async def has_dataset_deletion_permission(
         dataset_id: int,
         username: str,
         db: Session
-):
-    raise NotImplementedError
+) -> bool:
+    """Whether a user may delete a dataset, i.e. whether they own it.
+
+    Route handlers should use `require(Permission.DATASET_DELETE)` instead; this
+    exists for callers outside the request cycle.
+    """
+    from app.database.dataset_members import DatasetMembers
+    from app.schemas.permissions import DatasetRole
+
+    role = (
+        db.query(DatasetMembers.role)
+        .filter_by(dataset_id=dataset_id, username=username)
+        .scalar()
+    )
+    if role is not None:
+        return role == DatasetRole.OWNER.value
+    # Fall back to creator for datasets predating membership rows.
+    return db.query(Datasets.created_by).filter_by(id=dataset_id).scalar() == username
 
 
 async def delete_dataset(
@@ -323,6 +319,40 @@ def _dataset_df_from_profile(
     return pd.DataFrame(df_data)
 
 
+def _scope_contour_query(
+        query,
+        dataset_id: int,
+        exclude_not_fully_annotated: bool,
+        exclude_unreviewed: bool,
+):
+    """Join a ``Contours``-based query to its dataset and apply the two exclude filters.
+
+    Shared by :func:`get_quantification_summary` and
+    :func:`get_quantification_distribution` so the summary and the box/violin plots are
+    always computed over exactly the same contour set - if they diverged, a median could
+    fall outside the min/max the summary reports for the same metric.
+
+    Args:
+        query: A query selecting from (or joined to) ``Contours``.
+        dataset_id: The dataset to scope to.
+        exclude_not_fully_annotated: Drop contours on masks not marked fully annotated.
+        exclude_unreviewed: Drop contours nobody has reviewed.
+
+    Returns:
+        The query with the dataset joins and filters applied.
+    """
+    query = (
+        query.join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .filter(Images.dataset_id == dataset_id)
+    )
+    if exclude_not_fully_annotated:
+        query = query.filter(Masks.fully_annotated == True)
+    if exclude_unreviewed:
+        query = query.filter(Contours.reviewed_by.any())
+    return query
+
+
 async def get_quantification_summary(
         dataset_id: int,
         exclude_not_fully_annotated: bool,
@@ -349,21 +379,14 @@ async def get_quantification_summary(
             ``None`` (the default) keeps the legacy behavior: every metric, every label.
 
     Returns:
-        A dict with ``metrics`` (nested label_id -> metric_key -> {unit, components})
-        and ``child_counts_per_label_id`` (parent label_id -> child label_id -> count).
+        A dict with ``metrics`` (nested label_id -> metric_key -> {unit, components}),
+        ``child_counts_per_label_id`` (parent label_id -> child label_id -> count) and
+        ``object_counts_per_label_id`` (label_id -> total / reviewed / unreviewed).
     """
     # Base join scoping to the dataset; the same for both aggregations below.
     def _apply_filters(query):
-        query = (
-            query.join(Masks, Masks.id == Contours.mask_id)
-            .join(Images, Images.id == Masks.image_id)
-            .filter(Images.dataset_id == dataset_id)
-        )
-        if exclude_not_fully_annotated:
-            query = query.filter(Masks.fully_annotated == True)
-        if exclude_unreviewed:
-            query = query.filter(Contours.reviewed_by.any())
-        return query
+        return _scope_contour_query(query, dataset_id, exclude_not_fully_annotated,
+                                    exclude_unreviewed)
 
     def _compute_child_counts() -> dict[str, dict[str, int]]:
         # Count, per parent label, how many child contours of each child label exist. This
@@ -382,6 +405,39 @@ async def get_quantification_summary(
         for row in child_query.all():
             parent_key = str(row.parent_label_id)
             result.setdefault(parent_key, {})[str(row.child_label_id)] = int(row.count)
+        return result
+
+    def _compute_object_counts() -> dict[str, dict[str, int]]:
+        # How many contours exist per label, split by whether anyone has reviewed them.
+        #
+        # Deliberately NOT run through _apply_filters: this is a census of the dataset, and
+        # the two exclude filters are exactly what it is meant to report on. Filtering here
+        # would make "unreviewed" always read 0 under exclude_unreviewed=True and hide the
+        # work still sitting on not-fully-annotated masks - so the counts are identical
+        # whatever the filters are set to, which is what makes them a useful denominator
+        # for the filtered metrics above.
+        reviewed_flag = case((Contours.reviewed_by.any(), 1), else_=0)
+        count_query = (
+            db.query(
+                Contours.label_id.label("label_id"),
+                func.count(Contours.id).label("total"),
+                func.sum(reviewed_flag).label("reviewed"),
+            )
+            .join(Masks, Masks.id == Contours.mask_id)
+            .join(Images, Images.id == Masks.image_id)
+            .filter(Images.dataset_id == dataset_id)
+            .group_by(Contours.label_id)
+        )
+
+        result: dict[str, dict[str, int]] = {}
+        for row in count_query.all():
+            total = int(row.total)
+            reviewed = int(row.reviewed or 0)
+            result[str(row.label_id)] = {
+                "total": total,
+                "reviewed": reviewed,
+                "unreviewed": total - reviewed,
+            }
         return result
 
     # --- Metric aggregation -------------------------------------------------
@@ -412,6 +468,7 @@ async def get_quantification_summary(
             return {
                 "metrics": {},
                 "child_counts_per_label_id": _compute_child_counts(),
+                "object_counts_per_label_id": _compute_object_counts(),
             }
         metric_query = metric_query.filter(ContourMetrics.metric_key.in_(list(metric_scoping)))
 
@@ -446,11 +503,236 @@ async def get_quantification_summary(
             components = metric_entry.pop("components")
             metric_entry["components"] = [components[i] for i in sorted(components)]
 
-    # --- Child-count aggregation --------------------------------------------
+    # --- Child-count / object-count aggregation ------------------------------
     return {
         "metrics": metrics,
         "child_counts_per_label_id": _compute_child_counts(),
+        "object_counts_per_label_id": _compute_object_counts(),
     }
+
+
+# --- Distribution (box / violin) statistics ----------------------------------------
+
+# Number of points on the KDE evaluation grid. The curve is sent to the frontend as
+# plain arrays, so this directly bounds the payload size per metric/component.
+_KDE_GRID_POINTS = 128
+
+# Upper bound on how many individual outlier VALUES are returned. The true count is
+# always reported in full as ``outlier_count``; only the sample is capped, so a metric
+# with thousands of outliers cannot blow up the response.
+_MAX_OUTLIER_SAMPLES = 50
+
+# Bin count for the histogram fallback used when a KDE cannot be fitted.
+_HISTOGRAM_BINS = 30
+
+# Tukey's constant: points more than 1.5 IQR beyond a quartile are outliers, and the
+# whiskers stop at the most extreme point that is NOT an outlier.
+_WHISKER_IQR_FACTOR = 1.5
+
+
+def _empty_distribution_stats() -> dict[str, Any]:
+    """Zeroed stats payload for a metric/component that has no values at all."""
+    return {
+        "count": 0,
+        "min": 0.0, "max": 0.0, "mean": 0.0,
+        "q1": 0.0, "median": 0.0, "q3": 0.0,
+        "whisker_low": 0.0, "whisker_high": 0.0,
+        "outlier_count": 0, "outliers": [],
+        "kde": None, "histogram": None,
+    }
+
+
+def _compute_distribution_stats(values: np.ndarray) -> dict[str, Any]:
+    """Reduce a 1-D array of metric values to a box/violin-plot payload.
+
+    Pure numpy/scipy - no database access - so it is cheap to test directly. Computes:
+
+      * the five-number summary (min / q1 / median / q3 / max) plus the mean, using
+        numpy's default linear-interpolation percentiles,
+      * Tukey whiskers and outliers (see :data:`_WHISKER_IQR_FACTOR`): the whiskers stop
+        at the most extreme value INSIDE the fences, so they never reach an outlier,
+      * a bounded sample of the outlier values, and
+      * a smooth density curve for the violin: a Gaussian KDE, falling back to a
+        histogram when a KDE cannot be fitted (too few points, or scipy unavailable).
+
+    A distribution with no spread (every value identical, or a single value) gets neither
+    a KDE nor a histogram: there is no shape to draw, and a KDE would be singular.
+
+    Args:
+        values: The raw metric values. Non-finite entries are dropped.
+
+    Returns:
+        A JSON-serializable stats dict; see :func:`_empty_distribution_stats` for the keys.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    count = int(values.size)
+    if count == 0:
+        return _empty_distribution_stats()
+
+    q1, median, q3 = (float(v) for v in np.percentile(values, [25, 50, 75]))
+    iqr = q3 - q1
+    lower_fence = q1 - _WHISKER_IQR_FACTOR * iqr
+    upper_fence = q3 + _WHISKER_IQR_FACTOR * iqr
+
+    is_outlier = (values < lower_fence) | (values > upper_fence)
+    inliers = values[~is_outlier]
+    # Every point being an "outlier" is impossible for a real IQR, but guard anyway so a
+    # degenerate input cannot produce whiskers from an empty array.
+    whisker_source = inliers if inliers.size else values
+    whisker_low = float(whisker_source.min())
+    whisker_high = float(whisker_source.max())
+
+    outliers = np.sort(values[is_outlier])
+    if outliers.size > _MAX_OUTLIER_SAMPLES:
+        # Evenly spaced picks over the SORTED outliers, so the sample keeps both extremes
+        # and stays representative of the tail - and is deterministic (no RNG).
+        indices = np.unique(
+            np.linspace(0, outliers.size - 1, _MAX_OUTLIER_SAMPLES).round().astype(int)
+        )
+        outlier_sample = outliers[indices]
+    else:
+        outlier_sample = outliers
+
+    kde, histogram = _compute_density_curve(values)
+
+    return {
+        "count": count,
+        "min": float(values.min()),
+        "max": float(values.max()),
+        "mean": float(values.mean()),
+        "q1": q1,
+        "median": median,
+        "q3": q3,
+        "whisker_low": whisker_low,
+        "whisker_high": whisker_high,
+        "outlier_count": int(outliers.size),
+        "outliers": [float(v) for v in outlier_sample],
+        "kde": kde,
+        "histogram": histogram,
+    }
+
+
+def _compute_density_curve(values: np.ndarray) -> tuple[dict | None, dict | None]:
+    """Build the violin curve for ``values`` as ``(kde, histogram)``; at most one is set.
+
+    Returns ``(None, None)`` when the values have no spread - a KDE of a zero-variance
+    sample is singular, and a single-bin histogram carries no information.
+    """
+    low, high = float(values.min()), float(values.max())
+    if values.size < 2 or high <= low:
+        return None, None
+
+    grid = np.linspace(low, high, _KDE_GRID_POINTS)
+    try:
+        from scipy.stats import gaussian_kde
+
+        density = gaussian_kde(values)(grid)
+    except (ImportError, ValueError, np.linalg.LinAlgError) as exc:
+        # Singular covariance (near-duplicate points) or no scipy: fall back to a
+        # histogram so the frontend still has a shape to draw.
+        logger.debug("KDE unavailable for %d values (%s); using a histogram.", values.size, exc)
+        counts, edges = np.histogram(values, bins=min(_HISTOGRAM_BINS, values.size))
+        return None, {
+            "bin_edges": [float(e) for e in edges],
+            "counts": [int(c) for c in counts],
+        }
+
+    # Clamp: a KDE evaluated on a coarse grid can return tiny negative values.
+    return {
+        "x": [float(v) for v in grid],
+        "density": [float(max(d, 0.0)) for d in density],
+    }, None
+
+
+def _distribution_metric_keys(metric_keys: Iterable[str] | None = None) -> set[str]:
+    """The registry metrics a distribution can be drawn for, optionally intersected.
+
+    Only single-component metrics are eligible: a box or violin plot summarizes ONE
+    ordered numeric axis, which a multi-component value (an RGB or LAB colour, whose
+    channels are not comparable to each other) does not provide.
+
+    Args:
+        metric_keys: Optional keys to restrict to, e.g. a profile's scoped metrics.
+            ``None`` returns every eligible metric.
+
+    Returns:
+        The set of eligible metric keys.
+    """
+    eligible = {key for key, metric in METRIC_REGISTRY.items() if metric.value_dim == 1}
+    if metric_keys is None:
+        return eligible
+    return eligible & set(metric_keys)
+
+
+async def get_quantification_distribution(
+        dataset_id: int,
+        exclude_not_fully_annotated: bool,
+        exclude_unreviewed: bool,
+        db: Session,
+        metric_scoping: dict[str, list[int] | None] | None = None,
+) -> dict[str, Any]:
+    """Compute per-label box/violin distributions for a dataset's metrics.
+
+    Complements :func:`get_quantification_summary`: that one aggregates to scalars in SQL,
+    this one needs the raw values (percentiles and a KDE cannot be expressed as SQL
+    aggregates), so the in-scope values ARE loaded into memory. The eligible metrics are
+    restricted to single-component ones (see :func:`_distribution_metric_keys`) and the
+    per-row payload is bounded (see :data:`_MAX_OUTLIER_SAMPLES`,
+    :data:`_KDE_GRID_POINTS`), which keeps both the query and the response bounded in
+    practice.
+
+    Args:
+        dataset_id: The dataset to summarize.
+        exclude_not_fully_annotated: Drop contours on masks not marked fully annotated.
+        exclude_unreviewed: Drop contours nobody has reviewed.
+        db: The database session.
+        metric_scoping: Optional profile scoping, interpreted exactly as in
+            :func:`get_quantification_summary`: only the listed metric keys are computed,
+            and each key's label list (or ``None`` for all labels) restricts which labels
+            it is reported for.
+
+    Returns:
+        ``{label_id: {metric_key: {component: stats}}}`` with every key stringified for
+        JSON. Labels and metrics with no values are omitted entirely, so an empty dict
+        means nothing in scope had a stored value.
+    """
+    eligible_keys = _distribution_metric_keys(
+        None if metric_scoping is None else metric_scoping.keys()
+    )
+    if not eligible_keys:
+        return {}
+
+    value_query = _scope_contour_query(
+        db.query(
+            Contours.label_id.label("label_id"),
+            ContourMetrics.metric_key.label("metric_key"),
+            ContourMetrics.component.label("component"),
+            ContourMetrics.unit.label("unit"),
+            ContourMetrics.value.label("value"),
+        ).join(ContourMetrics, ContourMetrics.contour_id == Contours.id),
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed,
+    ).filter(ContourMetrics.metric_key.in_(sorted(eligible_keys)))
+
+    # Bucket the raw values by (label, metric, component); the unit is constant per
+    # bucket (it is derived from the metric and the image's unit).
+    buckets: dict[tuple[int, str, int], list[float]] = defaultdict(list)
+    units: dict[tuple[int, str, int], str] = {}
+    for row in value_query.all():
+        if metric_scoping is not None:
+            allowed_labels = metric_scoping.get(row.metric_key)
+            if allowed_labels is not None and row.label_id not in allowed_labels:
+                continue
+        key = (row.label_id, row.metric_key, int(row.component))
+        buckets[key].append(float(row.value))
+        units.setdefault(key, row.unit)
+
+    result: dict[str, Any] = {}
+    for (label_id, metric_key, component), values in buckets.items():
+        stats = _compute_distribution_stats(np.asarray(values, dtype=np.float64))
+        stats["unit"] = units.get((label_id, metric_key, component))
+        result.setdefault(str(label_id), {}).setdefault(metric_key, {})[str(component)] = stats
+    return result
 
 
 def _native_image_dimensions(image: "Images") -> tuple[int, int]:
