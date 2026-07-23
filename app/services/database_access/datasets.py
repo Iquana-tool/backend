@@ -6,6 +6,7 @@ import json
 from logging import getLogger
 from typing import Any, Literal
 
+import numpy as np
 import pandas as pd
 from iquana_toolbox.schemas.database.image import Image
 from iquana_toolbox.schemas.database.labels import LabelHierarchy
@@ -21,6 +22,7 @@ from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
 from config import DATASETS_DIR
+from PIL import Image as PILImage
 
 logger = getLogger(__name__)
 
