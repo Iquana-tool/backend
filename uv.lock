@@ -1614,7 +1614,7 @@ wheels = [
 [[package]]
 name = "iquana-toolbox"
 version = "0.1.0"
-source = { git = "https://github.com/Iquana-tool/iquana-toolbox.git#9f46506855a42d878e1d6592f068ba984551dac1" }
+source = { git = "https://github.com/Iquana-tool/iquana-toolbox.git#92c70d9c55c5fc88760a82c225f59f03c6af68c2" }
 dependencies = [
     { name = "cachetools" },
     { name = "mlflow" },
