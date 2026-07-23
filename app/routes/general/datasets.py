@@ -7,7 +7,10 @@ from typing import Literal
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
+from iquana_toolbox.quantification import list_metrics
+from iquana_toolbox.schemas.database.quantification_profile import QuantificationProfile
 from iquana_toolbox.schemas.user import User
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette import status
 from starlette.responses import JSONResponse, StreamingResponse
@@ -20,12 +23,75 @@ from app.database.users import Users
 from app.services.auth import get_current_user
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import labels as labels_db
+from app.services.database_access import quantification_profiles as profiles_db
 from app.services.database_access.datasets import ContourSelection, export_dataset_contours_to_coco
+from app.services.quantification import (
+    APPEARANCE_METRIC_KEYS,
+    CONTEXTUAL_METRIC_KEYS,
+    RELATIONAL_METRIC_KEYS,
+    compute_appearance_metrics_for_dataset,
+    compute_contextual_metrics_for_dataset,
+    compute_relational_metrics_for_dataset,
+)
 from app.services.util import get_mask_path_from_image_path
 
 # Create a router for the export functionality
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 logger = getLogger(__name__)
+
+
+class ProfileEntryBody(BaseModel):
+    """Request body for a single metric selection in a profile (see ProfileEntry)."""
+    metric_key: str = Field(..., description="Registry key of the metric.")
+    params: dict = Field(default_factory=dict, description="Per-metric parameter dict.")
+    label_ids: list[int] | None = Field(default=None, description="Label ids the metric is "
+                                                                  "scoped to; null means all labels.")
+
+
+class ProfileBody(BaseModel):
+    """Request body for creating/updating a quantification profile."""
+    name: str = Field(..., description="Human-readable profile name.")
+    is_default: bool = Field(default=False, description="Mark this profile as the dataset default.")
+    entries: list[ProfileEntryBody] = Field(default_factory=list,
+                                            description="Ordered list of metric selections.")
+
+
+def _resolve_profile_scoping(
+        db: Session,
+        dataset_id: int,
+        profile_id: int | None,
+) -> tuple[dict[str, list[int] | None] | None, set[str]]:
+    """Resolve a profile id into (metric_scoping, tiers_to_compute).
+
+    Returns ``(None, {"appearance", "contextual", "relational"})`` when ``profile_id`` is
+    None so the legacy no-profile path aggregates every metric and lazily computes all
+    non-geometry tiers, exactly as before. When a profile is given, ``metric_scoping`` maps
+    each of the profile's metric keys to its label scope (last entry wins if a key repeats),
+    and the tier set contains only the tiers the profile actually references, so e.g. a
+    geometry-only profile never pays the appearance image-decode or relational compute cost.
+
+    :raises HTTPException: 404 if ``profile_id`` does not belong to the dataset.
+    """
+    if profile_id is None:
+        return None, {"appearance", "contextual", "relational"}
+
+    row = profiles_db.get_profile(db, dataset_id, profile_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
+
+    profile = row.to_schema()
+    metric_scoping: dict[str, list[int] | None] = {}
+    for entry in profile.entries:
+        metric_scoping[entry.metric_key] = entry.label_ids
+
+    tiers: set[str] = set()
+    if any(key in APPEARANCE_METRIC_KEYS for key in metric_scoping):
+        tiers.add("appearance")
+    if any(key in CONTEXTUAL_METRIC_KEYS for key in metric_scoping):
+        tiers.add("contextual")
+    if any(key in RELATIONAL_METRIC_KEYS for key in metric_scoping):
+        tiers.add("relational")
+    return metric_scoping, tiers
 
 
 @router.post("/create")
@@ -370,6 +436,377 @@ async def get_dataset_quantification(
         }
 
 
+@router.get("/{dataset_id}/quantification/summary")
+async def get_dataset_quantification_summary(
+        dataset_id: int,
+        exclude_unreviewed: bool = True,
+        exclude_not_fully_annotated: bool = True,
+        include_appearance: bool = True,
+        include_contextual: bool = True,
+        include_relational: bool = True,
+        include_distribution: bool = False,
+        profile_id: int | None = None,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """Server-side aggregated quantification summary for a dataset.
+
+    Aggregates the tall ``contour_metrics`` table per label / metric / component / unit
+    into count / mean / std / min / max (no per-contour rows are shipped to the client),
+    plus the parent->child label counts the quantification page shows. This is the Step-2
+    endpoint that the frontend migrates to in Step 5; the legacy ``/quantification``
+    endpoints are left untouched.
+
+    Perf tradeoff (Step 3): appearance metrics (mean color / intensity) need the image
+    pixels decoded, which never happens on the contour write path. When
+    ``include_appearance`` is True (default), this endpoint calls
+    :func:`compute_appearance_metrics_for_dataset` with ``only_stale=True`` BEFORE
+    aggregating, so new/edited contours get their color computed on demand and the
+    summary always reflects it without a separate manual step. This means the first
+    summary request after bulk edits/imports pays the one-time image-decode cost for
+    every touched image (subsequent requests are cheap: only_stale skips anything
+    already computed and fresh). Pass ``include_appearance=False`` to skip this and get
+    the fast, aggregation-only path (e.g. for polling loops that don't render color).
+
+    Perf tradeoff (Step 4): contextual metrics (nearest-neighbour distance) are
+    RELATIONAL, so ``include_contextual=True`` (default) calls
+    :func:`compute_contextual_metrics_for_dataset` with ``only_stale=True`` first, same
+    idea as appearance - the first request after edits/imports pays the cost of
+    rebuilding the affected parent groups' KDTrees, subsequent requests are cheap.
+
+    Relational metrics (``n_children``) are computed the same lazy way via
+    ``include_relational=True`` (default): missing/stale rows are recomputed by
+    :func:`compute_relational_metrics_for_dataset` before aggregating.
+
+    Distribution (opt-in): with ``include_distribution=True`` the response also carries a
+    ``distribution`` object mirroring ``metrics`` but with box/violin stats for each
+    value_dim-1 numeric metric (``str(label_id) -> metric_key -> {"0": {count, mean, std,
+    min, max, q1, median, q3, whisker_low, whisker_high, outliers, outlier_count, kde,
+    histogram}}``). This is heavier than the pure-SQL summary (it fetches stored per-contour
+    values and reduces them with numpy - SQLite has no percentile function), so it is off by
+    default and only computed for the plotted numeric metrics; COLOR metrics are excluded.
+    The bar view never needs it, so the frontend only requests it for box/violin.
+
+    Args:
+        dataset_id (int): The ID of the dataset to summarize.
+        exclude_unreviewed (bool): Whether to exclude unreviewed contours.
+        exclude_not_fully_annotated (bool): Whether to exclude not fully annotated masks.
+        include_appearance (bool): Whether to lazily compute missing/stale appearance
+            metrics (mean color / intensity) before aggregating. Defaults to True.
+        include_contextual (bool): Whether to lazily compute missing/stale contextual
+            metrics (nearest-neighbour distance) before aggregating. Defaults to True.
+        include_relational (bool): Whether to lazily compute missing/stale relational
+            metrics (number of children) before aggregating. Defaults to True.
+        include_distribution (bool): Whether to also compute and return per-(label, metric)
+            box/violin distribution stats for the numeric metrics. Defaults to False.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: ``{success, metrics, child_counts_per_label_id, labels}`` where ``metrics``
+        maps ``str(label_id) -> metric_key -> {unit, components: [{count, mean, std, min,
+        max}, ...]}`` and ``labels`` is the label hierarchy dump (as the labels endpoint).
+        When ``include_distribution`` is set, a ``distribution`` key is added (see above).
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    # A profile (if given) both restricts which metrics are aggregated and which tiers we
+    # bother lazily computing, so a geometry-only profile skips the appearance/contextual/
+    # relational compute cost entirely.
+    metric_scoping, profile_tiers = _resolve_profile_scoping(db, dataset_id, profile_id)
+
+    if include_appearance and "appearance" in profile_tiers:
+        compute_appearance_metrics_for_dataset(db, dataset_id, only_stale=True)
+    if include_contextual and "contextual" in profile_tiers:
+        compute_contextual_metrics_for_dataset(db, dataset_id, only_stale=True)
+    if include_relational and "relational" in profile_tiers:
+        compute_relational_metrics_for_dataset(db, dataset_id, only_stale=True)
+
+    summary = await datasets_db.get_quantification_summary(
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db,
+        metric_scoping=metric_scoping,
+    )
+    labels_hierarchy = await labels_db.get_label_hierarchy(dataset_id, db=db)
+    response = {
+        "success": True,
+        "message": "Successfully aggregated the dataset quantification.",
+        "metrics": summary["metrics"],
+        "child_counts_per_label_id": summary["child_counts_per_label_id"],
+        "object_counts_per_label_id": summary["object_counts_per_label_id"],
+        "labels": labels_hierarchy.model_dump(),
+    }
+    if include_distribution:
+        response["distribution"] = await datasets_db.get_quantification_distribution(
+            dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db,
+            metric_scoping=metric_scoping,
+        )
+    return response
+
+
+@router.post("/{dataset_id}/quantification/appearance/recompute")
+async def recompute_dataset_appearance_metrics(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """Explicitly (re)compute appearance-tier metrics (mean color / intensity) for a dataset.
+
+    Runs :func:`compute_appearance_metrics_for_dataset` with ``only_stale=True``: only
+    contours with no fresh row yet (new contours) or a ``stale=True`` row (geometry
+    changed since the last compute, see ``mark_appearance_stale``) are recomputed. Useful
+    to pre-warm the cache (e.g. right after a bulk import) rather than paying the decode
+    cost lazily on the next ``GET .../summary`` call.
+
+    Args:
+        dataset_id (int): The ID of the dataset to recompute appearance metrics for.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: ``{success, computed_rows, message}``.
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    computed_rows = compute_appearance_metrics_for_dataset(db, dataset_id, only_stale=True)
+    return {
+        "success": True,
+        "computed_rows": computed_rows,
+        "message": f"Computed {computed_rows} appearance metric rows.",
+    }
+
+
+@router.post("/{dataset_id}/quantification/contextual/recompute")
+async def recompute_dataset_contextual_metrics(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """Explicitly (re)compute contextual-tier metrics (nearest-neighbour distance) for a dataset.
+
+    Runs :func:`compute_contextual_metrics_for_dataset` with ``only_stale=True``: parent
+    groups with at least one contour missing a fresh row (new contour, or a row marked
+    stale by ``mark_contextual_stale_for_group`` after a move/re-parent/delete) are fully
+    recomputed - see that function's docstring for why the whole group, not just the
+    changed contour, is recomputed. Useful to pre-warm the cache (e.g. right after a bulk
+    import) rather than paying the cost lazily on the next ``GET .../summary`` call.
+
+    Args:
+        dataset_id (int): The ID of the dataset to recompute contextual metrics for.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: ``{success, computed_rows, message}``.
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    computed_rows = compute_contextual_metrics_for_dataset(db, dataset_id, only_stale=True)
+    return {
+        "success": True,
+        "computed_rows": computed_rows,
+        "message": f"Computed {computed_rows} contextual metric rows.",
+    }
+
+
+@router.post("/{dataset_id}/quantification/relational/recompute")
+async def recompute_dataset_relational_metrics(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """Explicitly (re)compute relational-tier metrics (number of children) for a dataset.
+
+    Runs :func:`compute_relational_metrics_for_dataset` with ``only_stale=True``: images
+    with at least one contour missing a fresh row (new contour, or a parent row marked stale
+    by ``mark_relational_stale_for_parent`` after a child was added / removed / re-parented)
+    are recomputed - the whole image, so children are countable in the context (see that
+    function's docstring). Useful to pre-warm the cache (e.g. right after a bulk import)
+    rather than paying the cost lazily on the next ``GET .../summary`` call.
+
+    Args:
+        dataset_id (int): The ID of the dataset to recompute relational metrics for.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: ``{success, computed_rows, message}``.
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    computed_rows = compute_relational_metrics_for_dataset(db, dataset_id, only_stale=True)
+    return {
+        "success": True,
+        "computed_rows": computed_rows,
+        "message": f"Computed {computed_rows} relational metric rows.",
+    }
+
+
+@router.get("/quantification/metrics/catalog")
+async def get_metrics_catalog(
+        user: User = Depends(get_current_user)
+):
+    """Serializable catalog of every registered quantification metric.
+
+    Dataset-independent: returns :func:`iquana_toolbox.quantification.list_metrics` so the
+    frontend can render metric pickers and know each metric's tier / unit_kind / value_dim
+    / component names to render it generically. Placed under the datasets prefix (the
+    router this file owns) but requires no dataset, so no per-dataset access check applies.
+
+    Args:
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: ``{success, metrics}`` where ``metrics`` is the metric catalog list.
+    """
+    return {"success": True, "metrics": list_metrics()}
+
+
+@router.get("/{dataset_id}/quantification/profiles")
+async def get_quantification_profiles(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """List the dataset's quantification profiles, auto-creating a default if none exist.
+
+    The auto-created default is the four geometry metrics on all labels, so an existing
+    dataset renders exactly as before profiles existed.
+
+    Args:
+        dataset_id (int): The dataset whose profiles to list.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: ``{success, profiles}`` where each profile is a QuantificationProfile dump.
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    profiles = profiles_db.list_profiles(db, dataset_id)
+    return {"success": True, "profiles": [p.model_dump() for p in profiles]}
+
+
+@router.post("/{dataset_id}/quantification/profiles")
+async def create_quantification_profile(
+        dataset_id: int,
+        body: ProfileBody,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """Create a new quantification profile for the dataset.
+
+    Metric keys in the entries are validated against the registry (unknown keys are
+    rejected with a 422 by the schema). Marking the profile default unsets any previous
+    default for the dataset.
+
+    Args:
+        dataset_id (int): The dataset to create the profile in.
+        body (ProfileBody): The profile name / default flag / entries.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: ``{success, profile}`` with the created profile dump.
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    try:
+        schema = QuantificationProfile(
+            dataset_id=dataset_id,
+            name=body.name,
+            is_default=body.is_default,
+            entries=[e.model_dump() for e in body.entries],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    created = profiles_db.create_profile(db, schema)
+    return {"success": True, "profile": created.model_dump()}
+
+
+@router.put("/{dataset_id}/quantification/profiles/{profile_id}")
+async def update_quantification_profile(
+        dataset_id: int,
+        profile_id: int,
+        body: ProfileBody,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """Update a profile's name / entries / default flag.
+
+    Setting ``is_default`` True unsets it on every other profile of the dataset.
+
+    Args:
+        dataset_id (int): The dataset the profile belongs to.
+        profile_id (int): The profile to update.
+        body (ProfileBody): The new name / default flag / entries.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: ``{success, profile}`` with the updated profile dump.
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    row = profiles_db.get_profile(db, dataset_id, profile_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
+
+    try:
+        schema = QuantificationProfile(
+            id=profile_id,
+            dataset_id=dataset_id,
+            name=body.name,
+            is_default=body.is_default,
+            entries=[e.model_dump() for e in body.entries],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    updated = profiles_db.update_profile(db, row, schema)
+    return {"success": True, "profile": updated.model_dump()}
+
+
+@router.delete("/{dataset_id}/quantification/profiles/{profile_id}")
+async def delete_quantification_profile(
+        dataset_id: int,
+        profile_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user)
+):
+    """Delete a quantification profile.
+
+    If the deleted profile was the default, the lowest-id remaining profile is promoted to
+    default. Deleting the last profile is allowed - the next profiles listing re-creates
+    the geometry default, so the dataset always has a usable default.
+
+    Args:
+        dataset_id (int): The dataset the profile belongs to.
+        profile_id (int): The profile to delete.
+        db (Session): The database session.
+        user (User): The current authenticated user.
+
+    Returns:
+        dict: ``{success, message}``.
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    row = profiles_db.get_profile(db, dataset_id, profile_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
+
+    profiles_db.delete_profile(db, row)
+    return {"success": True, "message": "Profile deleted successfully."}
+
+
 @router.get(
     "/{dataset_id}/quantification/download")
 async def download_dataset_quantification(
@@ -377,6 +814,7 @@ async def download_dataset_quantification(
         exclude_unreviewed: bool = True,
         exclude_not_fully_annotated: bool = True,
         file_format: Literal["json", "csv"] = "json",
+        profile_id: int | None = None,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
@@ -398,8 +836,22 @@ async def download_dataset_quantification(
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
 
+    # When a profile is given, the export emits one column per profile metric/component
+    # from contour_metrics; otherwise it keeps the legacy four-geometry-column shape.
+    metric_scoping, profile_tiers = _resolve_profile_scoping(db, dataset_id, profile_id)
+    if profile_id is not None:
+        if "appearance" in profile_tiers:
+            compute_appearance_metrics_for_dataset(db, dataset_id, only_stale=True)
+        if "contextual" in profile_tiers:
+            compute_contextual_metrics_for_dataset(db, dataset_id, only_stale=True)
+        if "relational" in profile_tiers:
+            compute_relational_metrics_for_dataset(db, dataset_id, only_stale=True)
+
     dataset_name = (await datasets_db.get_dataset(dataset_id, db=db, )).name
-    df = await datasets_db.get_dataset_as_df(dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db)
+    df = await datasets_db.get_dataset_as_df(
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db,
+        metric_scoping=metric_scoping,
+    )
     if df.empty:
         return {
             "success": False,
