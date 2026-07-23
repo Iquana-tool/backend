@@ -1,14 +1,9 @@
 from fastapi import APIRouter, Depends
-from iquana_toolbox.schemas.networking.http.services import InstanceSuggestionRequest
 from iquana_toolbox.schemas.user import User
-from sqlalchemy.orm import Session
 
-from app.database import get_session
-from app.services.ai_services.instance_suggestion import SuggestionService
 from app.services.auth import get_current_user
 from app.services.model_registry import list_available_models
 
-suggestion_service = SuggestionService()
 router = APIRouter(prefix="/suggestion_segmentation", tags=["Suggestion Segmentation"])
 
 
@@ -18,12 +13,9 @@ async def get_available_models(user: User = Depends(get_current_user)):
     return list_available_models("instance-suggestion")
 
 
-@router.post("/run")
-async def infer_suggestion(
-        request: InstanceSuggestionRequest,
-        user: User = Depends(get_current_user),
-        db: Session = Depends(get_session),
-):
-    # Finally add the result to the db
-    return await suggestion_service.inference(request)
-
+# The POST /run endpoint was removed: nothing called it, and its request body
+# carried a raw filesystem path (`image_url`) handed straight to cv2.imread, which
+# made it unauthorizable — there is no dataset to resolve from a path — and an
+# arbitrary-file-read on the shared volume. Suggestions run through the
+# annotation-session WebSocket, which resolves the path server-side from the image
+# id and holds its own SuggestionService instance.

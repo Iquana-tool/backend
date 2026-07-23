@@ -154,7 +154,8 @@ async def delete_dataset(
 async def get_image_and_mask_ids_of_dataset(
         dataset_id: int,
         db: Session,
-        filter_for_status: Literal["not_started", "in_progress", "reviewable", "finished"] | None = None,
+        filter_for_status: Literal[
+            "not_started", "in_progress", "rejected", "reviewable", "finished"] | None = None,
 
 ):
     query = db.query(Images, Masks).join(Masks, Images.id == Masks.image_id).filter(Images.dataset_id == dataset_id)

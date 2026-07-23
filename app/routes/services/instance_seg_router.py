@@ -6,7 +6,6 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from iquana_toolbox.schemas.networking.http.services import InstanceSegmentationRequest
 from iquana_toolbox.schemas.training import InstanceSegmentationTrainingRequest
 from iquana_toolbox.schemas.user import User
 from pydantic import BaseModel, Field
@@ -297,17 +296,10 @@ async def cancel_training_of_model(task_id: str, user: User = Depends(get_curren
                             detail=f"Could not cancel training: {exc}")
 
 
-@router.post("/run")
-async def run_inference(
-        request: InstanceSegmentationRequest,
-        user: AuthenticatedUser = Depends(get_current_user),
-):
-    """Run inference on a single image.
-
-    NOTE: this endpoint cannot be dataset-scoped as it stands. The request carries
-    an `image_url` rather than an `image_id`, so there is nothing to resolve a
-    dataset from, and it is authenticated-only. Adding `image_id` to
-    `InstanceSegmentationRequest` in the toolbox would let this take
-    `require(Permission.AI_BATCH_INFER, "image_id")` like the rest.
-    """
-    return await service.inference(request)
+# The POST /run inference endpoint was removed: nothing called it, and its request
+# body carried a raw filesystem path (`image_url`) that was handed straight to
+# cv2.imread, which made it both unauthorizable — there is no dataset to resolve
+# from a path — and an arbitrary-file-read on the shared volume. Interactive
+# inference goes through the annotation-session WebSocket, which resolves the path
+# server-side from the image id. If a direct inference API is ever needed, it
+# should take an `image_id` so it can be permission-checked.

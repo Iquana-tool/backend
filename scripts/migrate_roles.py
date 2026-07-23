@@ -8,7 +8,9 @@ What it does:
   1. Adds the new columns to existing tables (``users.global_role``,
      ``users.is_active``, ``datasets.require_independent_review``,
      ``contours.author_username``, ``contours.created_at``).
-  2. Backfills ``users.global_role`` from the old ``users.is_admin`` flag.
+  2. Backfills ``users.global_role`` from the old ``users.is_admin`` flag, then drops
+     that column — it is ``NOT NULL`` with no default and the model no longer declares
+     it, so leaving it behind makes every new-user INSERT fail.
   3. Copies ``dataset_user_association`` rows into ``dataset_members``, giving each
      existing collaborator a role (curator by default, since sharing previously
      implied unrestricted access).
@@ -87,6 +89,22 @@ def backfill_global_roles(connection, dry_run: bool) -> int:
     return admins
 
 
+def drop_legacy_is_admin(connection, dry_run: bool) -> int:
+    """Remove ``users.is_admin`` once ``global_role`` carries the same information.
+
+    The column is declared ``BOOLEAN NOT NULL`` with no default, and ``Users`` no longer
+    maps it. Any INSERT the ORM builds therefore omits it and SQLite rejects the row with
+    ``NOT NULL constraint failed: users.is_admin`` — which surfaces as a 500 from
+    ``POST /auth/register``. Must run *after* backfill_global_roles().
+    """
+    if "is_admin" not in _existing_columns(connection, "users"):
+        return 0
+    logger.info("Dropping legacy users.is_admin (superseded by global_role).")
+    if not dry_run:
+        connection.execute(text("ALTER TABLE users DROP COLUMN is_admin"))
+    return 1
+
+
 def migrate_shares(connection, shared_role: DatasetRole, dry_run: bool) -> int:
     """Copy the old flat share table into role-carrying membership rows."""
     inspector = inspect(connection)
@@ -154,6 +172,13 @@ def seed_contour_authors(connection, dry_run: bool) -> int:
     else is left NULL, which the permission code treats as "author unknown" and
     therefore editable by anyone who may edit the dataset's annotations.
     """
+    if "author_username" not in _existing_columns(connection, "contours"):
+        # Only reachable under --dry-run, where add_missing_columns() reported the
+        # column instead of creating it. Counting rows would fail on "no such column".
+        logger.info("contours.author_username does not exist yet; "
+                    "re-run without --dry-run to add it and seed authors.")
+        return 0
+
     updated = connection.execute(text(
         "SELECT COUNT(*) FROM contours WHERE author_username IS NULL "
         "AND added_by IN (SELECT username FROM users)"
@@ -191,6 +216,7 @@ def main():
     with engine.begin() as connection:
         added = add_missing_columns(connection, args.dry_run)
         promoted = backfill_global_roles(connection, args.dry_run)
+        dropped = drop_legacy_is_admin(connection, args.dry_run)
         shares = migrate_shares(connection, DatasetRole(args.shared_role), args.dry_run)
         owners = create_owner_memberships(connection, args.dry_run)
         authors = seed_contour_authors(connection, args.dry_run) if args.seed_authors else 0
@@ -198,8 +224,9 @@ def main():
             connection.rollback()
 
     logger.info(
-        "Done. columns_added=%s admins_promoted=%s shares_migrated=%s owner_rows=%s authors_seeded=%s",
-        added, promoted, shares, owners, authors,
+        "Done. columns_added=%s admins_promoted=%s is_admin_dropped=%s shares_migrated=%s "
+        "owner_rows=%s authors_seeded=%s",
+        added, promoted, dropped, shares, owners, authors,
     )
     logger.info(
         "The legacy dataset_user_association table is left in place; drop it once you "
