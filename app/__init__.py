@@ -15,6 +15,7 @@ from app.routes.general.labels import router as label_router
 from app.routes.general.masks import router as mask_router
 from app.routes.general.members import invite_router, router as member_router
 from app.routes.general.reviews import router as review_router
+from app.routes.general.pixel_scale import router as scale_router
 from app.routes.general.status import router as status_router
 from app.routes.services.suggestion_router import router as suggestion_segmentation_router
 from app.routes.services.label_space_router import router as label_space_router
@@ -81,6 +82,7 @@ def create_app():
     app.include_router(mask_router)
     app.include_router(contour_router)
     app.include_router(label_router)
+    app.include_router(scale_router)
 
     # Services; Add your own service here!
     app.include_router(prompted_segmentation_router)
