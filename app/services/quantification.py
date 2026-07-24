@@ -12,7 +12,7 @@ from typing import Iterable
 
 import numpy as np
 from PIL import Image as PILImage
-from iquana_toolbox.quantification import QuantContext, get_metric
+from iquana_toolbox.quantification import QuantContext, get_metric, geometry_math as gm
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.database.quantification import QuantificationModel
 from sqlalchemy import Select
@@ -387,6 +387,75 @@ def _images_needing_appearance_compute(
         query = query.filter(or_(*missing_or_stale_conditions))
 
     return query.order_by(Images.id).all()
+
+
+def compute_geometry_metrics_for_dataset(
+        db: Session,
+        dataset_id: int,
+        metric_keys: Iterable[str] = GEOMETRY_METRIC_KEYS,
+        only_stale: bool = True,
+        image_ids: Iterable[int] | None = None,
+) -> int:
+    """Compute geometry metrics and synchronize legacy contour columns for a dataset.
+
+    Args:
+        db: Database session.
+        dataset_id: Dataset to compute for.
+        metric_keys: Geometry metric keys to compute.
+        only_stale: Whether to skip contours with fresh requested metric rows.
+        image_ids: Optional image subset.
+
+    Returns:
+        The number of contour-metric rows written.
+    """
+    metric_keys = tuple(metric_keys)
+    if not metric_keys:
+        return 0
+
+    rows = _images_needing_appearance_compute(db, dataset_id, metric_keys, only_stale, image_ids)
+    if not rows:
+        return 0
+
+    contours_by_image: dict[int, list[Contour]] = {}
+    image_by_id: dict[int, Images] = {}
+    contour_db_by_id: dict[int, Contours] = {}
+    for contour_db, image_db in rows:
+        image_by_id[image_db.id] = image_db
+        contour_db_by_id[contour_db.id] = contour_db
+        contours_by_image.setdefault(image_db.id, []).append(Contour.from_db(contour_db))
+
+    total_rows = 0
+    images_since_commit = 0
+    for image_id, contour_schemas in contours_by_image.items():
+        image = image_by_id[image_id]
+        total_rows += compute_and_store_metrics(db, metric_keys, contour_schemas, image)
+
+        for contour_schema in contour_schemas:
+            contour_db = contour_db_by_id[contour_schema.id]
+            context = build_quant_context(image, [contour_schema])
+            points = context.points_physical(contour_schema)
+            area, perimeter = gm.area_and_perimeter(points)
+            contour_db.area = float(area)
+            contour_db.perimeter = float(perimeter)
+            contour_db.circularity = float(gm.circularity(area, perimeter))
+            contour_db.diameter = float(gm.max_diameter(points))
+
+        images_since_commit += 1
+        if images_since_commit >= _APPEARANCE_BATCH_SIZE:
+            db.commit()
+            images_since_commit = 0
+
+    if images_since_commit > 0:
+        db.commit()
+
+    logger.info(
+        "Computed geometry metrics for dataset %s: %d images, %d rows (only_stale=%s).",
+        dataset_id,
+        len(contours_by_image),
+        total_rows,
+        only_stale,
+    )
+    return total_rows
 
 
 def compute_appearance_metrics_for_dataset(

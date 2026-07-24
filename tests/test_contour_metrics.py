@@ -210,3 +210,19 @@ def test_dual_write_and_aggregation_and_backfill(session):
     repaired_area_row = session.query(ContourMetrics).filter_by(contour_id=parent1.id, metric_key="area").one()
     assert repaired_area_row.value == pytest.approx(ref.area)
     assert repaired_area_row.unit == "mm²"
+
+    from app.services.quantification import compute_geometry_metrics_for_dataset
+
+    session.query(ContourMetrics).filter(
+        ContourMetrics.metric_key.in_(["area", "perimeter", "circularity", "max_diameter"])
+    ).update({"stale": True})
+    session.commit()
+
+    rows_written = compute_geometry_metrics_for_dataset(session, ds.id, only_stale=True)
+    assert rows_written > 0
+
+    stale_count = session.query(ContourMetrics).filter(
+        ContourMetrics.metric_key.in_(["area", "perimeter", "circularity", "max_diameter"]),
+        ContourMetrics.stale.is_(True),
+    ).count()
+    assert stale_count == 0
