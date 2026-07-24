@@ -119,6 +119,11 @@ async def backfill_image_dimensions(
     Pass ``dataset_id`` to limit the repair to a single dataset; otherwise every
     image is checked. Returns the ids that were corrected and any whose original
     file is missing.
+
+    Geometry metrics (area, perimeter, ...) of the affected contours are
+    recomputed as well: they were derived in pixel space from the wrong
+    dimensions, so they are off by the same factor squared. The normalized
+    contour coordinates themselves are dimension-free and stay untouched.
     """
     query = db.query(Images)
     if dataset_id is not None:
@@ -140,9 +145,32 @@ async def backfill_image_dimensions(
             image.height = height
             corrected.append(image.id)
 
+    recomputed_contours = 0
     if corrected:
         db.commit()
-    return {"corrected": corrected, "missing": missing}
+        recomputed_contours = _recompute_geometry_for_images(db, corrected)
+        db.commit()
+    return {"corrected": corrected, "missing": missing,
+            "recomputed_contours": recomputed_contours}
+
+
+def _recompute_geometry_for_images(db: Session, image_ids: list[int]) -> int:
+    """Re-derive the geometry metrics of every contour on the given images.
+
+    Reuses the write path's dual-write (legacy columns + tall ``contour_metrics``
+    rows), so the repaired values land in both stores consistently.
+    """
+    from app.database.contours import Contours, dual_write_geometry_metrics
+
+    recomputed = 0
+    masks = db.query(Masks).filter(Masks.image_id.in_(image_ids)).all()
+    for mask in masks:
+        contours = db.query(Contours).filter_by(mask_id=mask.id).all()
+        if not contours:
+            continue
+        dual_write_geometry_metrics(db, mask.id, contours)
+        recomputed += len(contours)
+    return recomputed
 
 
 async def delete_image(

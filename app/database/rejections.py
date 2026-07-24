@@ -36,6 +36,10 @@ class AnnotationRejections(database):
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     resolved_at = Column(DateTime, nullable=True)
     resolved_by = Column(String, ForeignKey("users.username", ondelete="SET NULL"), nullable=True)
+    # How the rejection was closed, once resolved: "fixed" (the annotator reworked
+    # the annotation) or "wont_fix" (looked at, left as is). NULL while still open
+    # and on legacy rows resolved before resolution kinds existed.
+    resolution = Column(String(16), nullable=True)
 
     mask = relationship("Masks", back_populates="rejections")
 

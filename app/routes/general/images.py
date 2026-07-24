@@ -69,6 +69,33 @@ async def upload_images(
     }
 
 
+@router.post("/backfill_dimensions")
+async def backfill_image_dimensions(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE)),
+):
+    """Repair image dimensions recorded by the old thumbnail-mutation ingest bug.
+
+    Rows uploaded before the fix stored the 200px preview's dimensions instead of
+    the native ones, which shrank the precomputed contour paths (annotations
+    huddled in the image's top-left corner), the COCO export and the pixel-space
+    geometry metrics by the same factor. This re-reads every image file of the
+    dataset, fixes mismatched dimensions and recomputes the geometry metrics of
+    the affected contours. Safe to re-run: images whose stored dimensions already
+    match are untouched.
+    """
+    result = await images_db.backfill_image_dimensions(db, dataset_id=dataset_id)
+    return {
+        "success": True,
+        "message": f"Corrected {len(result['corrected'])} images, "
+                   f"recomputed metrics for {result['recomputed_contours']} contours"
+                   + (f"; {len(result['missing'])} files missing on disk."
+                      if result["missing"] else "."),
+        **result,
+    }
+
+
 @router.delete("/{image_id}")
 async def delete_image(
         image_id: int,

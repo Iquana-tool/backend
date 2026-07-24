@@ -14,6 +14,7 @@ from app.database.contours import (
 from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.masks import Masks
+from app.database.rejections import AnnotationRejections
 from app.database.users import Users
 from app.services.database_access.labels import get_label_hierarchy
 from app.services.quantification import (
@@ -63,59 +64,6 @@ def mark_relational_stale_for_parent(
     if parent_id is None:
         return 0
     return mark_relational_stale(db, [parent_id])
-
-
-def _sibling_ids(db: Session, mask_id: int, parent_id: int | None) -> list[int]:
-    """All contour ids sharing ``(mask_id, parent_id)`` (None = root level of that image)."""
-    query = db.query(Contours.id).filter(Contours.mask_id == mask_id)
-    query = query.filter(Contours.parent_id.is_(None)) if parent_id is None else query.filter(
-        Contours.parent_id == parent_id
-    )
-    return [row.id for row in query.all()]
-
-
-def mark_contextual_stale_for_group(
-        db: Session,
-        contour_id: int,
-        mask_id: int | None = None,
-        parent_id: int | None = None,
-) -> int:
-    """Mark CONTEXTUAL-tier rows stale for ``contour_id`` AND all of its same-parent siblings.
-
-    Nearest-neighbour-style metrics are relational: every contour in a parent group is a
-    potential neighbor of every other, so a change to ONE contour (moved, re-parented,
-    added, or removed) invalidates the correct value for ALL of them, not just itself -
-    the KDTree for the group has to be rebuilt regardless of which member changed.
-
-    ``mask_id`` / ``parent_id`` can be passed explicitly for callers that already know
-    them (e.g. ``delete_contour``, which must capture them BEFORE the delete removes the
-    row, and ``modify_contour`` when ``parent_id`` itself changed - both the OLD and the
-    NEW group need invalidating). When omitted, they are looked up from ``contour_id``;
-    if the contour cannot be found either way, only ``contour_id`` itself is marked
-    (harmless - a missing contour has no siblings left to protect).
-
-    Args:
-        db: The database session (caller controls commit).
-        contour_id: The contour whose parent group should be invalidated. Marked stale
-            itself even if it no longer exists in ``contours`` (ON DELETE CASCADE will
-            already have removed its own rows in that case, so this is a no-op for it,
-            but siblings still get marked correctly).
-        mask_id: The contour's ``mask_id``, if already known (avoids a lookup).
-        parent_id: The contour's ``parent_id`` (None = root level), if already known.
-
-    Returns:
-        The number of ``contour_metrics`` rows marked stale.
-    """
-    if mask_id is None:
-        contour_db = db.query(Contours).filter_by(id=contour_id).one_or_none()
-        if contour_db is None:
-            return mark_contextual_stale(db, [contour_id])
-        mask_id = contour_db.mask_id
-        parent_id = contour_db.parent_id
-
-    ids = set(_sibling_ids(db, mask_id, parent_id))
-    ids.add(contour_id)
-    return mark_contextual_stale(db, ids)
 
 
 # --- Metric staleness invalidation -------------------------------------------------
@@ -344,11 +292,6 @@ async def delete_contour(
     # Delete the root contour (CASCADE will handle the rest)
     db.delete(contour)
     db.flush()
-    mark_contextual_stale_for_group(db, contour_id, mask_id=mask_id, parent_id=parent_id)
-    # RELATIONAL: the deleted contour's PARENT (if any) just lost a child, so its
-    # n_children row is stale (parent-targeted, unlike the sibling-group contextual
-    # invalidation above). The deleted contour's own relational row is gone via CASCADE.
-    mark_relational_stale_for_parent(db, parent_id)
     db.commit()
 
 
@@ -419,18 +362,17 @@ async def modify_contour(
         # x/y move the centroid, parent_id re-parents into a different sibling group,
         # label_id affects any future label-filtered contextual variant (see Step 5
         # notes) - any of these invalidate the contour's (new) parent group.
-        mark_contextual_stale_for_group(db, contour_id, mask_id=contour_db.mask_id, parent_id=contour_db.parent_id)
+        mark_contextual_stale_for_group(db, contour_db.mask_id, contour_db.parent_id)
         if "parent_id" in kwargs and old_parent_id != contour_db.parent_id:
             # Re-parenting also invalidates the OLD group it left (one fewer sibling).
-            mark_contextual_stale_for_group(db, contour_id, mask_id=old_mask_id, parent_id=old_parent_id)
+            mark_contextual_stale_for_group(db, contour_db.mask_id, old_parent_id)
 
     if "parent_id" in kwargs and old_parent_id != contour_db.parent_id:
         # RELATIONAL: re-parenting moves this contour from one parent's child set to
         # another's, so BOTH the old parent (lost a child) and the new parent (gained one)
         # have a stale n_children count. Parent-targeted only - neither parent's siblings
         # are affected. None parents (root level) are no-ops.
-        mark_relational_stale_for_parent(db, old_parent_id)
-        mark_relational_stale_for_parent(db, contour_db.parent_id)
+        mark_relational_stale_for_parent(db, [old_parent_id, contour_db.parent_id])
 
     db.flush()
 
@@ -505,10 +447,34 @@ async def replace_contour(
     # contour's geometry does not silently reassign who is credited with it.
     author_username = author_username or contour.author_username
     mask_id, parent_id = contour.mask_id, contour.parent_id
+
+    # A replace is delete + re-insert under the SAME id — logically an in-place
+    # geometry update (e.g. an outline refinement), not a real deletion. But the
+    # DELETE fires the ON DELETE CASCADE on annotation_rejections.contour_id, which
+    # would wipe the reviewer's open send-backs for this object — and in the
+    # correction queue, 404 the "Mark as done" that follows the fix. Detach the
+    # rejections across the swap and re-point them to the reused id, so both the
+    # rejections and their ids survive the geometry change.
+    rejection_ids = [
+        rid for (rid,) in
+        db.query(AnnotationRejections.id).filter_by(contour_id=old_contour_id).all()
+    ]
+    if rejection_ids:
+        db.query(AnnotationRejections).filter(
+            AnnotationRejections.id.in_(rejection_ids)
+        ).update({AnnotationRejections.contour_id: None}, synchronize_session=False)
+        db.flush()
+
     db.query(Contours).filter_by(id=old_contour_id).delete()
-    save_contour_tree(db, new_contour_model, contour.mask_id, contour.parent_id,
+    save_contour_tree(db, new_contour_model, mask_id, parent_id,
                       author_username=author_username)
-    save_contour_tree(db, new_contour_model, mask_id, parent_id)
+
+    if rejection_ids:
+        # The contour keeps its id (set above), so the FK is valid again.
+        db.query(AnnotationRejections).filter(
+            AnnotationRejections.id.in_(rejection_ids)
+        ).update({AnnotationRejections.contour_id: old_contour_id},
+                 synchronize_session=False)
     # The contour keeps its id but its geometry (and therefore its filled pixels) is
     # entirely new; any appearance rows written above the delete's CASCADE (none should
     # remain, since the CASCADE removed them with the old contour row) must not be
@@ -520,6 +486,6 @@ async def replace_contour(
     # recomputing. save_contour_tree only dual-writes GEOMETRY rows for the new contour;
     # contextual staleness for the group is marked here explicitly, mirroring
     # mark_appearance_stale above.
-    mark_contextual_stale_for_group(db, old_contour_id, mask_id=mask_id, parent_id=parent_id)
+    mark_contextual_stale_for_group(db, mask_id, parent_id)
     db.commit()
     return True
