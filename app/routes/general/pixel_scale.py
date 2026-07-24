@@ -1,129 +1,147 @@
-"""Pixel-scale endpoints.
+"""HTTP routes for reading and setting the physical pixel scale of an image.
 
-NOTE: this router is still not registered in `create_app()` — it never was, and
-wiring it up would expose endpoints the frontend does not call yet. Its
-`APIRouter("/scale")` call (a positional argument FastAPI rejects) is fixed and
-the permission dependencies are in place, so registering it later is a one-line
-change rather than a new hole. Setting the scale rewrites every quantification
-number in the dataset, hence `pixel_scale.set` rather than annotation rights.
+Each handler validates the request shape, enforces the corresponding dataset
+permission, calls the service, and maps domain exceptions to HTTP status codes.
 """
 from logging import getLogger
 
 from fastapi import APIRouter, Depends, HTTPException
-from iquana_toolbox.schemas.scale import ScaleInput
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.database.images import Images
+from app.exceptions import DatasetNotFoundError, ImageNotFoundError, InvalidScaleError
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
-from app.services.permissions import require
-from app.services.scale_computation import compute_pixel_scale_from_points
+from app.services.auth import get_current_user
+from app.services.permissions import ensure_permission, ensure_permission_for, require
+from app.services.scale_computation import (
+    apply_scale_to_dataset,
+    get_image_scale,
+    set_image_scale,
+    set_scale_from_drawn_line,
+)
 
 router = APIRouter(prefix="/scale", tags=["scale"])
 logger = getLogger(__name__)
 
 
-@router.get('/get_pixel_scale/{image_id}')
+# ---------------------------------------------------------------------------
+# Request schemas
+# ---------------------------------------------------------------------------
+
+class SetScaleRequest(BaseModel):
+    """Body for the manual set-scale endpoint."""
+    image_id: int
+    scale_x: float = Field(..., gt=0, description="Physical size of one pixel along x.")
+    scale_y: float = Field(..., gt=0, description="Physical size of one pixel along y.")
+    unit: str = Field(..., min_length=1, description="Length unit, e.g. 'mm' or 'µm'.")
+
+
+class DrawnLineScaleRequest(BaseModel):
+    """Body for the drawn-line calibration endpoint."""
+    image_id: int
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    known_distance: float = Field(..., gt=0, description="Real-world distance between the two points.")
+    unit: str = Field(..., min_length=1, description="Unit of known_distance, e.g. 'mm'.")
+
+
+class DatasetScaleRequest(BaseModel):
+    """Body for the bulk dataset scale endpoint."""
+    dataset_id: int
+    scale_x: float = Field(..., gt=0)
+    scale_y: float = Field(..., gt=0)
+    unit: str = Field(..., min_length=1)
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/get_pixel_scale/{image_id}")
 async def get_pixel_scale(
     image_id: int,
     db: Session = Depends(get_session),
-    user: AuthenticatedUser = Depends(require(Permission.IMAGE_READ, "image_id"))
+    user: AuthenticatedUser = Depends(require(Permission.IMAGE_READ, "image_id")),
 ):
+    """Return the current physical scale stored for an image."""
+    try:
+        return get_image_scale(db, image_id)
+    except ImageNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    # All other exceptions bubble up → FastAPI returns 500
+
+
+@router.post("/set_pixel_scale")
+async def set_pixel_scale(
+    body: SetScaleRequest,
+    db: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Set the physical scale for an image and mark scale-dependent metrics stale.
+
+    Returns the stored scale values on success.
     """
-    Get the pixel scale for a given image.
+    ensure_permission_for(user, "image_id", body.image_id, Permission.PIXEL_SCALE_SET, db)
+    try:
+        result = set_image_scale(db, body.image_id, body.scale_x, body.scale_y, body.unit)
+    except ImageNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except InvalidScaleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"message": "Scale set successfully.", **result}
 
-    Args:
-        image_id (int): The ID of the image.
-        db (Session): The database session.
-        user (AuthenticatedUser): The current authenticated user.
 
-    Returns:
-        dict: The pixel scale information.
+@router.post("/set_pixel_scale_via_drawn_line")
+async def set_pixel_scale_via_drawn_line(
+    body: DrawnLineScaleRequest,
+    db: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Compute and store the physical scale from a user-drawn calibration line.
+
+    The user provides two pixel coordinates on the image and the known real-world
+    distance between them. The service computes the scale and persists it.
     """
-    # Fetch the image from the database
-    image = db.query(Images).filter_by(id=image_id).first()
-    if not image:
-        raise HTTPException(status_code=404, detail="Image not found")
- 
-    # Return the pixel scale information
-    return {
-        "scale_x": image.scale_x,
-        "scale_y": image.scale_y,
-        "unit": image.unit
-    }
+    ensure_permission_for(user, "image_id", body.image_id, Permission.PIXEL_SCALE_SET, db)
+    try:
+        result = set_scale_from_drawn_line(
+            db,
+            body.image_id,
+            (body.x1, body.y1),
+            (body.x2, body.y2),
+            body.known_distance,
+            body.unit,
+        )
+    except ImageNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except InvalidScaleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"message": "Scale calibrated successfully.", **result}
 
 
-@router.post('/set_pixel_scale')
-async def set_pixel_scale(scale_x: float,
-                          scale_y: float,
-                          unit: str,
-                          image_id: int,
-                          user: AuthenticatedUser = Depends(
-                              require(Permission.PIXEL_SCALE_SET, "image_id")),
-                          db: Session = Depends(get_session)):
+@router.post("/apply_to_dataset")
+async def apply_scale_to_dataset_endpoint(
+    body: DatasetScaleRequest,
+    db: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Apply the same physical scale to every image in a dataset.
+
+    Useful when all images in a dataset share the same acquisition settings
+    (e.g. same microscope magnification). Marks scale-dependent metrics stale
+    for every affected image.
     """
-    Set the pixel scale for an image.
-
-    Args:
-        scale_x (float): The pixel scale in the x direction.
-        scale_y (float): The pixel scale in the y direction.
-        unit (str): The unit of measurement (e.g., mm).
-        image_id (int): The ID of the image to set the scale for.
-        db (Session): The database session.
-        user (AuthenticatedUser): The current authenticated user.
-
-    Returns:
-        dict: A success message with the scale information.
-    """
-    # Fetch the image from the database
-    image = db.query(Images).filter_by(id=image_id).first()
-    if not image:
-        raise HTTPException(status_code=404, detail="Image not found")
-
-    # Ensure the unit is provided
-    if not unit:
-        raise HTTPException(status_code=400, detail="Unit must be provided (e.g., mm)")
-
-    if image.scale_x is not None or image.scale_y is not None:
-        logger.warning("Overwriting existing pixel scale values.")
-
-    # Save scale information in the database
-    image.scale_x = scale_x
-    image.scale_y = scale_y
-    image.unit = unit
-    db.commit()
-
-    # Return a success response
-    return {
-        "message": "Scale set successfully",
-        "scale_x": scale_x,
-        "scale_y": scale_y,
-        "unit": unit
-    }
-
-
-@router.post('/set_pixel_scale_via_drawn_line')
-async def set_pixel_scale_via_drawn_line(scale_input: ScaleInput,
-    user: AuthenticatedUser = Depends(require(Permission.PIXEL_SCALE_SET, "image_id")),
-    db: Session = Depends(get_session)):
-    """
-    Set the pixel scale based on a known distance between two points drawn on the image.
-
-    Args:
-        scale_input (ScaleInput): Input containing the coordinates of the two points and the known distance.
-        db (Session): The database session.
-        user (AuthenticatedUser): The current authenticated user.
-
-    Returns:
-        dict: A success message with the computed scale information.
-    """
-    # Compute the scale in both directions
-    scale_x, scale_y = compute_pixel_scale_from_points(
-        (scale_input.x1, scale_input.y1),
-        (scale_input.x2, scale_input.y2),
-        scale_input.known_distance
-    )
-
-    # Return a success response
-    return set_pixel_scale(scale_x, scale_y, scale_input.unit, scale_input.image_id, db)
+    ensure_permission(user, body.dataset_id, Permission.PIXEL_SCALE_SET)
+    try:
+        result = apply_scale_to_dataset(
+            db, body.dataset_id, body.scale_x, body.scale_y, body.unit
+        )
+    except DatasetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except InvalidScaleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"message": "Scale applied to dataset.", **result}

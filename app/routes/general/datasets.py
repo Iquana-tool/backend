@@ -28,9 +28,11 @@ from app.services.database_access.datasets import ContourSelection, export_datas
 from app.services.quantification import (
     APPEARANCE_METRIC_KEYS,
     CONTEXTUAL_METRIC_KEYS,
+    GEOMETRY_METRIC_KEYS,
     RELATIONAL_METRIC_KEYS,
     compute_appearance_metrics_for_dataset,
     compute_contextual_metrics_for_dataset,
+    compute_geometry_metrics_for_dataset,
     compute_relational_metrics_for_dataset,
 )
 from app.services.util import get_mask_path_from_image_path
@@ -64,9 +66,9 @@ def _resolve_profile_scoping(
 ) -> tuple[dict[str, list[int] | None] | None, set[str]]:
     """Resolve a profile id into (metric_scoping, tiers_to_compute).
 
-    Returns ``(None, {"appearance", "contextual", "relational"})`` when ``profile_id`` is
+    Returns ``(None, {"geometry", "appearance", "contextual", "relational"})`` when ``profile_id`` is
     None so the legacy no-profile path aggregates every metric and lazily computes all
-    non-geometry tiers, exactly as before. When a profile is given, ``metric_scoping`` maps
+    tiers, exactly as before. When a profile is given, ``metric_scoping`` maps
     each of the profile's metric keys to its label scope (last entry wins if a key repeats),
     and the tier set contains only the tiers the profile actually references, so e.g. a
     geometry-only profile never pays the appearance image-decode or relational compute cost.
@@ -86,6 +88,8 @@ def _resolve_profile_scoping(
         metric_scoping[entry.metric_key] = entry.label_ids
 
     tiers: set[str] = set()
+    if any(key in GEOMETRY_METRIC_KEYS for key in metric_scoping):
+        tiers.add("geometry")
     if any(key in APPEARANCE_METRIC_KEYS for key in metric_scoping):
         tiers.add("appearance")
     if any(key in CONTEXTUAL_METRIC_KEYS for key in metric_scoping):
@@ -557,6 +561,8 @@ async def get_dataset_quantification_summary(
     # relational compute cost entirely.
     metric_scoping, profile_tiers = _resolve_profile_scoping(db, dataset_id, profile_id)
 
+    if "geometry" in profile_tiers:
+        compute_geometry_metrics_for_dataset(db, dataset_id, only_stale=True)
     if include_appearance and "appearance" in profile_tiers:
         compute_appearance_metrics_for_dataset(db, dataset_id, only_stale=True)
     if include_contextual and "contextual" in profile_tiers:
@@ -878,6 +884,8 @@ async def download_dataset_quantification(
     # When a profile is given, the export emits one column per profile metric/component
     # from contour_metrics; otherwise it keeps the legacy four-geometry-column shape.
     metric_scoping, profile_tiers = _resolve_profile_scoping(db, dataset_id, profile_id)
+    if "geometry" in profile_tiers:
+        compute_geometry_metrics_for_dataset(db, dataset_id, only_stale=True)
     if profile_id is not None:
         if "appearance" in profile_tiers:
             compute_appearance_metrics_for_dataset(db, dataset_id, only_stale=True)
