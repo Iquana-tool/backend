@@ -14,6 +14,7 @@ from app.schemas.review import (
     RejectionRead,
     RejectionReason,
     RejectionReasonOption,
+    RejectionResolution,
 )
 
 logger = getLogger(__name__)
@@ -58,6 +59,7 @@ def to_read(rejection: AnnotationRejections) -> RejectionRead:
         created_at=_as_utc(rejection.created_at),
         resolved_at=_as_utc(rejection.resolved_at),
         resolved_by=rejection.resolved_by,
+        resolution=RejectionResolution(rejection.resolution) if rejection.resolution else None,
     )
 
 
@@ -70,20 +72,27 @@ async def reject(mask_id: int,
     Rejecting also clears `fully_annotated`, so the mask leaves the reviewer's
     queue and reappears in the annotator's; without that the same mask would keep
     showing up as awaiting review.
+
+    Rejecting a specific contour additionally withdraws the rejecting reviewer's
+    own earlier approval of it (if any): a reviewer who changed their mind on a
+    re-review pass overwrites their old verdict rather than holding both. Other
+    reviewers' approvals are left alone — they were somebody else's judgement.
     """
     mask = db.query(Masks).filter_by(id=mask_id).first()
     if mask is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mask not found.")
 
     if body.contour_id is not None:
-        belongs = (
-            db.query(Contours.id)
+        contour = (
+            db.query(Contours)
             .filter(Contours.id == body.contour_id, Contours.mask_id == mask_id)
-            .scalar()
+            .first()
         )
-        if belongs is None:
+        if contour is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail=f"Contour {body.contour_id} does not belong to mask {mask_id}.")
+        contour.reviewed_by = [reviewer for reviewer in contour.reviewed_by
+                               if reviewer.username != username]
 
     rejection = AnnotationRejections(
         mask_id=mask_id,
@@ -100,14 +109,21 @@ async def reject(mask_id: int,
     return rejection
 
 
-async def resolve(rejection_id: int, username: str, db: Session) -> AnnotationRejections:
-    """Mark one rejection as dealt with. Resolving is idempotent."""
+async def resolve(rejection_id: int, username: str, db: Session,
+                  resolution: RejectionResolution | None = None) -> AnnotationRejections:
+    """Mark one rejection as dealt with. Resolving is idempotent.
+
+    ``resolution`` records how it was closed (``fixed`` / ``wont_fix``) when the
+    caller knows; it is only written on the first resolve, so re-resolving an
+    already-closed rejection never overwrites the original verdict.
+    """
     rejection = db.query(AnnotationRejections).filter_by(id=rejection_id).first()
     if rejection is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rejection not found.")
     if rejection.resolved_at is None:
         rejection.resolved_at = _utcnow()
         rejection.resolved_by = username
+        rejection.resolution = resolution.value if resolution else None
         db.commit()
         db.refresh(rejection)
     return rejection

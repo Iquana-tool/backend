@@ -198,14 +198,15 @@ def dual_write_geometry_metrics(session, mask_id: int, contours: list["Contours"
 
 
 def _save_contour_subtree(session, contour_schema: Contour, mask_id: int, parent_id,
-                          author_username: str | None, created: list["Contours"]):
+                          author_username: str | None, created: list["Contours"],
+                          _image=None):
     """Recursive half of :func:`save_contour_tree`; appends every saved row to ``created``."""
     from app.database.users import Users  # local import to avoid circular deps
 
     # 0. Resolve the mask's image once (the recursion below reuses it) and make sure
     #    the quantification is computed from pixel-space coordinates.
     if _image is None:
-        _image = _get_image_of_mask(session, mask_id)
+        _image = _image_for_mask(session, mask_id)
     if contour_schema.quantification is None or contour_schema.quantification.is_empty:
         if _image is not None:
             contour_schema.compute_quantification(
@@ -241,7 +242,7 @@ def _save_contour_subtree(session, contour_schema: Contour, mask_id: int, parent
     # 4. Recurse for children
     for child_schema in contour_schema.children:
         _save_contour_subtree(session, child_schema, mask_id, db_contour.id,
-                              author_username, created)
+                              author_username, created, _image=_image)
 
     return db_contour
 

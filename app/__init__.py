@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db
 from app.routes.general.admin import router as admin_router
+from app.routes.general.annotation_queue import router as annotation_queue_router
 from app.routes.general.auth import router as auth_router
 from app.routes.general.contours import router as contour_router
 from app.routes.general.datasets import router as dataset_router
@@ -77,6 +78,7 @@ def create_app():
     app.include_router(member_router)
     app.include_router(invite_router)
     app.include_router(review_router)
+    app.include_router(annotation_queue_router)
     app.include_router(image_router)
     app.include_router(image_annotation_session_router)
     app.include_router(mask_router)
