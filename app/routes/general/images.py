@@ -2,16 +2,33 @@ import json
 import logging
 
 from fastapi import APIRouter, UploadFile, File, Depends
-from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
+from app.database.images import Images
+from app.schemas.auth_user import AuthenticatedUser
+from app.schemas.permissions import Permission
 from app.services.auth import get_current_user
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import images as images_db
+from app.services.permissions import ensure_permission_on_datasets, require
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/images", tags=["images"])
+
+
+def _check_image_batch(image_ids: list[int], user: AuthenticatedUser,
+                       permission: Permission, db: Session) -> None:
+    """Check `permission` on every dataset the requested images belong to.
+
+    Batch endpoints take an arbitrary list of ids, so one `require()` on a single
+    id is not enough — the list can span datasets the caller has no access to.
+    """
+    dataset_ids = [
+        row.dataset_id for row in
+        db.query(Images.dataset_id).filter(Images.id.in_(image_ids)).distinct()
+    ]
+    ensure_permission_on_datasets(user, dataset_ids, permission)
 
 
 @router.post("/upload")
@@ -19,6 +36,7 @@ async def upload_image(
         dataset_id: int,
         file: UploadFile = File(...),
         db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.IMAGE_UPLOAD)),
 ):
     dataset = await datasets_db.get_dataset(dataset_id, db=db)
     image_id = await images_db.process_and_save_image(file, dataset_id, dataset.folder_path, db=db)
@@ -34,6 +52,7 @@ async def upload_images(
         dataset_id: int,
         files: list[UploadFile] = File(...),
         db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.IMAGE_UPLOAD)),
 ):
     dataset = await datasets_db.get_dataset(dataset_id, db=db)
     image_ids = []
@@ -54,13 +73,13 @@ async def upload_images(
 async def delete_image(
         image_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.IMAGE_DELETE, "image_id"))
 ):
     """Delete an image and its associated masks.
 
     Args:
         image_id: ID of the image to delete.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         A dictionary indicating success and a message.
@@ -74,15 +93,14 @@ async def delete_image(
 async def get_base64_image(
         image_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.IMAGE_READ, "image_id"))
 ):
     """Get images via ids.
 
     Args:
         image_id (int): Image ID to retrieve.
-        low_res (bool): Whether to return low resolution images (thumbnails). Defaults to False.
         db (Session): Database session dependency.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         A dict mapping from image ID to base64 encoded image.
@@ -98,15 +116,14 @@ async def get_base64_image(
 async def get_base64_thumbnail(
         image_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.IMAGE_READ, "image_id"))
 ):
     """Get images via ids.
 
     Args:
         image_id (int): Image ID to retrieve.
-        low_res (bool): Whether to return low resolution images (thumbnails). Defaults to False.
         db (Session): Database session dependency.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         A dict mapping from image ID to base64 encoded image.
@@ -122,20 +139,20 @@ async def get_base64_thumbnail(
 async def get_base64_images(
         image_ids: str,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(get_current_user)
 ):
     """Get images via a list of image IDs. This gets the images in batches to avoid sending too many requests at once.
 
     Args:
         image_ids (str): JSON string containing a list of image IDs to retrieve.
-        low_res (bool): Whether to return low resolution images (thumbnails). Defaults to False.
         db (Session): Database session dependency.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         A dictionary mapping from image ID to base64 encoded image.
     """
     image_ids = json.loads(image_ids)
+    _check_image_batch(image_ids, user, Permission.IMAGE_READ, db)
     return {
         "success": True,
         "message": f"Successfully retrieved {len(image_ids)} images.",
@@ -147,19 +164,20 @@ async def get_base64_images(
 async def get_base64_thumbnails(
         image_ids: str,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(get_current_user)
 ):
     """Get images via a list of image IDs. This gets the images in batches to avoid sending too many requests at once.
 
     Args:
         image_ids (str): JSON string containing a list of image IDs to retrieve.
         db (Session): Database session dependency.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         A dictionary mapping from image ID to base64 encoded image.
     """
     image_ids = json.loads(image_ids)
+    _check_image_batch(image_ids, user, Permission.IMAGE_READ, db)
     return {
         "success": True,
         "message": f"Successfully retrieved {len(image_ids)} images.",
@@ -171,7 +189,7 @@ async def get_base64_thumbnails(
 async def get_mask_for_image(
         image_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ, "image_id"))
 ):
     """ Get the mask image for a given image. """
     return {
@@ -185,7 +203,7 @@ async def post_semantic_mask_to_image(
         image_id: int,
         mask: UploadFile = File(...),
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_CREATE, "image_id"))
 ):
     """
     Upload a mask to a mask id. Compute the contours for each label in the mask, build the hierarchy and add
@@ -194,8 +212,8 @@ async def post_semantic_mask_to_image(
     Args:
         image_id (int): The ID of the image.
         mask (UploadFile): The mask file.
-        session (Session): The database session.
-        user (User): The current authenticated user.
+        db (Session): The database session.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and result.

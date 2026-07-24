@@ -6,7 +6,6 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from iquana_toolbox.schemas.networking.http.services import InstanceSegmentationRequest
 from iquana_toolbox.schemas.training import InstanceSegmentationTrainingRequest
 from iquana_toolbox.schemas.user import User
 from pydantic import BaseModel, Field
@@ -15,12 +14,15 @@ from starlette import status as http_status
 
 from app.database import get_session
 from app.database.images import Images
+from app.schemas.auth_user import AuthenticatedUser
+from app.schemas.permissions import Permission
 from app.services.ai_services.instance_segmentation import InstanceSegmentationService
 from app.services.auth import get_current_user
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import labels as labels_db
 from app.services.database_access.datasets import export_dataset_contours_to_coco
 from app.services.model_registry import MODEL_REGISTRY, list_available_models
+from app.services.permissions import ensure_permission, require
 
 logger = getLogger(__name__)
 router = APIRouter(prefix="/instance_segmentation", tags=["instance_segmentation"])
@@ -74,9 +76,9 @@ async def start_training(
     delegates to a Celery worker). Returns the task id, which is also the MLflow
     run id used to poll progress.
     """
-    if body.dataset_id not in user.available_datasets:
-        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN,
-                            detail="User does not have access to this dataset.")
+    # The dataset id only exists after the body is parsed, so this is the
+    # imperative form of the require() dependency used elsewhere.
+    ensure_permission(user, body.dataset_id, Permission.AI_TRAIN)
 
     dataset = await datasets_db.get_dataset(body.dataset_id, db=db)
     if not dataset:
@@ -242,11 +244,9 @@ def _list_training_runs(dataset_id: int) -> list[dict]:
 
 
 @router.get("/training/runs")
-async def list_training_runs(dataset_id: int, user: User = Depends(get_current_user)):
+async def list_training_runs(dataset_id: int,
+                             user: AuthenticatedUser = Depends(require(Permission.AI_TRAIN))):
     """List past + active training runs for a dataset (for the run-history list)."""
-    if dataset_id not in user.available_datasets:
-        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN,
-                            detail="User does not have access to this dataset.")
     return {"success": True, "runs": await asyncio.to_thread(_list_training_runs, dataset_id)}
 
 
@@ -296,10 +296,10 @@ async def cancel_training_of_model(task_id: str, user: User = Depends(get_curren
                             detail=f"Could not cancel training: {exc}")
 
 
-@router.post("/run")
-async def run_inference(
-        request: InstanceSegmentationRequest,
-        user: User = Depends(get_current_user),
-):
-    """Run inference on a single image."""
-    return await service.inference(request)
+# The POST /run inference endpoint was removed: nothing called it, and its request
+# body carried a raw filesystem path (`image_url`) that was handed straight to
+# cv2.imread, which made it both unauthorizable — there is no dataset to resolve
+# from a path — and an arbitrary-file-read on the shared volume. Interactive
+# inference goes through the annotation-session WebSocket, which resolves the path
+# server-side from the image id. If a direct inference API is ever needed, it
+# should take an `image_id` so it can be permission-checked.

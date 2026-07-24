@@ -21,15 +21,13 @@ _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_ROOT not in sys.path:
     sys.path.insert(0, _BACKEND_ROOT)
 
-import numpy as np  # noqa: E402
-
 from iquana_toolbox.schemas.database.quantification import QuantificationModel  # noqa: E402
 
 from app.database import get_context_session  # noqa: E402
 from app.database.contours import Contours  # noqa: E402
 from app.database.images import Images  # noqa: E402
 from app.database.masks import Masks  # noqa: E402
-from app.services.quantification import GEOMETRY_METRIC_KEYS  # noqa: E402
+from app.services.quantification import GEOMETRY_METRIC_KEYS, quantify_contour_row  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("backfill_contour_metrics")
@@ -50,22 +48,12 @@ def _iter_contour_rows(session, dataset_id: int | None):
 
 
 def _recompute(contour: Contours, image: Images) -> QuantificationModel:
-    """Recompute the quantification for a DB contour in pixel space (scaled to units)."""
-    x = contour.x if isinstance(contour.x, list) else list(contour.x or [])
-    y = contour.y if isinstance(contour.y, list) else list(contour.y or [])
-    if len(x) == 0:
-        points_px = np.empty((0, 2), dtype=np.float64)
-    else:
-        points_px = np.stack([
-            np.asarray(x, dtype=np.float64) * image.width,
-            np.asarray(y, dtype=np.float64) * image.height,
-        ], axis=-1)
-    return QuantificationModel.from_contour(
-        points_px,
-        scale_x=image.scale_x,
-        scale_y=image.scale_y,
-        unit=image.unit or "px",
-    )
+    """Recompute the quantification for a DB contour in pixel space (scaled to units).
+
+    Delegates to the shared helper so this repair path and the synchronous dual-write in
+    ``save_contour_tree`` can never drift apart.
+    """
+    return quantify_contour_row(contour, image)
 
 
 def backfill(dataset_id: int | None = None, dry_run: bool = False) -> dict[str, int]:

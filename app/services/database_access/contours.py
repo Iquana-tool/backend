@@ -2,14 +2,25 @@ from logging import getLogger
 
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.user import User
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.database.contours import Contours, save_contour_tree
+from app.database.contours import (
+    Contours,
+    dual_write_geometry_metrics,
+    reviewer_contour_association,
+    save_contour_tree,
+)
+from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.users import Users
 from app.services.database_access.labels import get_label_hierarchy
-from app.services.quantification import mark_appearance_stale, mark_contextual_stale, mark_relational_stale
+from app.services.quantification import (
+    mark_appearance_stale,
+    mark_contextual_stale,
+    mark_relational_stale,
+)
 
 logger = getLogger(__name__)
 
@@ -107,6 +118,96 @@ def mark_contextual_stale_for_group(
     return mark_contextual_stale(db, ids)
 
 
+# --- Metric staleness invalidation -------------------------------------------------
+#
+# The geometry tier is recomputed synchronously on every write (see
+# ``app.database.contours.dual_write_geometry_metrics``) and is therefore never stale.
+# The appearance / contextual / relational tiers are computed lazily in batches, so every
+# write path that can change their inputs must flag the affected rows here. Without this,
+# ``compute_*_for_dataset(only_stale=True)`` would consider already-computed rows fresh
+# and silently keep serving outdated values.
+#
+# The helpers below answer "WHICH contours are affected", and delegate the actual flag
+# flip to the primitives in ``app.services.quantification``.
+
+
+def mark_contextual_stale_for_group(db: Session, mask_id: int, parent_id: int | None) -> int:
+    """Mark the contextual rows of a whole sibling GROUP stale.
+
+    Contextual metrics (nearest-neighbour distances) are computed from a contour's
+    same-parent siblings, so adding, moving or removing ONE member changes the correct
+    value for every other member - the invalidation must therefore cover the group, not
+    just the contour that changed.
+
+    A group is identified by ``(mask_id, parent_id)``, with ``parent_id is None`` meaning
+    the image's root level (all root contours of a mask are siblings of each other). This
+    mirrors the grouping in
+    ``app.services.quantification._contours_needing_contextual_compute`` exactly; if the
+    two ever disagree, stale rows would be flagged but never recomputed.
+
+    Args:
+        db: The database session (caller controls commit).
+        mask_id: The mask the group lives on.
+        parent_id: The group's parent contour id, or ``None`` for the root level.
+
+    Returns:
+        The number of rows marked stale.
+    """
+    # Passed to the primitive as a SUBQUERY rather than a materialized id list: importing
+    # a mask saves its contours one by one, so fetching the (steadily growing) group into
+    # python on every save would make a large import quadratic.
+    group_select = select(Contours.id).where(Contours.mask_id == mask_id)
+    if parent_id is None:
+        group_select = group_select.where(Contours.parent_id.is_(None))
+    else:
+        group_select = group_select.where(Contours.parent_id == parent_id)
+    return mark_contextual_stale(db, group_select)
+
+
+def mark_relational_stale_for_parent(db: Session, parent_ids) -> int:
+    """Mark the relational rows (``n_children``) of the given PARENT contours stale.
+
+    Unlike contextual staleness this does not fan out to a group: ``n_children`` counts a
+    contour's own children, so it only changes for the parent whose child set changed -
+    never for that parent's siblings. Callers pass the old and/or new parent of a contour
+    that was created, deleted or re-parented. ``None`` entries (root-level contours have
+    no parent) are dropped.
+
+    Args:
+        db: The database session (caller controls commit).
+        parent_ids: An iterable of parent contour ids, possibly containing ``None``.
+
+    Returns:
+        The number of rows marked stale.
+    """
+    return mark_relational_stale(db, {pid for pid in parent_ids if pid is not None})
+
+
+def invalidate_metrics_for_new_contours(db: Session, contours: list[Contours]) -> None:
+    """Invalidate the lazily-computed metrics that newly saved contours affect.
+
+    Called from ``save_contour_tree`` once the whole tree is persisted. The new contours
+    have no rows of their own yet (so the batch jobs already treat them as "needs
+    compute"); what this flags is the metrics of the EXISTING contours around them:
+
+      * contextual - every prior member of each group the new contours joined gained a
+        potential nearest neighbour,
+      * relational - every parent that gained a child now has a different ``n_children``.
+
+    Appearance metrics are intentionally untouched: they depend only on a contour's own
+    pixels, which no other contour's arrival can change.
+
+    Args:
+        db: The database session (caller controls commit).
+        contours: The freshly saved ``Contours`` rows.
+    """
+    if not contours:
+        return
+    for mask_id, parent_id in {(c.mask_id, c.parent_id) for c in contours}:
+        mark_contextual_stale_for_group(db, mask_id, parent_id)
+    mark_relational_stale_for_parent(db, {c.parent_id for c in contours})
+
+
 async def get_contour(
         contour_id: int,
         db: Session
@@ -157,18 +258,64 @@ async def _check_contour_label(
         )
 
 
+async def may_review(contour_db: Contours, username: str, db: Session) -> bool:
+    """Whether `username` is allowed to approve this particular contour.
+
+    Independent review is off by default so a single owner working alone can still
+    finish their own dataset. Datasets that turn it on (multi-annotator work, where
+    "finished" has to mean "checked by someone else") refuse approvals from the
+    person who authored the contour.
+    """
+    dataset_id = (
+        db.query(Images.dataset_id)
+        .join(Masks, Masks.image_id == Images.id)
+        .filter(Masks.id == contour_db.mask_id)
+        .scalar()
+    )
+    if dataset_id is None:
+        return True
+    requires_independent = (
+        db.query(Datasets.require_independent_review).filter_by(id=dataset_id).scalar()
+    )
+    if not requires_independent:
+        return True
+    return contour_db.author_username != username
+
+
 async def review_contour(
         contour_id: int,
         user: User,
-        db: Session
+        db: Session,
+        strict: bool = True
 ):
+    """Record `user` as having approved a contour.
+
+    With `strict=False` an approval that separation of duties forbids is skipped
+    silently rather than raising. That is what the label-edit path wants: changing
+    a label should still succeed for an annotator who simply is not allowed to
+    approve their own work.
+    """
     contour_db = db.query(Contours).filter_by(id=contour_id).first()
-    user_db = db.query(Users).filter_by(username=user.username).first()
     if not contour_db:
         raise KeyError(f"Contour with id {contour_id} does not exist")
-    if user not in contour_db.reviewed_by:
+    user_db = db.query(Users).filter_by(username=user.username).first()
+    if user_db is None:
+        raise KeyError(f"User {user.username} does not exist")
+
+    if not await may_review(contour_db, user.username, db):
+        if strict:
+            raise PermissionError(
+                "This dataset requires independent review: a contour cannot be "
+                "approved by the person who created it."
+            )
+        return False
+
+    # Compare ORM rows, not the Pydantic caller: `user in contour_db.reviewed_by`
+    # is always False, which used to append duplicates here and make removal a no-op.
+    if user_db not in contour_db.reviewed_by:
         contour_db.reviewed_by.append(user_db)
         db.commit()
+    return True
 
 
 async def delete_contour(
@@ -184,13 +331,15 @@ async def delete_contour(
     if not contour:
         return
 
-    # Capture mask_id/parent_id BEFORE the delete so the surviving siblings' contextual
-    # rows can still be invalidated afterwards (deleting a contour removes a neighbor,
-    # so the remaining siblings' nn_distance/mean_knn_distance are now stale - including
-    # the case where only one sibling is left, which now has no neighbor at all and must
-    # have its row REMOVED, not just marked stale; see compute_and_store_metrics's
-    # delete-then-insert, which drops rows a metric omits for an only-child contour).
+    # Read the group keys before the row goes away (the instance is detached afterwards).
     mask_id, parent_id = contour.mask_id, contour.parent_id
+
+    # The surviving siblings lost a neighbour, and the parent lost a child. Flagging them
+    # before the DELETE is safe: this contour's own rows are flagged too, but they are
+    # removed by the CASCADE moments later. Descendants need no handling - they are
+    # cascade-deleted along with their rows, so no group survives to be invalidated.
+    mark_contextual_stale_for_group(db, mask_id, parent_id)
+    mark_relational_stale_for_parent(db, [parent_id])
 
     # Delete the root contour (CASCADE will handle the rest)
     db.delete(contour)
@@ -212,7 +361,9 @@ async def remove_review(
     user_db = db.query(Users).filter_by(username=user.username).first()
     if not contour_db:
         raise KeyError(f"Contour with id {contour_id} does not exist")
-    if user in contour_db.reviewed_by:
+    # Same identity fix as in `review_contour`: comparing the Pydantic user against
+    # ORM rows never matched, so this branch never fired and reviews were unremovable.
+    if user_db is not None and user_db in contour_db.reviewed_by:
         contour_db.reviewed_by.remove(user_db)
         db.commit()
 
@@ -233,10 +384,11 @@ async def modify_contour(
     if not contour_db:
         raise KeyError(f"Contour with id {contour_id} does not exist")
 
-    # Capture the OLD group before any field is changed: if parent_id changes below, the
-    # old group (this contour's siblings before the move) loses a member and must be
-    # invalidated too, in addition to the new group it joins.
-    old_mask_id, old_parent_id = contour_db.mask_id, contour_db.parent_id
+    # Snapshot the metric-relevant state before the update so we can tell afterwards what
+    # actually changed and invalidate only what that change affects. The coordinate lists
+    # are copied because the attribute is reassigned below, not mutated in place.
+    old_parent_id = contour_db.parent_id
+    old_x, old_y = list(contour_db.x or []), list(contour_db.y or [])
 
     for key, value in kwargs.items():
         if key == "label_id":
@@ -281,23 +433,81 @@ async def modify_contour(
         mark_relational_stale_for_parent(db, contour_db.parent_id)
 
     db.flush()
+
+    geometry_changed = (list(contour_db.x or []) != old_x
+                        or list(contour_db.y or []) != old_y)
+    parent_changed = contour_db.parent_id != old_parent_id
+    if geometry_changed or parent_changed:
+        _invalidate_metrics_for_modified_contour(
+            db, contour_db, old_parent_id,
+            geometry_changed=geometry_changed, parent_changed=parent_changed,
+        )
+
     db.commit()
 
     return True
 
 
+def _invalidate_metrics_for_modified_contour(
+        db: Session,
+        contour_db: Contours,
+        old_parent_id: int | None,
+        geometry_changed: bool,
+        parent_changed: bool,
+) -> None:
+    """Re-derive / invalidate the metrics affected by an edit to one contour.
+
+    Label and review changes are deliberately not handled here: they do not feed into any
+    metric value (the summary groups by label at query time), so nothing is invalidated
+    for them.
+
+    Args:
+        db: The database session (caller controls commit).
+        contour_db: The contour AFTER the update was applied.
+        old_parent_id: The contour's parent before the update.
+        geometry_changed: Whether the contour's coordinates changed.
+        parent_changed: Whether the contour was re-parented.
+    """
+    if geometry_changed:
+        # Geometry is the one tier that must never be stale, so it is recomputed in place
+        # rather than flagged - otherwise the legacy columns and the geometry rows would
+        # keep describing the shape the contour had before this edit.
+        dual_write_geometry_metrics(db, contour_db.mask_id, [contour_db])
+        # The contour covers different pixels now, so its appearance values are obsolete.
+        mark_appearance_stale(db, contour_db.id)
+
+    # Contextual: moving a contour changes the neighbour distances of everyone in its
+    # group; re-parenting additionally changes them in the group it left.
+    affected_groups = {(contour_db.mask_id, contour_db.parent_id)}
+    if parent_changed:
+        affected_groups.add((contour_db.mask_id, old_parent_id))
+    for mask_id, parent_id in affected_groups:
+        mark_contextual_stale_for_group(db, mask_id, parent_id)
+
+    # Relational: only a re-parent changes any n_children, and it changes exactly two
+    # (the parent that lost the child and the one that gained it).
+    if parent_changed:
+        mark_relational_stale_for_parent(db, [old_parent_id, contour_db.parent_id])
+
+
 async def replace_contour(
         old_contour_id,
         new_contour_model,
-        db: Session
+        db: Session,
+        author_username: str | None = None
 ):
     """ Replace a contour with a new one. """
     new_contour_model.id = old_contour_id
     contour = db.query(Contours).filter_by(id=old_contour_id).first()
     if not contour:
         return False
+    # Keep the original author when the caller does not name one, so replacing a
+    # contour's geometry does not silently reassign who is credited with it.
+    author_username = author_username or contour.author_username
     mask_id, parent_id = contour.mask_id, contour.parent_id
     db.query(Contours).filter_by(id=old_contour_id).delete()
+    save_contour_tree(db, new_contour_model, contour.mask_id, contour.parent_id,
+                      author_username=author_username)
     save_contour_tree(db, new_contour_model, mask_id, parent_id)
     # The contour keeps its id but its geometry (and therefore its filled pixels) is
     # entirely new; any appearance rows written above the delete's CASCADE (none should

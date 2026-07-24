@@ -2,7 +2,6 @@ from logging import getLogger
 
 from fastapi import APIRouter, Depends
 from iquana_toolbox.schemas.user import User
-from iquana_toolbox.schemas.networking.http.services import PromptedSegmentationRequest
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.auth import get_current_user
 from app.services.model_registry import list_available_models
@@ -35,23 +34,8 @@ async def get_available_models(user: User = Depends(get_current_user)):
     return list_available_models("prompted-segmentation")
 
 
-@router.post('/run')
-async def segment_image(request: PromptedSegmentationRequest,
-                        user: User = Depends(get_current_user)):
-    """Perform prompted_segmentation with optional prompts, using data validation.
-    This function handles the prompted_segmentation of images based on the provided request.
-    It validates the request, retrieves the appropriate model, and processes the image.
-    The predicted contour will be fit to existing contours if a mask_id is provided in the request.
-    This means that a contour is always contained in its parent contour and has no overlap with other contours on
-    the same level.
-
-    Args:
-        request (PromptedSegmentationHTTPRequest): The request object containing image data and parameters. When using cropping,
-        make sure to remap the annotation coordinates to the cropped image.
-
-    Returns:
-        SegmentationResponse: The response object containing the prompted_segmentation results. When using cropping,
-        the contours will be remapped to the original image size.
-    """
-    raise DeprecationWarning("This endpoint has been deprecated. Please use the image annotation session websocket "
-                             "instead.")
+# The POST /run endpoint was removed. It had already been deprecated in favour of
+# the annotation-session WebSocket, but raised DeprecationWarning from inside the
+# handler, so calling it produced a 500 and a stack trace rather than a clean
+# refusal. Prompted segmentation runs through the WebSocket, which resolves the
+# image path server-side from the image id.

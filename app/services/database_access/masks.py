@@ -120,15 +120,21 @@ async def get_contour_hierarchy_of_mask(
 async def add_contours_from_hierarchy(
         mask_id: int,
         hierarchy: ContourHierarchy,
-        db: Session
+        db: Session,
+        author_username: str | None = None
 ):
     """ Delete all contours of a mask and then add the hierarchy to it."""
     # 1. Delete all contours of the mask
     await delete_all_contours_of_mask(mask_id, db=db)
 
-    # 2. Populate with new contours from the given hierarchy
+    # 2. Populate with new contours from the given hierarchy.
+    #    Metric invalidation is skipped: step 1 removed every contour of this mask, and
+    #    with them (ON DELETE CASCADE) every metric row that could have gone stale. Since
+    #    contextual groups and relational parents never span masks, there is nothing left
+    #    to flag - and doing it per contour would rescan the whole growing mask each time.
     for root_contours in hierarchy.root_contours:
-        save_contour_tree(db, root_contours, mask_id)
+        save_contour_tree(db, root_contours, mask_id, author_username=author_username,
+                          invalidate_metrics=False)
 
 
 async def get_size_of_mask(
@@ -150,6 +156,7 @@ async def add_contour_to_mask(
         contour_to_add: Contour,
         db: Session,
         check_hierarchy: bool = True,
+        author_username: str | None = None,
 ):
     """
     Add a contour to an existing mask and fit it into the hierarchy.
@@ -159,12 +166,16 @@ async def add_contour_to_mask(
         only be set to False, if the contour was already fitted. Otherwise, might lead to inconsistencies. When False,
         skips creating the hierarchy.
     :param db: Database session
+    :param author_username: The human whose session created this contour. Comes from
+        the authenticated caller, never from the request payload, because separation
+        of duties on review keys off it.
     """
     if check_hierarchy:
         hierarchy = await get_contour_hierarchy_of_mask(mask_id, db)
         contour_to_add, changed = hierarchy.add_contour(contour_to_add)
     # Add contour to the database
-    entry = save_contour_tree(db, contour_to_add, mask_id, parent_id=contour_to_add.parent_id)
+    entry = save_contour_tree(db, contour_to_add, mask_id, parent_id=contour_to_add.parent_id,
+                              author_username=author_username)
     db.commit()
     contour_to_add.id = entry.id
 

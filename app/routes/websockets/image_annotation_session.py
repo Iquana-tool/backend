@@ -9,12 +9,19 @@ from iquana_toolbox.schemas.networking.websockets.annotation_session import (
 )
 from starlette.websockets import WebSocketDisconnect
 
+from app.database import get_context_session
 from app.routes.websockets import annotation_handlers as handlers
 from app.routes.websockets.messaging import receive_msg, send_msg
+from app.schemas.permissions import Permission
 from app.services.annotation_session.state import AnnotationSessionState
+from app.services.auth import authenticate_websocket
+from app.services.permissions import dataset_id_for_image
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
+
+#: Sent before the socket is closed on an auth failure (RFC 6455 policy violation).
+_POLICY_VIOLATION = 1008
 
 
 @router.websocket("/ws/{user_id}/{image_id}")
@@ -38,17 +45,45 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
         The server may also send status updates or error messages as needed. The response types and their data structure
         will depend on the tasks performed and the results obtained.
 
+        The connection must carry a bearer token (``?token=...``, or an
+        Authorization header for non-browser clients). The caller's identity comes
+        from that token: the ``user_id`` in the path is not trusted, because
+        anything else would let a client annotate as any user simply by editing the
+        URL. Annotating also requires `annotation.create` on the image's dataset.
+
         :param websocket: The WebSocket connection.
-        :param user_id: Unique identifier for the user.
+        :param user_id: Display identifier from the URL. Ignored for authorisation.
         :param image_id: Unique identifier for the image to be annotated.
         :raises WebsocketException: If the WebSocket connection fails.
     """
     await websocket.accept()
-    logger.info(f"WebSocket connection accepted for user {user_id} and image {image_id}")
+
+    with get_context_session() as db:
+        user = await authenticate_websocket(websocket, db)
+        if user is None:
+            logger.warning("Rejecting unauthenticated annotation session for image %s.", image_id)
+            await websocket.close(code=_POLICY_VIOLATION, reason="Authentication required.")
+            return
+
+        dataset_id = dataset_id_for_image(image_id, db)
+        if dataset_id is None:
+            await websocket.close(code=_POLICY_VIOLATION, reason="Unknown image.")
+            return
+        if not user.has_permission(dataset_id, Permission.ANNOTATION_CREATE):
+            logger.warning("%s lacks annotation rights on dataset %s.", user.username, dataset_id)
+            await websocket.close(code=_POLICY_VIOLATION,
+                                  reason="You do not have permission to annotate this dataset.")
+            return
+
+    if user_id != user.username:
+        logger.info("Ignoring URL user_id %r; session belongs to %s.", user_id, user.username)
+
+    logger.info(f"WebSocket connection accepted for user {user.username} and image {image_id}")
     state = AnnotationSessionState(
         image_id=image_id,
         mask_id=None,
-        user_id=user_id,
+        user_id=user.username,
+        dataset_id=dataset_id,
     )
     try:
         # Call some functions on startup
@@ -112,12 +147,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int):
                 # Loop continues; the websocket stays connected.
     except WebSocketDisconnect:
         # Client disconnected normally, just log and exit
-        logger.info(f"WebSocket disconnected for user {user_id} and image {image_id}")
-        print(f"WebSocket disconnected for user {user_id} and image {image_id}")
+        logger.info(f"WebSocket disconnected for user {user.username} and image {image_id}")
     except Exception as e:
         # Fallback
-        logger.error(f"WebSocket connection error for user {user_id} and image {image_id}: {e}")
-        print(f"Error: {e}")
+        logger.error(f"WebSocket connection error for user {user.username} and image {image_id}: {e}")
         # Try to send error message if websocket is still open
         try:
             await send_msg(websocket, ServerMessage(

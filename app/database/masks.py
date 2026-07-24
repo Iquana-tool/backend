@@ -4,6 +4,7 @@ from sqlalchemy.orm import relationship
 
 from . import database
 from .contours import Contours
+from .rejections import AnnotationRejections
 
 
 class Masks(database):
@@ -22,12 +23,21 @@ class Masks(database):
     # passive_deletes=True: rely on the DB's ON DELETE CASCADE to remove contours
     # instead of SQLAlchemy trying to NULL out the (non-nullable) contours.mask_id.
     contours = relationship("Contours", backref="mask", passive_deletes=True)
+    rejections = relationship("AnnotationRejections", back_populates="mask", passive_deletes=True)
 
     @hybrid_property
     def status(self) -> str:
+        """Where this mask sits in the annotate -> review -> done workflow.
+
+        ``rejected`` outranks ``reviewable``/``finished``: once a reviewer has sent
+        work back, the mask belongs to the annotator again regardless of how many
+        of its contours already carry approvals.
+        """
         # Python-side logic (for when you already have the object)
         if not any(self.contours):
             return "not_started"
+        if any(rejection.is_open for rejection in self.rejections):
+            return "rejected"
         if not self.fully_annotated:
             return "in_progress"
         for contour in self.contours:
@@ -45,7 +55,14 @@ class Masks(database):
             .scalar_subquery()
         )
 
-        # 2. Check for existence of unreviewed contours
+        # 2. Check for an open (unresolved) rejection
+        open_rejection_exists = exists().where(
+            AnnotationRejections.mask_id == cls.id
+        ).where(
+            AnnotationRejections.resolved_at.is_(None)
+        )
+
+        # 3. Check for existence of unreviewed contours
         unreviewed_exists = exists().where(
             Contours.mask_id == cls.id
         ).where(
@@ -55,6 +72,9 @@ class Masks(database):
         return case(
             # Check the count explicitly
             (contour_count == 0, "not_started"),
+
+            # Sent back by a reviewer
+            (open_rejection_exists, "rejected"),
 
             # Check the boolean flag
             (not_(cls.fully_annotated), "in_progress"),
