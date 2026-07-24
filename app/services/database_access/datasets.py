@@ -27,6 +27,7 @@ from app.database.users import Users
 from app.services.database_access.labels import get_hierarchical_label_name
 from app.services.database_access.members import ensure_owner_membership
 from config import DATASETS_DIR
+from PIL import Image as PILImage
 
 logger = getLogger(__name__)
 
@@ -382,12 +383,47 @@ async def get_quantification_summary(
     Returns:
         A dict with ``metrics`` (nested label_id -> metric_key -> {unit, components}),
         ``child_counts_per_label_id`` (parent label_id -> child label_id -> count) and
-        ``object_counts_per_label_id`` (label_id -> total / reviewed / unreviewed).
+        ``object_counts_per_label_id`` (label_id -> total / reviewed / unreviewed). The
+        object counts are a full per-class census and intentionally ignore both exclude
+        filters (see ``_compute_object_counts``).
     """
     # Base join scoping to the dataset; the same for both aggregations below.
     def _apply_filters(query):
         return _scope_contour_query(query, dataset_id, exclude_not_fully_annotated,
                                     exclude_unreviewed)
+
+    def _compute_object_counts() -> dict[str, dict[str, int]]:
+        # Per-label census of annotated objects: total / reviewed / unreviewed. A contour
+        # counts as reviewed iff at least one user has reviewed it (matching the semantics
+        # used elsewhere, e.g. Masks.status and Contours.reviewed_by.any()).
+        #
+        # NB: this deliberately ignores both exclude filters. Applying exclude_unreviewed
+        # would force "unreviewed" to always be 0, and applying exclude_not_fully_annotated
+        # would hide in-progress annotation work; the whole point of this breakdown is to
+        # show the full class census and how much of it still needs review.
+        reviewed_flag = case((Contours.reviewed_by.any(), 1), else_=0)
+        count_query = (
+            db.query(
+                Contours.label_id.label("label_id"),
+                func.count(Contours.id).label("total"),
+                func.sum(reviewed_flag).label("reviewed"),
+            )
+            .join(Masks, Masks.id == Contours.mask_id)
+            .join(Images, Images.id == Masks.image_id)
+            .filter(Images.dataset_id == dataset_id)
+            .group_by(Contours.label_id)
+        )
+
+        result: dict[str, dict[str, int]] = {}
+        for row in count_query.all():
+            total = int(row.total)
+            reviewed = int(row.reviewed or 0)
+            result[str(row.label_id)] = {
+                "total": total,
+                "reviewed": reviewed,
+                "unreviewed": total - reviewed,
+            }
+        return result
 
     def _compute_child_counts() -> dict[str, dict[str, int]]:
         # Count, per parent label, how many child contours of each child label exist. This

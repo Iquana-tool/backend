@@ -8,6 +8,12 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship, backref, Mapped
 
 from app.database import database
+# Importing the tall metrics model here registers it on ``database.metadata`` so that
+# ``create_all`` creates the ``contour_metrics`` table. ``contours`` is imported by
+# every DB flow (masks, users, services), so this guarantees the table always exists.
+from app.database import contour_metrics as _contour_metrics  # noqa: F401
+
+logger = getLogger(__name__)
 
 logger = getLogger(__name__)
 
@@ -195,6 +201,25 @@ def _save_contour_subtree(session, contour_schema: Contour, mask_id: int, parent
                           author_username: str | None, created: list["Contours"]):
     """Recursive half of :func:`save_contour_tree`; appends every saved row to ``created``."""
     from app.database.users import Users  # local import to avoid circular deps
+
+    # 0. Resolve the mask's image once (the recursion below reuses it) and make sure
+    #    the quantification is computed from pixel-space coordinates.
+    if _image is None:
+        _image = _get_image_of_mask(session, mask_id)
+    if contour_schema.quantification is None or contour_schema.quantification.is_empty:
+        if _image is not None:
+            contour_schema.compute_quantification(
+                width=_image.width,
+                height=_image.height,
+                scale_x=_image.scale_x,
+                scale_y=_image.scale_y,
+                unit=_image.unit,
+            )
+        else:
+            # Should not happen (contours belong to masks, masks to images); the
+            # NOT NULL columns are then filled with 0.0 by Contours.from_schema.
+            logger.warning(f"No image found for mask {mask_id}; "
+                           f"cannot compute quantification for contour {contour_schema.id}.")
 
     # 1. Convert schema to DB model
     db_contour = Contours.from_schema(contour_schema, mask_id, author_username=author_username)
