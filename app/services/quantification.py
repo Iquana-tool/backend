@@ -91,7 +91,13 @@ def load_image_rgb(image: "Images") -> np.ndarray | None:
 
 
 def build_quant_context(image, contours: list[Contour], image_loader=None) -> QuantContext:
-    """Build a :class:`QuantContext` for one image from an ``Images`` row and its contours.
+    """Build a physical-scale :class:`QuantContext` for one image and its contours.
+
+    Metrics computed from this context come out in the image's PHYSICAL unit (pixels
+    scaled by ``scale_x`` / ``scale_y``). This is used for the legacy ``contours`` geometry
+    columns (area / perimeter / ...) which back single-image surfaces (per-object display,
+    COCO export) where the image's own scale is unambiguous. The tall ``contour_metrics``
+    table is stored pixel-native instead — see :func:`build_pixel_quant_context`.
 
     Args:
         image: An ``Images`` ORM row (or any object exposing width/height/scale_x/
@@ -126,22 +132,67 @@ def build_quant_context(image, contours: list[Contour], image_loader=None) -> Qu
     )
 
 
-def quantify_contour_row(contour, image) -> QuantificationModel:
-    """Recompute a stored contour's geometry in physical units.
+def build_pixel_quant_context(image, contours: list[Contour], image_loader=None) -> QuantContext:
+    """Build a PIXEL-native :class:`QuantContext` (unit scale) for one image.
+
+    Identical to :func:`build_quant_context` except the physical scale is forced to 1 and
+    the unit to ``"px"``, so every metric comes out in raw pixels (lengths in ``px``, areas
+    in ``px²``). The image's width/height are still used to project the normalized [0, 1]
+    contour coordinates into pixel space.
+
+    This is the context the tall ``contour_metrics`` table is computed from. Storing metrics
+    pixel-native (scale-independent) is what lets the dataset-level aggregation stay correct
+    when a dataset mixes scaled and unscaled images: the per-image physical scale is applied
+    later, at read time, and only when the dataset's images share one unit (see
+    ``app.services.database_access.datasets.get_quantification_summary``). It also means a
+    scale change never has to rewrite a single stored metric value.
+
+    Args:
+        image: An ``Images`` ORM row (only width/height are read). ``None`` falls back to
+            a 1x1 px context.
+        contours: The :class:`Contour` schema objects to compute metrics for.
+        image_loader: Optional RGB image loader forwarded for appearance metrics.
+
+    Returns:
+        A pixel-scale :class:`QuantContext` scoped to the image.
+    """
+    if image is not None:
+        width = int(image.width)
+        height = int(image.height)
+    else:
+        logger.warning("build_pixel_quant_context called without an image; using 1x1 px.")
+        width = height = 1
+    return QuantContext(
+        contours=contours,
+        width=width,
+        height=height,
+        scale_x=1.0,
+        scale_y=1.0,
+        unit="px",
+        image_loader=image_loader,
+    )
+
+
+def quantify_contour_row(contour, image, pixel: bool = False) -> QuantificationModel:
+    """Recompute a stored contour's geometry in physical (or pixel) units.
 
     The database keeps NORMALIZED ([0, 1]) coordinates, so they are projected back to
     pixels with the image's dimensions before any geometry is computed - computing on the
     normalized values directly would anisotropically distort shapes on non-square images.
     Shared by the dual-write path in ``app.database.contours.save_contour_tree`` and
-    ``scripts/backfill_contour_metrics`` so the legacy columns and the tall
-    ``contour_metrics`` rows are always filled from exactly the same math.
+    ``scripts/backfill_contour_metrics``.
 
     Args:
         contour: A ``Contours`` ORM row (normalized ``x`` / ``y`` coordinate lists).
         image: The ``Images`` row the contour belongs to (dimensions + physical scale).
+        pixel: When True, ignore the image's physical scale and compute in raw pixels
+            (scale 1, unit ``"px"``) - used to fill the pixel-native tall ``contour_metrics``
+            table. When False (default), compute in the image's physical unit - used for the
+            legacy ``contours`` geometry columns.
 
     Returns:
-        The recomputed :class:`QuantificationModel`, in the image's physical length unit.
+        The recomputed :class:`QuantificationModel`, in pixels when ``pixel`` else in the
+        image's physical length unit.
     """
     x = contour.x if isinstance(contour.x, list) else list(contour.x or [])
     y = contour.y if isinstance(contour.y, list) else list(contour.y or [])
@@ -152,6 +203,8 @@ def quantify_contour_row(contour, image) -> QuantificationModel:
             np.asarray(x, dtype=np.float64) * image.width,
             np.asarray(y, dtype=np.float64) * image.height,
         ], axis=-1)
+    if pixel:
+        return QuantificationModel.from_contour(points_px, scale_x=1.0, scale_y=1.0, unit="px")
     return QuantificationModel.from_contour(
         points_px,
         scale_x=image.scale_x,
@@ -201,10 +254,14 @@ def compute_and_store_metrics(
 ) -> int:
     """Compute the given metrics for ``contours`` and upsert them into ``contour_metrics``.
 
-    Builds one :class:`QuantContext` for the image, runs each metric's ``compute_batch``,
-    and writes one row per (contour, metric, component) with the unit resolved from the
-    metric's unit kind and the image's length unit. Contours without an ``id`` are skipped
-    (they cannot be keyed). Does not commit — the caller controls the transaction.
+    Builds one PIXEL-native :class:`QuantContext` for the image (see
+    :func:`build_pixel_quant_context`), runs each metric's ``compute_batch``, and writes one
+    row per (contour, metric, component) in raw pixels (``px`` / ``px²`` / unitless). The
+    per-image physical scale is deliberately NOT applied here - it is applied at read time
+    by the aggregation layer, and only when a dataset's images share one unit, so that a
+    dataset mixing scaled and unscaled images still aggregates correctly. Contours without
+    an ``id`` are skipped (they cannot be keyed). Does not commit — the caller controls the
+    transaction.
 
     A metric's ``compute_batch`` may OMIT a contour from its returned dict when it has no
     meaningful value for it (e.g. an only-child contour has no nearest neighbor, see
@@ -229,7 +286,7 @@ def compute_and_store_metrics(
     if not contours or not metric_keys:
         return 0
 
-    ctx = build_quant_context(image, contours, image_loader=image_loader)
+    ctx = build_pixel_quant_context(image, contours, image_loader=image_loader)
     rows: list[dict] = []
     target_pairs: set[tuple[int, str]] = set()
     for metric_key in metric_keys:

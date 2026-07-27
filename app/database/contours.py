@@ -130,9 +130,18 @@ def dual_write_geometry_metrics(session, mask_id: int, contours: list["Contours"
     """Recompute geometry server-side and write it to BOTH quantification stores.
 
     The geometry tier is the only one computed synchronously on the write path (it needs
-    nothing but the contour points), so it is never stale. The values are written twice:
-    to the legacy float columns on ``contours`` and as tall ``contour_metrics`` rows. Both
-    come from one :func:`quantify_contour_row` call, so the two stores cannot disagree.
+    nothing but the contour points), so it is never stale. The values are written to two
+    stores, in two DIFFERENT unit conventions (both derived from the same contour points,
+    so they never disagree about the geometry itself):
+
+      * the legacy float columns on ``contours`` (area / perimeter / ...), in the image's
+        PHYSICAL unit - these back single-image surfaces (per-object display, COCO export)
+        where the image's own scale is unambiguous, and
+      * the tall ``contour_metrics`` rows, PIXEL-native (``px`` / ``px²`` / unitless) - the
+        per-image physical scale is applied later, at read time, and only when a dataset's
+        images share one unit, so a dataset mixing scaled and unscaled images still
+        aggregates correctly (see
+        ``app.services.database_access.datasets.get_quantification_summary``).
 
     Geometry is recomputed here rather than trusted from ``contour_schema.quantification``
     because that field arrives from the client, and because it can only be computed
@@ -158,24 +167,24 @@ def dual_write_geometry_metrics(session, mask_id: int, contours: list["Contours"
                        "for %d contour(s).", mask_id, len(contours))
         return
 
-    unit = image.unit or "px"
     rows: list[dict] = []
     for contour in contours:
+        # 1. Legacy columns: PHYSICAL units (note: the model's column is `diameter`, the
+        #    metric key is `max_diameter` - the same quantity under two names).
         quant = quantify_contour_row(contour, image)
-
-        # 1. Legacy columns (note: the model's column is `diameter`, the metric key is
-        #    `max_diameter` - they are the same quantity under two names).
         contour.area = quant.area
         contour.perimeter = quant.perimeter
         contour.circularity = quant.circularity
         contour.diameter = quant.max_diameter
 
-        # 2. Tall table, one row per metric (all geometry metrics are single-component).
+        # 2. Tall table: PIXEL-native, one row per metric (all geometry metrics are
+        #    single-component). Computed with the image's scale ignored (scale 1, px).
+        quant_px = quantify_contour_row(contour, image, pixel=True)
         values_by_key = {
-            "area": quant.area,
-            "perimeter": quant.perimeter,
-            "circularity": quant.circularity,
-            "max_diameter": quant.max_diameter,
+            "area": quant_px.area,
+            "perimeter": quant_px.perimeter,
+            "circularity": quant_px.circularity,
+            "max_diameter": quant_px.max_diameter,
         }
         for metric_key in GEOMETRY_METRIC_KEYS:
             rows.append({
@@ -183,7 +192,7 @@ def dual_write_geometry_metrics(session, mask_id: int, contours: list["Contours"
                 "metric_key": metric_key,
                 "component": 0,
                 "value": float(values_by_key[metric_key]),
-                "unit": _resolve_metric_unit(metric_key, unit),
+                "unit": _resolve_metric_unit(metric_key, "px"),
                 "stale": False,
             })
 

@@ -9,7 +9,7 @@ from typing import Any, Iterable, Literal
 import numpy as np
 import pandas as pd
 from PIL import Image as PILImage
-from iquana_toolbox.quantification import METRIC_REGISTRY
+from iquana_toolbox.quantification import METRIC_REGISTRY, UnitKind, get_metric, resolve_unit
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.database.image import Image
 from iquana_toolbox.schemas.database.labels import LabelHierarchy
@@ -224,7 +224,10 @@ async def get_dataset_as_df(
     data = query.all()
 
     if metric_scoping is not None:
-        return _dataset_df_from_profile(data, dataset_id, metric_scoping, db)
+        return _dataset_df_from_profile(
+            data, dataset_id, metric_scoping, db,
+            exclude_not_fully_annotated, exclude_unreviewed,
+        )
 
     df_data = {}
     for row in data:
@@ -267,14 +270,38 @@ def _dataset_df_from_profile(
         dataset_id: int,
         metric_scoping: dict[str, list[int] | None],
         db: Session,
+        exclude_not_fully_annotated: bool,
+        exclude_unreviewed: bool,
 ) -> pd.DataFrame:
     """Build the flat export dataframe for a profile from the tall ``contour_metrics`` table.
 
     One row per contour; one column per (profile metric, component). A cell is filled only
     when the contour's label is in that metric's scope AND a metric row exists for it.
+
+    Stored metric values are pixel-native; they are converted to the dataset display unit
+    (per each contour's image scale) on the same all-or-nothing rule as the summary, so the
+    exported numbers match the quantification page: physical units only when every
+    contributing image shares one unit, pixels otherwise.
     """
     contour_ids = [row[0].id for row in rows]
     metric_keys = list(metric_scoping)
+
+    scale_display = _resolve_scale_display(
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db
+    )
+    display_physical = scale_display["display_physical"]
+
+    # Per-contour image scale, for the pixel -> physical conversion below.
+    scale_by_contour: dict[int, tuple[float, float]] = {}
+    if display_physical and contour_ids:
+        for cid, sx, sy in (
+            db.query(Contours.id, Images.scale_x, Images.scale_y)
+            .join(Masks, Masks.id == Contours.mask_id)
+            .join(Images, Images.id == Masks.image_id)
+            .filter(Contours.id.in_(contour_ids))
+            .all()
+        ):
+            scale_by_contour[cid] = (sx, sy)
 
     # Pull all relevant metric rows in one query, index by (contour_id, metric_key, comp).
     values_by_key: dict[tuple[int, str, int], float] = {}
@@ -288,7 +315,11 @@ def _dataset_df_from_profile(
             .all()
         )
         for mr in metric_rows:
-            values_by_key[(mr.contour_id, mr.metric_key, mr.component)] = mr.value
+            value = mr.value
+            if display_physical:
+                sx, sy = scale_by_contour.get(mr.contour_id, (1.0, 1.0))
+                value *= _pixel_to_physical_factor(mr.metric_key, sx, sy)
+            values_by_key[(mr.contour_id, mr.metric_key, mr.component)] = value
 
     # Determine the component columns to emit per metric from the registry's value_dim.
     from iquana_toolbox.quantification import METRIC_REGISTRY
@@ -355,6 +386,90 @@ def _scope_contour_query(
     return query
 
 
+# Metric keys grouped by how a pixel value converts to a physical value, derived once from
+# the registry: LENGTH values scale by the (isotropic) pixel scale, AREA values by its
+# square, everything else (ratio / count / colour / intensity) is scale-independent.
+_LENGTH_METRIC_KEYS: set[str] = {k for k, m in METRIC_REGISTRY.items() if m.unit_kind == UnitKind.LENGTH}
+_AREA_METRIC_KEYS: set[str] = {k for k, m in METRIC_REGISTRY.items() if m.unit_kind == UnitKind.AREA}
+
+
+def _resolve_scale_display(
+        dataset_id: int,
+        exclude_not_fully_annotated: bool,
+        exclude_unreviewed: bool,
+        db: Session,
+) -> dict[str, Any]:
+    """Decide which unit the aggregated numbers should be reported in for a dataset.
+
+    Stored ``contour_metrics`` values are PIXEL-native (see
+    :func:`app.services.quantification.build_pixel_quant_context`); the per-image physical
+    scale is applied here, at read time. It is only meaningful to report physical units when
+    every image contributing objects to the summary shares ONE unit - otherwise you would be
+    pooling, say, mm² and px² into a single mean. So:
+
+      * all contributing images share one physical unit (e.g. all "mm")  -> report physical
+        (``consistent=True``, values converted per image via its own scale),
+      * all contributing images are unscaled ("px")                       -> report pixels
+        (``consistent=True``, the normal all-pixel case, no warning),
+      * a MIX (some scaled, some not, or different physical units)         -> report pixels
+        (``consistent=False``); the frontend shows a warning and the numbers stay in px.
+
+    Returns a dict describing the decision (also surfaced to the client as ``scale_status``):
+        display_unit: The image length unit the numbers are in ("px" or e.g. "mm").
+        display_physical: Whether a physical conversion should be applied on read.
+        consistent: Whether the contributing images share one unit (drives the warning).
+        distinct_units: Sorted distinct units among contributing images.
+        images_scaled / images_unscaled: Contributing-image counts by scaled/unscaled.
+    """
+    unit_rows = (
+        db.query(Images.id, Images.unit)
+        .select_from(Contours)
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .filter(Images.dataset_id == dataset_id)
+    )
+    if exclude_not_fully_annotated:
+        unit_rows = unit_rows.filter(Masks.fully_annotated == True)
+    if exclude_unreviewed:
+        unit_rows = unit_rows.filter(Contours.reviewed_by.any())
+
+    units = [(row.unit or "px") for row in unit_rows.distinct().all()]
+    distinct_units = sorted(set(units))
+    images_scaled = sum(1 for u in units if u != "px")
+    images_unscaled = sum(1 for u in units if u == "px")
+
+    consistent = len(distinct_units) == 1
+    display_physical = consistent and distinct_units[0] != "px"
+    display_unit = distinct_units[0] if display_physical else "px"
+
+    return {
+        "display_unit": display_unit,
+        "display_physical": display_physical,
+        "consistent": consistent,
+        "distinct_units": distinct_units,
+        "images_scaled": images_scaled,
+        "images_unscaled": images_unscaled,
+    }
+
+
+def _pixel_to_physical_factor(metric_key: str, scale_x: float, scale_y: float) -> float:
+    """Multiplier converting a metric's pixel value to physical units for one image.
+
+    Area metrics scale by the product of the per-axis pixel scale (always exact). Length
+    metrics scale by ``scale_x``: exact for the isotropic scales the calibration UI produces
+    (``scale_x == scale_y``), and a well-defined choice for the rare anisotropic case (a
+    single-axis pixel length cannot be recovered from one stored scalar anyway). Everything
+    else (ratio / count / colour / intensity) is scale-independent. Kept in lockstep with the
+    SQL conversion in :func:`get_quantification_summary` so the summary and the box/violin
+    distributions never report the same metric in different units.
+    """
+    if metric_key in _AREA_METRIC_KEYS:
+        return float(scale_x) * float(scale_y)
+    if metric_key in _LENGTH_METRIC_KEYS:
+        return float(scale_x)
+    return 1.0
+
+
 async def get_quantification_summary(
         dataset_id: int,
         exclude_not_fully_annotated: bool,
@@ -382,10 +497,13 @@ async def get_quantification_summary(
 
     Returns:
         A dict with ``metrics`` (nested label_id -> metric_key -> {unit, components}),
-        ``child_counts_per_label_id`` (parent label_id -> child label_id -> count) and
-        ``object_counts_per_label_id`` (label_id -> total / reviewed / unreviewed). The
-        object counts are a full per-class census and intentionally ignore both exclude
-        filters (see ``_compute_object_counts``).
+        ``child_counts_per_label_id`` (parent label_id -> child label_id -> count),
+        ``object_counts_per_label_id`` (label_id -> total / reviewed / unreviewed) and
+        ``scale_status`` (see :func:`_resolve_scale_display`). Metric values are reported in
+        the dataset's physical unit only when every contributing image shares one unit;
+        otherwise they are reported pixel-native and ``scale_status["consistent"]`` is False
+        so the frontend can warn. The object counts are a full per-class census and
+        intentionally ignore both exclude filters (see ``_compute_object_counts``).
     """
     # Base join scoping to the dataset; the same for both aggregations below.
     def _apply_filters(query):
@@ -477,24 +595,47 @@ async def get_quantification_summary(
             }
         return result
 
+    # --- Scale display decision ---------------------------------------------
+    # Stored metric values are pixel-native; decide here whether to convert them to a
+    # physical unit on read (only when every contributing image shares one unit) or report
+    # pixels (the default, and the fallback when a dataset mixes scaled/unscaled images).
+    scale_display = _resolve_scale_display(
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db
+    )
+    display_unit = scale_display["display_unit"]
+
+    # When reporting physical units, convert each pixel value to physical IN SQL by
+    # multiplying by the row's image scale (area by scale_x*scale_y, length by scale_x -
+    # see _pixel_to_physical_factor for the isotropy note). Deliberately multiplication-only
+    # so the expression runs on SQLite (which has no sqrt). Otherwise values are already px.
+    if scale_display["display_physical"]:
+        value_expr = ContourMetrics.value * case(
+            (ContourMetrics.metric_key.in_(_AREA_METRIC_KEYS), Images.scale_x * Images.scale_y),
+            (ContourMetrics.metric_key.in_(_LENGTH_METRIC_KEYS), Images.scale_x),
+            else_=1.0,
+        )
+    else:
+        value_expr = ContourMetrics.value
+
     # --- Metric aggregation -------------------------------------------------
+    # Grouped WITHOUT unit now: stored units are uniformly pixel-native, and the reported
+    # unit is derived in python from the metric's unit kind and the display unit, so a mix of
+    # scaled/unscaled images can no longer collide two units into one metric entry.
     metric_query = _apply_filters(
         db.query(
             Contours.label_id.label("label_id"),
             ContourMetrics.metric_key.label("metric_key"),
             ContourMetrics.component.label("component"),
-            ContourMetrics.unit.label("unit"),
-            func.count(ContourMetrics.value).label("count"),
-            func.avg(ContourMetrics.value).label("mean"),
-            func.avg(ContourMetrics.value * ContourMetrics.value).label("mean_sq"),
-            func.min(ContourMetrics.value).label("min"),
-            func.max(ContourMetrics.value).label("max"),
+            func.count(value_expr).label("count"),
+            func.avg(value_expr).label("mean"),
+            func.avg(value_expr * value_expr).label("mean_sq"),
+            func.min(value_expr).label("min"),
+            func.max(value_expr).label("max"),
         ).join(ContourMetrics, ContourMetrics.contour_id == Contours.id)
     ).group_by(
         Contours.label_id,
         ContourMetrics.metric_key,
         ContourMetrics.component,
-        ContourMetrics.unit,
     )
 
     # Profile scoping: restrict to the profile's metric keys up front so the aggregation
@@ -506,6 +647,7 @@ async def get_quantification_summary(
                 "metrics": {},
                 "child_counts_per_label_id": _compute_child_counts(),
                 "object_counts_per_label_id": _compute_object_counts(),
+                "scale_status": scale_display,
             }
         metric_query = metric_query.filter(ContourMetrics.metric_key.in_(list(metric_scoping)))
 
@@ -522,9 +664,13 @@ async def get_quantification_summary(
         variance = max(0.0, mean_sq - mean * mean)
         std = float(np.sqrt(variance))
 
+        # The reported unit is derived (not read from the stored row) from the metric's unit
+        # kind and the dataset display unit: "mm"/"mm²" when reporting physical, else px.
+        unit = resolve_unit(get_metric(row.metric_key).unit_kind, display_unit)
+
         label_key = str(row.label_id)
         metric_entry = metrics.setdefault(label_key, {}).setdefault(
-            row.metric_key, {"unit": row.unit, "components": {}}
+            row.metric_key, {"unit": unit, "components": {}}
         )
         metric_entry["components"][int(row.component)] = {
             "count": int(row.count),
@@ -545,6 +691,7 @@ async def get_quantification_summary(
         "metrics": metrics,
         "child_counts_per_label_id": _compute_child_counts(),
         "object_counts_per_label_id": _compute_object_counts(),
+        "scale_status": scale_display,
     }
 
 
@@ -740,34 +887,44 @@ async def get_quantification_distribution(
     if not eligible_keys:
         return {}
 
+    # Same pixel-native -> physical decision as the summary, so a metric's box/violin plot
+    # and its scalar card always agree on the unit (and thus the values).
+    scale_display = _resolve_scale_display(
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db
+    )
+    display_unit = scale_display["display_unit"]
+    display_physical = scale_display["display_physical"]
+
     value_query = _scope_contour_query(
         db.query(
             Contours.label_id.label("label_id"),
             ContourMetrics.metric_key.label("metric_key"),
             ContourMetrics.component.label("component"),
-            ContourMetrics.unit.label("unit"),
             ContourMetrics.value.label("value"),
+            Images.scale_x.label("scale_x"),
+            Images.scale_y.label("scale_y"),
         ).join(ContourMetrics, ContourMetrics.contour_id == Contours.id),
         dataset_id, exclude_not_fully_annotated, exclude_unreviewed,
     ).filter(ContourMetrics.metric_key.in_(sorted(eligible_keys)))
 
-    # Bucket the raw values by (label, metric, component); the unit is constant per
-    # bucket (it is derived from the metric and the image's unit).
+    # Bucket the values by (label, metric, component), converting each pixel value to the
+    # display unit per its own image scale (a no-op factor of 1 when reporting pixels).
     buckets: dict[tuple[int, str, int], list[float]] = defaultdict(list)
-    units: dict[tuple[int, str, int], str] = {}
     for row in value_query.all():
         if metric_scoping is not None:
             allowed_labels = metric_scoping.get(row.metric_key)
             if allowed_labels is not None and row.label_id not in allowed_labels:
                 continue
         key = (row.label_id, row.metric_key, int(row.component))
-        buckets[key].append(float(row.value))
-        units.setdefault(key, row.unit)
+        value = float(row.value)
+        if display_physical:
+            value *= _pixel_to_physical_factor(row.metric_key, row.scale_x, row.scale_y)
+        buckets[key].append(value)
 
     result: dict[str, Any] = {}
     for (label_id, metric_key, component), values in buckets.items():
         stats = _compute_distribution_stats(np.asarray(values, dtype=np.float64))
-        stats["unit"] = units.get((label_id, metric_key, component))
+        stats["unit"] = resolve_unit(get_metric(metric_key).unit_kind, display_unit)
         result.setdefault(str(label_id), {}).setdefault(metric_key, {})[str(component)] = stats
     return result
 

@@ -117,7 +117,8 @@ def test_three_siblings_compute_and_delete_removes_only_child_row(session):
     ds, img, mask, label = _seed(session)
 
     # Three siblings in a line: A(100,100) --100px-- B(200,100) --300px-- C(500,100).
-    # In physical space (scale=2.0mm/px): A-B = 200mm, B-C = 600mm.
+    # The tall table stores PIXELS: A-B = 100px, B-C = 300px (physical is px * 2mm/px, but
+    # that scaling is applied at read time by the summary, not in the stored rows).
     ids = _make_sibling_contours(session, mask, label, [(100, 100), (200, 100), (500, 100)])
     id_a, id_b, id_c = ids
 
@@ -133,17 +134,17 @@ def test_three_siblings_compute_and_delete_removes_only_child_row(session):
 
     row_a, row_b, row_c = _nn_distance(id_a), _nn_distance(id_b), _nn_distance(id_c)
     assert row_a is not None and row_b is not None and row_c is not None
-    assert row_a.value == pytest.approx(200.0)  # A -> B
-    assert row_b.value == pytest.approx(200.0)  # B -> A (closer than B -> C = 600)
-    assert row_c.value == pytest.approx(600.0)  # C -> B
-    assert row_a.unit == "mm"
+    assert row_a.value == pytest.approx(100.0)  # A -> B (px)
+    assert row_b.value == pytest.approx(100.0)  # B -> A (closer than B -> C = 300px)
+    assert row_c.value == pytest.approx(300.0)  # C -> B (px)
+    assert row_a.unit == "px"
     assert not any(r.stale for r in (row_a, row_b, row_c))
 
     # mean_knn_distance rows also exist (k clamps to group_size - 1 = 2 here).
     knn_a = session.query(ContourMetrics).filter_by(
         contour_id=id_a, metric_key="mean_knn_distance", component=0
     ).one()
-    assert knn_a.value == pytest.approx((200.0 + 800.0) / 2)  # A->B=200mm, A->C=800mm
+    assert knn_a.value == pytest.approx((100.0 + 400.0) / 2)  # A->B=100px, A->C=400px
 
     # --- 2. Re-running with only_stale=True is a no-op (already fresh) --------------
     recomputed = compute_contextual_metrics_for_dataset(session, ds.id, only_stale=True)
@@ -172,9 +173,9 @@ def test_three_siblings_compute_and_delete_removes_only_child_row(session):
         contour_id=id_c, metric_key="nn_distance", component=0
     ).one()
     # A and C are now each other's only neighbor: distance A(100,100) -> C(500,100) =
-    # 400px * 2mm/px = 800mm.
-    assert fresh_a.value == pytest.approx(800.0)
-    assert fresh_c.value == pytest.approx(800.0)
+    # 400px (stored pixel-native).
+    assert fresh_a.value == pytest.approx(400.0)
+    assert fresh_c.value == pytest.approx(400.0)
     assert not fresh_a.stale and not fresh_c.stale
 
 
@@ -209,7 +210,7 @@ def test_moving_a_contour_marks_group_stale_and_recompute_changes_value(session)
     compute_contextual_metrics_for_dataset(session, ds.id, only_stale=True)
     session.expire_all()
     before = session.query(ContourMetrics).filter_by(contour_id=id_a, metric_key="nn_distance").one()
-    assert before.value == pytest.approx(400.0)  # 200px * 2mm/px
+    assert before.value == pytest.approx(200.0)  # 200px (stored pixel-native)
 
     # Move A far away from B: (100,100) -> (900, 900).
     new_px, new_py = _point_rect(900, 900)
@@ -226,9 +227,9 @@ def test_moving_a_contour_marks_group_stale_and_recompute_changes_value(session)
     session.expire_all()
     after_a = session.query(ContourMetrics).filter_by(contour_id=id_a, metric_key="nn_distance").one()
     after_b = session.query(ContourMetrics).filter_by(contour_id=id_b, metric_key="nn_distance").one()
-    # New distance: (900,900) -> (300,100) = sqrt(600^2 + 800^2) = 1000px * 2mm/px = 2000mm.
-    assert after_a.value == pytest.approx(2000.0)
-    assert after_b.value == pytest.approx(2000.0)
+    # New distance: (900,900) -> (300,100) = sqrt(600^2 + 800^2) = 1000px (pixel-native).
+    assert after_a.value == pytest.approx(1000.0)
+    assert after_b.value == pytest.approx(1000.0)
     assert not after_a.stale and not after_b.stale
 
 
@@ -254,8 +255,8 @@ def test_new_contour_joining_existing_group_marks_it_stale(session):
     assert recomputed > 0
     session.expire_all()
     after_a = session.query(ContourMetrics).filter_by(contour_id=id_a, metric_key="nn_distance").one()
-    # A(100,100) now has a much closer neighbor at (110,100): 10px * 2mm/px = 20mm.
-    assert after_a.value == pytest.approx(20.0)
+    # A(100,100) now has a much closer neighbor at (110,100): 10px (stored pixel-native).
+    assert after_a.value == pytest.approx(10.0)
     assert not after_a.stale
 
 

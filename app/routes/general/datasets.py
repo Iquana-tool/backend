@@ -548,10 +548,13 @@ async def get_dataset_quantification_summary(
         user (User): The current authenticated user.
 
     Returns:
-        dict: ``{success, metrics, child_counts_per_label_id, labels}`` where ``metrics``
-        maps ``str(label_id) -> metric_key -> {unit, components: [{count, mean, std, min,
-        max}, ...]}`` and ``labels`` is the label hierarchy dump (as the labels endpoint).
-        When ``include_distribution`` is set, a ``distribution`` key is added (see above).
+        dict: ``{success, metrics, child_counts_per_label_id, object_counts_per_label_id,
+        scale_status, labels}`` where ``metrics`` maps ``str(label_id) -> metric_key ->
+        {unit, components: [{count, mean, std, min, max}, ...]}`` and ``labels`` is the label
+        hierarchy dump (as the labels endpoint). ``scale_status`` reports whether the
+        dataset's images share one scale unit and which unit the numbers are in (pixels when
+        the scales are mixed), so the client can warn when quantifications fall back to
+        pixels. When ``include_distribution`` is set, a ``distribution`` key is added.
     """
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
@@ -581,6 +584,7 @@ async def get_dataset_quantification_summary(
         "metrics": summary["metrics"],
         "child_counts_per_label_id": summary["child_counts_per_label_id"],
         "object_counts_per_label_id": summary["object_counts_per_label_id"],
+        "scale_status": summary["scale_status"],
         "labels": labels_hierarchy.model_dump(),
     }
     if include_distribution:
