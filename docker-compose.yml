@@ -12,8 +12,8 @@ services:
       - ./logs:/app/logs
     environment:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:7000}
-      - PROMPTED_SEGMENTATION_BACKEND_URL=${PROMPTED_SEGMENTATION_BACKEND_URL:-http://host.docker.internal:8001}
-      - AUTOMATIC_SEGMENTATION_BACKEND_URL=${AUTOMATIC_SEGMENTATION_BACKEND_URL:-http://host.docker.internal:8002}
+      # Unified ai-service; the backend derives each task URL as "<AI_SERVICE_URL>/<task>".
+      - AI_SERVICE_URL=${AI_SERVICE_URL:-http://host.docker.internal:8004}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

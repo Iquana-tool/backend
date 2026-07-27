@@ -14,10 +14,24 @@ THUMBNAILS_DIR = os.getenv("THUMBNAILS_DIR", os.path.join(DATA_DIR, "thumbnails"
 DATABASE_URL = os.getenv("DATABASE_FILE", "sqlite:///" + os.path.join(DATA_DIR, "database.db"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 MLFLOW_URL = os.getenv("MLFLOW_URL", "http://localhost:5000")
+# AI services: all tasks are served by the unified ai-service, one surface per
+# task under a URL prefix (/prompted-segmentation, /instance-suggestion,
+# /instance-segmentation). Each task client points at "<AI_SERVICE_URL>/<task>",
+# so its existing relative calls (/inference, /annotation_session/run, /health,
+# /models, preload) resolve against the right surface unchanged.
+AI_SERVICE_URL = os.environ.get("AI_SERVICE_URL", "http://localhost:8004")
+# Per-task overrides still win when set explicitly, so a single task can be routed
+# to a separate (satellite) service -- e.g. a model whose dependencies cannot
+# share the unified service's environment.
+PROMPTED_SEGMENTATION_BACKEND_URL = os.environ.get(
+    "PROMPTED_SEGMENTATION_BACKEND_URL", f"{AI_SERVICE_URL}/prompted-segmentation")
+SUGGESTION_SEGMENTATION_BACKEND_URL = os.environ.get(
+    "SUGGESTION_SEGMENTATION_BACKEND_URL", f"{AI_SERVICE_URL}/instance-suggestion")
+INSTANCE_SEGMENTATION_BACKEND_URL = os.environ.get(
+    "INSTANCE_SEGMENTATION_BACKEND_URL", f"{AI_SERVICE_URL}/instance-segmentation")
+# Retired (semantic-seg-service is no longer part of the tool); kept only so any
+# lingering import does not break. Do not wire new code to it.
 SEMANTIC_SEGMENTATION_BACKEND_URL = os.environ.get("SEMANTIC_SEGMENTATION_BACKEND_URL")
-PROMPTED_SEGMENTATION_BACKEND_URL = os.environ.get("PROMPTED_SEGMENTATION_BACKEND_URL")
-SUGGESTION_SEGMENTATION_BACKEND_URL = os.environ.get("SUGGESTION_SEGMENTATION_BACKEND_URL")
-INSTANCE_SEGMENTATION_BACKEND_URL = os.environ.get("INSTANCE_SEGMENTATION_BACKEND_URL")
 SECRET_KEY = os.environ.get("SECRET_KEY", "supersecretkey")
 
 # LLM-assisted label-space generation (provider-agnostic via LiteLLM).
