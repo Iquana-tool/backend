@@ -11,6 +11,7 @@ from app.schemas.permissions import Permission
 from app.services.auth import get_current_user
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import images as images_db
+from app.services.embedding_lifecycle import enqueue_embed_image
 from app.services.permissions import ensure_permission_on_datasets, require
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,8 @@ async def upload_image(
 ):
     dataset = await datasets_db.get_dataset(dataset_id, db=db)
     image_id = await images_db.process_and_save_image(file, dataset_id, dataset.folder_path, db=db)
+    # Opt-in background embedding for cross-image retrieval (no-op unless enabled).
+    enqueue_embed_image(image_id)
     return {
         "success": True,
         "message": f"Uploaded image {image_id}.",
@@ -61,6 +64,10 @@ async def upload_images(
         # Now we only query the dataset folder ONCE at the top
         image_id = await images_db.process_and_save_image(file, dataset_id, dataset.folder_path, db=db)
         image_ids.append(image_id)
+
+    # Opt-in background embedding for cross-image retrieval (no-op unless enabled).
+    for image_id in image_ids:
+        enqueue_embed_image(image_id)
 
     return {
         "success": True,

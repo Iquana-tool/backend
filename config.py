@@ -11,7 +11,7 @@ DATASETS_DIR = os.getenv("DATASETS_DIR", os.path.join(DATA_DIR, "datasets"))
 THUMBNAILS_DIR = os.getenv("THUMBNAILS_DIR", os.path.join(DATA_DIR, "thumbnails"))
 
 # URLS <- probably should be replaced with editable YAML
-DATABASE_URL = os.getenv("DATABASE_FILE", "sqlite:///" + os.path.join(DATA_DIR, "database.db"))
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///" + os.path.join(DATA_DIR, "database.db"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 MLFLOW_URL = os.getenv("MLFLOW_URL", "http://localhost:5000")
 # AI services: all tasks are served by the unified ai-service, one surface per
@@ -32,6 +32,22 @@ INSTANCE_SEGMENTATION_BACKEND_URL = os.environ.get(
 # Retired (semantic-seg-service is no longer part of the tool); kept only so any
 # lingering import does not break. Do not wire new code to it.
 SEMANTIC_SEGMENTATION_BACKEND_URL = os.environ.get("SEMANTIC_SEGMENTATION_BACKEND_URL")
+# Embedding (DINOv3) surface for cross-image exemplar retrieval.
+EMBED_BACKEND_URL = os.environ.get("EMBED_BACKEND_URL", f"{AI_SERVICE_URL}/embed")
+# The registered embedder model (ai-service registry key) that precomputes embeddings.
+EMBEDDING_MODEL_KEY = os.environ.get("EMBEDDING_MODEL_KEY", "dinov3")
+# On-write embedding is opt-in: when False, image/contour writes never enqueue embedding
+# work, and the store is populated only by scripts/backfill_embeddings.py. Turn on once the
+# ai-service embed surface and a Celery worker are reachable and validated.
+EMBEDDING_LIFECYCLE_ENABLED = os.environ.get(
+    "EMBEDDING_LIFECYCLE_ENABLED", "false"
+).lower() in ("1", "true", "yes", "on")
+# The concrete backbone id the store's embeddings were computed with. Retrieval filters the
+# store by this, so it MUST match the model_id the embedder returns (DINOv3 ViT-B/16 default).
+EMBEDDING_MODEL_ID = os.environ.get("EMBEDDING_MODEL_ID", "facebook/dinov3-vitb16-pretrain-lvd1689m")
+# Cross-image concept suggestion surface + the model (ai-service registry key) that serves it.
+CROSS_IMAGE_BACKEND_URL = os.environ.get("CROSS_IMAGE_BACKEND_URL", f"{AI_SERVICE_URL}/cross-image-suggestion")
+CROSS_IMAGE_MODEL_KEY = os.environ.get("CROSS_IMAGE_MODEL_KEY", "sam3")
 SECRET_KEY = os.environ.get("SECRET_KEY", "supersecretkey")
 
 # LLM-assisted label-space generation (provider-agnostic via LiteLLM).

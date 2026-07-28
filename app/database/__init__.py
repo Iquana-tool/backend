@@ -59,6 +59,7 @@ def _import_models():
         contours,
         dataset_members,
         datasets,
+        embeddings,
         images,
         labels,
         masks,
