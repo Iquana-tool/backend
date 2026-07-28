@@ -62,6 +62,7 @@ def _import_models():
         images,
         labels,
         masks,
+        model_favorites,
         quantification_profiles,
         rejections,
         scans,
