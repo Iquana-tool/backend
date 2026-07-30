@@ -15,7 +15,7 @@ class Masks(database):
     __tablename__ = 'masks'
     id = Column(Integer, primary_key=True, autoincrement=True)
     image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'),
-                      nullable=False)
+                      nullable=False, index=True)
     fully_annotated = Column(Boolean, default=False, nullable=False)  # Users can mark a mask as fully annotated indicating that all objects are there.
     file_path = Column(String, nullable=False)  # Where this mask should be saved
 

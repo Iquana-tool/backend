@@ -115,12 +115,25 @@ def _uploaded_image_ids(dataset_id: int, db: Session) -> list[int]:
 
 
 def _status_counts(dataset_id: int, db: Session) -> dict[str, int]:
-    """Per-status image counts for the dataset, from each image's mask."""
-    rows = (
-        db.query(Masks.status, func.count(Masks.id))
+    """Per-status image counts for the dataset, from each image's mask.
+
+    ``Masks.status`` is a CASE expression built from correlated subqueries over
+    ``masks.id``. Grouping by it directly makes SQLAlchemy render that CASE twice --
+    once in SELECT, once in GROUP BY -- with *different* bound parameters each time, so
+    PostgreSQL no longer recognises the two as the same expression and rejects
+    ``masks.id`` with "subquery uses ungrouped column" (SQLite tolerated the mismatch).
+    Computing the status once in a subquery and grouping by the resulting plain column
+    avoids the double render.
+    """
+    status_sq = (
+        db.query(Masks.status.label("status"))
         .join(Images, Images.id == Masks.image_id)
         .filter(Images.dataset_id == dataset_id)
-        .group_by(Masks.status)
+        .subquery()
+    )
+    rows = (
+        db.query(status_sq.c.status, func.count())
+        .group_by(status_sq.c.status)
         .all()
     )
     return {mask_status: count for mask_status, count in rows}

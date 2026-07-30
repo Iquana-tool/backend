@@ -15,6 +15,7 @@ from app.routes.general.images import router as image_router
 from app.routes.general.labels import router as label_router
 from app.routes.general.masks import router as mask_router
 from app.routes.general.members import invite_router, router as member_router
+from app.routes.general.model_favorites import router as model_favorites_router
 from app.routes.general.reviews import router as review_router
 from app.routes.general.pixel_scale import router as scale_router
 from app.routes.general.status import router as status_router
@@ -22,6 +23,7 @@ from app.routes.services.suggestion_router import router as suggestion_segmentat
 from app.routes.services.label_space_router import router as label_space_router
 from app.routes.services.prompted_router import router as prompted_segmentation_router
 from app.routes.services.instance_seg_router import router as instance_segmentation_router
+from app.routes.services.cross_image_router import router as cross_image_router
 from app.routes.websockets.image_annotation_session import router as image_annotation_session_router
 from config import *
 
@@ -85,11 +87,13 @@ def create_app():
     app.include_router(contour_router)
     app.include_router(label_router)
     app.include_router(scale_router)
+    app.include_router(model_favorites_router)
 
     # Services; Add your own service here!
     app.include_router(prompted_segmentation_router)
     app.include_router(suggestion_segmentation_router)
     app.include_router(instance_segmentation_router)
     app.include_router(label_space_router)
+    app.include_router(cross_image_router)
 
     return app

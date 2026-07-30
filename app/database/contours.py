@@ -41,10 +41,19 @@ def _resolve_metric_unit(metric_key: str, unit: str) -> str:
 
 reviewer_contour_association = Table('reviewer_contour_association',
                                      database.metadata,
-                                     Column('reviewer_id', Integer,
+                                     # Holds a username (users.username is a String PK), not a
+                                     # numeric id despite the column name. Must be String so the
+                                     # FK column type matches its target -- SQLite tolerated the
+                                     # Integer/VARCHAR mismatch, PostgreSQL rejects it at CREATE.
+                                     Column('reviewer_id', String,
                                             ForeignKey('users.username', ondelete='CASCADE'), primary_key=True),
+                                     # Indexed on its own: the composite PK leads with
+                                     # reviewer_id, so filtering by contour_id alone (the
+                                     # ``~reviewed_by.any()`` status subquery, and cascade
+                                     # deletes of a contour) can't use the PK index.
                                      Column('contour_id', Integer,
-                                            ForeignKey('contours.id', ondelete='CASCADE'), primary_key=True),
+                                            ForeignKey('contours.id', ondelete='CASCADE'), primary_key=True,
+                                            index=True),
                                      )
 
 
@@ -53,19 +62,19 @@ class Contours(database):
     __tablename__ = 'contours'
     id: Mapped[int] = Column(Integer, primary_key=True, autoincrement=True)
     mask_id: Mapped[int] = Column(Integer, ForeignKey('masks.id', ondelete='CASCADE'),
-                     nullable=False)
-    parent_id: Mapped[int] = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'))
+                     nullable=False, index=True)
+    parent_id: Mapped[int] = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'), index=True)
     temporary = Column(Boolean, nullable=False, default=False)  # Whether a contour is temporary or not.
     added_by: Mapped[str] = Column(String(255), nullable=False)  # What produced the geometry: User, SAM2, UNET, DINO etc.
     # Who was at the keyboard. Set server-side from the authenticated session, and
     # populated even for AI-assisted contours (added_by names the model, this names
     # the human who accepted it). Separation of duties on review and the planned
     # per-user study metrics both key off this, so it must not come from the client.
-    author_username: Mapped[str] = Column(String, ForeignKey("users.username", ondelete="SET NULL"), nullable=True)
+    author_username: Mapped[str] = Column(String, ForeignKey("users.username", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     confidence_score: Mapped[float] = Column(Float, nullable=False)  # Confidence score provided by a model, for users this is set to 1
     # Allowing labels to be null, this allows contours without labels to exist, such that users can label them later.
-    label_id: Mapped[int] = Column(Integer, ForeignKey('labels.id', ondelete='CASCADE'), nullable=True)
+    label_id: Mapped[int] = Column(Integer, ForeignKey('labels.id', ondelete='CASCADE'), nullable=True, index=True)
     area: Mapped[float] = Column(Float, nullable=False)
     perimeter: Mapped[float] = Column(Float, nullable=False)
     circularity: Mapped[float] = Column(Float, nullable=False)
@@ -281,6 +290,9 @@ def save_contour_tree(session, contour_schema: Contour, mask_id: int, parent_id=
             anyway (see ``masks.add_contours_from_hierarchy``).
     """
     from app.services.database_access.contours import invalidate_metrics_for_new_contours
+    # Local import: embedding_lifecycle imports this module, so importing it at module level
+    # would be circular. Enqueue is a no-op unless EMBEDDING_LIFECYCLE_ENABLED.
+    from app.services.embedding_lifecycle import enqueue_embed_contours
 
     created: list[Contours] = []
     root = _save_contour_subtree(session, contour_schema, mask_id, parent_id,
@@ -288,4 +300,6 @@ def save_contour_tree(session, contour_schema: Contour, mask_id: int, parent_id=
     dual_write_geometry_metrics(session, mask_id, created)
     if invalidate_metrics:
         invalidate_metrics_for_new_contours(session, created)
+    # Real (non-temporary) contours become retrieval exemplars; embed them in the background.
+    enqueue_embed_contours([c.id for c in created if not c.temporary])
     return root

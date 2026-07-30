@@ -39,6 +39,25 @@ def _registry_key(model) -> str:
     return getattr(model, "registry_key", None) or model.name
 
 
+def _models_for_task(task: str):
+    """Registered, ready-to-serve models advertising ``task``.
+
+    The unified ai-service stamps a filter-safe per-task boolean tag
+    (``task_<name>`` == "true") for every task a model serves, so a multi-task
+    model (e.g. SAM 3, which does both instance suggestion and prompted
+    segmentation) is found under each of its tasks -- not only its primary
+    ``task`` tag. We union that with a search on the legacy single ``task`` tag
+    so models registered before the merge still appear during the transition.
+    """
+    task_tag = "task_" + task.replace("-", "_")
+    by_name: dict[str, object] = {}
+    for tags in ({task_tag: "true", "status": "ready"},
+                 {"task": task, "status": "ready"}):
+        for model in _search_registered_models_by_tags(tags):
+            by_name[model.name] = model
+    return list(by_name.values())
+
+
 def _full_model_info(registry_key: str) -> dict:
     """Return a model's complete ``model_info`` from its artifact metadata.
 
@@ -73,7 +92,7 @@ def list_available_models(task: str) -> dict:
             ``"instance-suggestion"`` or ``"instance-segmentation"``.
     """
     mlflow.set_tracking_uri(MLFLOW_URL)
-    matched = _search_registered_models_by_tags({"task": task, "status": "ready"})
+    matched = _models_for_task(task)
     models = [_full_model_info(_registry_key(m)) for m in matched]
     return {
         "success": True,
