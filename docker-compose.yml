@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: iquana-postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-iquana}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-iquana}
+      - POSTGRES_DB=${POSTGRES_DB:-iquana}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iquana} -d ${POSTGRES_DB:-iquana}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   iquana-backend:
     build:
       context: .
@@ -14,7 +32,14 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:7000}
       # Unified ai-service; the backend derives each task URL as "<AI_SERVICE_URL>/<task>".
       - AI_SERVICE_URL=${AI_SERVICE_URL:-http://host.docker.internal:8004}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-iquana}:${POSTGRES_PASSWORD:-iquana}@postgres:5432/${POSTGRES_DB:-iquana}}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
+
+volumes:
+  postgres-data:
