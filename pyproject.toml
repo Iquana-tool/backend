@@ -27,11 +27,28 @@ dependencies = [
     "redis>=7.1.0",
     "scipy>=1.16.3",
     "sqlalchemy~=2.0.38",
+    # Transitively required by iquana-toolbox. Declared directly (in addition
+    # to being a transitive dep) purely so the [tool.uv.sources] override
+    # below is honored -- uv only applies source overrides to direct deps.
+    "torch",
     "uvicorn>=0.15.0",
 ]
 
 [tool.uv.sources]
 iquana-toolbox = { git = "https://github.com/Iquana-tool/iquana-toolbox.git" }
+# iquana-toolbox pulls in torch transitively. This backend never runs model
+# inference itself (that's the separate ai-service, over AI_SERVICE_URL) and
+# no code here imports torch directly, so the CUDA build is pure dead weight:
+# it drags in the full CUDA toolkit (~GBs of nvidia-*/triton packages) on
+# every `uv sync`. Route torch to the CPU-only wheel instead.
+torch = [
+    { index = "pytorch-cpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [dependency-groups]
 dev = [
