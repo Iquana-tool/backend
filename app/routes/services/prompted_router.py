@@ -1,3 +1,4 @@
+import asyncio
 from logging import getLogger
 
 from fastapi import APIRouter, Depends
@@ -31,7 +32,7 @@ async def health_check(user: User = Depends(get_current_user)):
 @router.get("/models")
 async def get_available_models(user: User = Depends(get_current_user)):
     """Retrieve available prompted segmentation models directly from MLflow."""
-    return list_available_models("prompted-segmentation")
+    return await asyncio.to_thread(list_available_models, "prompted-segmentation")
 
 
 # The POST /run endpoint was removed. It had already been deprecated in favour of

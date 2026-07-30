@@ -60,7 +60,7 @@ class StartTrainingBody(BaseModel):
 @router.get("/models")
 async def get_models(user: User = Depends(get_current_user)):
     """Retrieve available instance segmentation models directly from MLflow."""
-    return list_available_models("instance-segmentation")
+    return await asyncio.to_thread(list_available_models, "instance-segmentation")
 
 
 @router.post("/training/start")
