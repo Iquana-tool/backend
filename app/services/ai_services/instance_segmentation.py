@@ -51,3 +51,11 @@ class InstanceSegmentationService(BaseService):
             response = await client.delete(url)
             response.raise_for_status()
             return response.json()
+
+    async def get_training_task_state(self, task_id: str) -> str:
+        """Read the authoritative Celery state for a training task."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            url = f"{self.backend_url}/train/{task_id}"
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.json().get("state", "PENDING")

@@ -4,7 +4,7 @@ import os
 from logging import getLogger
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from iquana_toolbox.schemas.training import InstanceSegmentationTrainingRequest
 from iquana_toolbox.schemas.user import User
@@ -40,8 +40,15 @@ TRAINING_EXPERIMENT = "instance-segmentation-training"
 _STATE_BY_MLFLOW_STATUS = {
     "FINISHED": "SUCCESS",
     "FAILED": "FAILED",
-    "KILLED": "FAILED",
+    "KILLED": "CANCELLED",
 }
+
+_MLFLOW_STATUS_BY_CELERY_STATE = {
+    "SUCCESS": "FINISHED",
+    "FAILURE": "FAILED",
+    "REVOKED": "KILLED",
+}
+_TERMINAL_STATES = {"SUCCESS", "FAILED", "CANCELLED"}
 
 
 class StartTrainingBody(BaseModel):
@@ -208,27 +215,75 @@ def _snapshot_from_run(client, run, task_id: Optional[str] = None) -> dict:
     }
 
 
-def _read_training_snapshot(task_id: str) -> dict:
+def _set_run_terminated(client, run_id: str, mlflow_status: str):
+    """Set a verified terminal MLflow state and return the fresh run record."""
+    client.set_terminated(run_id, status=mlflow_status)
+    return client.get_run(run_id)
+
+
+async def _reconcile_run_with_celery(run):
+    """Close an orphaned MLflow run only when Celery proves it is terminal.
+
+    A worker can be terminated while its MLflow ``start_run`` context is open.
+    In that case MLflow keeps the run as RUNNING even though the task has
+    stopped. We deliberately do not infer this from elapsed time: expired or
+    unavailable Celery results leave the run unchanged.
+    """
+    if run.info.status != "RUNNING":
+        return run
+
+    task_id = run.data.tags.get("celery_task_id")
+    if not task_id:
+        return run
+
+    try:
+        celery_state = await service.get_training_task_state(task_id)
+    except Exception:
+        logger.warning("Could not read Celery state for training task %s.", task_id)
+        return run
+
+    mlflow_status = _MLFLOW_STATUS_BY_CELERY_STATE.get(celery_state)
+    if mlflow_status is None:
+        return run
+
+    return await asyncio.to_thread(
+        _set_run_terminated, MODEL_REGISTRY.client, run.info.run_id, mlflow_status
+    )
+
+
+async def _read_training_snapshot(task_id: str) -> dict:
     """Read a progress snapshot for a Celery ``task_id`` straight from MLflow.
 
     Returns a ``"starting"`` snapshot while no run exists yet (task queued but not
     picked up by a worker).
     """
-    run = _find_training_run(task_id)
+    run = await asyncio.to_thread(_find_training_run, task_id)
     if run is None:
+        try:
+            celery_state = await service.get_training_task_state(task_id)
+        except Exception:
+            celery_state = None
+        if celery_state == "REVOKED":
+            return {"task_id": task_id, "run_id": None, "state": "CANCELLED", "mlflow_status": "KILLED",
+                    "epoch": 0, "total_epochs": None, "loss": [], "label_ids": []}
+        if celery_state == "FAILURE":
+            return {"task_id": task_id, "run_id": None, "state": "FAILED", "mlflow_status": "FAILED",
+                    "epoch": 0, "total_epochs": None, "loss": [], "label_ids": []}
         return {"task_id": task_id, "run_id": None, "state": "starting", "mlflow_status": None,
                 "epoch": 0, "total_epochs": None, "loss": [], "label_ids": []}
-    return _snapshot_from_run(MODEL_REGISTRY.client, run, task_id)
+    run = await _reconcile_run_with_celery(run)
+    return await asyncio.to_thread(_snapshot_from_run, MODEL_REGISTRY.client, run, task_id)
 
 
-def _read_run_snapshot(run_id: str) -> dict:
+async def _read_run_snapshot(run_id: str) -> dict:
     """Read a progress snapshot for a specific MLflow ``run_id`` (a past run)."""
     client = MODEL_REGISTRY.client
-    run = client.get_run(run_id)
-    return _snapshot_from_run(client, run)
+    run = await asyncio.to_thread(client.get_run, run_id)
+    run = await _reconcile_run_with_celery(run)
+    return await asyncio.to_thread(_snapshot_from_run, client, run)
 
 
-def _list_training_runs(dataset_id: int) -> list[dict]:
+def _find_training_runs(dataset_id: int):
     """List training runs for a dataset (newest first) as lightweight summaries."""
     client = MODEL_REGISTRY.client
     experiment = client.get_experiment_by_name(TRAINING_EXPERIMENT)
@@ -240,30 +295,42 @@ def _list_training_runs(dataset_id: int) -> list[dict]:
         order_by=["attributes.start_time DESC"],
         max_results=100,
     )
-    return [_snapshot_from_run(client, run) for run in runs]
+    return runs
+
+
+async def _list_training_runs(dataset_id: int) -> list[dict]:
+    """Return snapshots, reconciling only runs with a verified terminal task."""
+    runs = await asyncio.to_thread(_find_training_runs, dataset_id)
+
+    async def snapshot(run):
+        run = await _reconcile_run_with_celery(run)
+        return await asyncio.to_thread(_snapshot_from_run, MODEL_REGISTRY.client, run)
+
+    return await asyncio.gather(*(snapshot(run) for run in runs))
 
 
 @router.get("/training/runs")
 async def list_training_runs(dataset_id: int,
                              user: AuthenticatedUser = Depends(require(Permission.AI_TRAIN))):
     """List past + active training runs for a dataset (for the run-history list)."""
-    return {"success": True, "runs": await asyncio.to_thread(_list_training_runs, dataset_id)}
+    return {"success": True, "runs": await _list_training_runs(dataset_id)}
 
 
 @router.get("/training/runs/{run_id}")
 async def get_run_snapshot(run_id: str, user: User = Depends(get_current_user)):
     """Return a progress snapshot for a specific (e.g. past) MLflow run."""
-    return await asyncio.to_thread(_read_run_snapshot, run_id)
+    return await _read_run_snapshot(run_id)
 
 
 @router.get("/training/{task_id}")
 async def get_training_status(task_id: str, user: User = Depends(get_current_user)):
     """Return a single MLflow-backed progress snapshot for a training job."""
-    return await asyncio.to_thread(_read_training_snapshot, task_id)
+    return await _read_training_snapshot(task_id)
 
 
 @router.get("/training/{task_id}/stream")
-async def get_training_status_stream(task_id: str, user: User = Depends(get_current_user)):
+async def get_training_status_stream(task_id: str, request: Request,
+                                     user: User = Depends(get_current_user)):
     """Stream MLflow-backed progress for a training job as Server-Sent Events.
 
     Polls the MLflow run every couple of seconds and emits one ``data:`` event per
@@ -272,9 +339,11 @@ async def get_training_status_stream(task_id: str, user: User = Depends(get_curr
 
     async def event_generator():
         while True:
-            snapshot = await asyncio.to_thread(_read_training_snapshot, task_id)
+            if await request.is_disconnected():
+                return
+            snapshot = await _read_training_snapshot(task_id)
             yield f"data: {json.dumps(snapshot)}\n\n"
-            if snapshot["state"] in ("SUCCESS", "FAILED"):
+            if snapshot["state"] in _TERMINAL_STATES:
                 return
             await asyncio.sleep(2)
 
@@ -287,9 +356,18 @@ async def get_training_status_stream(task_id: str, user: User = Depends(get_curr
 
 @router.delete("/training/{task_id}")
 async def cancel_training_of_model(task_id: str, user: User = Depends(get_current_user)):
-    """Cancel (revoke) a running training job by its task id."""
+    """Cancel a task and close its matching MLflow run as cancelled."""
     try:
-        return await service.cancel_training(task_id)
+        await service.cancel_training(task_id)
+        run = await asyncio.to_thread(_find_training_run, task_id)
+        if run is not None and run.info.status == "RUNNING":
+            run = await asyncio.to_thread(
+                _set_run_terminated, MODEL_REGISTRY.client, run.info.run_id, "KILLED"
+            )
+        if run is None:
+            return {"task_id": task_id, "run_id": None, "state": "CANCELLED", "mlflow_status": "KILLED",
+                    "epoch": 0, "total_epochs": None, "loss": [], "label_ids": []}
+        return await asyncio.to_thread(_snapshot_from_run, MODEL_REGISTRY.client, run, task_id)
     except Exception as exc:
         logger.exception("Failed to cancel instance segmentation training.")
         raise HTTPException(status_code=http_status.HTTP_502_BAD_GATEWAY,
