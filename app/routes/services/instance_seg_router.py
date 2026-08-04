@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from starlette import status as http_status
 
 from app.database import get_session
+from app.database.contours import Contours
 from app.database.images import Images
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
@@ -62,12 +63,55 @@ class StartTrainingBody(BaseModel):
     # Model-declared hyperparameters (keys match the model's training_parameters),
     # forwarded as-is to the training request.
     hyper_parameter: dict = Field(default_factory=dict, description="Hyperparameter overrides keyed by model param key.")
+    # Optional human-readable label for the run (e.g. "Cells-FineTuned-v1").  Stored
+    # as an MLflow tag so it appears in the run history and can be searched.  Kept
+    # optional with no default so the worker's run_name still reads as a useful
+    # auto-generated fallback when the field is absent.
+    model_run_name: Optional[str] = Field(
+        default=None,
+        max_length=80,
+        description="Optional human-readable name/alias for this training run.",
+        pattern=r"^[\w\-\s]{1,80}$",
+    )
 
 
 @router.get("/models")
 async def get_models(user: User = Depends(get_current_user)):
     """Retrieve available instance segmentation models directly from MLflow."""
     return await asyncio.to_thread(list_available_models, "instance-segmentation")
+
+
+@router.get("/training/label-annotation-counts")
+async def get_label_annotation_counts(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.AI_TRAIN)),
+):
+    """Return the number of reviewed, fully annotated annotations per label.
+
+    Used by the training UI to show a pre-flight annotation count beside each
+    class selector and disable "Start Training" when no reviewed annotations exist.
+    A contour is considered training-ready when at least one user has reviewed it
+    and its mask is marked fully annotated, matching the default COCO export.
+    """
+    from sqlalchemy import func
+
+    from app.database.masks import Masks
+
+    # Contours → Masks → Images to reach dataset_id. These filters match the
+    # default COCO export: only fully annotated masks and reviewed contours.
+    rows = (
+        db.query(Contours.label_id, func.count(Contours.id).label("count"))
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .filter(Images.dataset_id == dataset_id)
+        .filter(Masks.fully_annotated.is_(True))
+        .filter(Contours.reviewed_by.any())
+        .group_by(Contours.label_id)
+        .all()
+    )
+    counts = {row.label_id: row.count for row in rows}
+    return {"success": True, "reviewed_annotation_counts": counts}
 
 
 @router.post("/training/start")
@@ -140,7 +184,7 @@ async def start_training(
     )
 
     try:
-        result = await service.start_training(request)
+        result = await service.start_training(request, model_run_name=body.model_run_name)
     except Exception as exc:
         logger.exception("Failed to start instance segmentation training.")
         raise HTTPException(status_code=http_status.HTTP_502_BAD_GATEWAY,
@@ -197,6 +241,11 @@ def _snapshot_from_run(client, run, task_id: Optional[str] = None) -> dict:
 
     total_epochs = run.data.params.get("epochs")
     total_epochs = int(total_epochs) if total_epochs is not None else None
+    training_parameters = {
+        key: value
+        for key, value in run.data.params.items()
+        if key not in {"dataset_id", "selected_database_label_ids"}
+    }
 
     epoch_metric = run.data.metrics.get("epoch")
     epoch = int(epoch_metric) if epoch_metric is not None else (loss[-1]["epoch"] if loss else 0)
@@ -208,8 +257,10 @@ def _snapshot_from_run(client, run, task_id: Optional[str] = None) -> dict:
         "mlflow_status": mlflow_status,
         "epoch": epoch,
         "total_epochs": total_epochs,
+        "training_parameters": training_parameters,
         "loss": loss,
         "label_ids": _parse_label_ids(run.data.tags.get("label_ids")),
+        "run_name": run.data.tags.get("run_name"),  # user-supplied alias; None when not set
         "start_time": run.info.start_time,
         "end_time": run.info.end_time,
     }
