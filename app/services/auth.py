@@ -13,12 +13,11 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.users import Users
 from app.schemas.auth_user import AuthenticatedUser
-from config import SECRET_KEY
+from config import ACCESS_TOKEN_EXPIRE_MINUTES, SECRET_KEY
 
 password_hash = PasswordHash.recommended()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 
 class TokenResponse(BaseModel):
@@ -39,7 +38,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt

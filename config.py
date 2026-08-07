@@ -49,6 +49,10 @@ EMBEDDING_MODEL_ID = os.environ.get("EMBEDDING_MODEL_ID", "facebook/dinov3-vitb1
 CROSS_IMAGE_BACKEND_URL = os.environ.get("CROSS_IMAGE_BACKEND_URL", f"{AI_SERVICE_URL}/cross-image-suggestion")
 CROSS_IMAGE_MODEL_KEY = os.environ.get("CROSS_IMAGE_MODEL_KEY", "sam3")
 SECRET_KEY = os.environ.get("SECRET_KEY", "supersecretkey")
+# How long a login stays valid. There is no refresh flow -- the frontend drops the
+# token and logs the user out on the first 401 -- so this is the whole session, and
+# a short value interrupts annotation work mid-task. Defaults to a working day.
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 
 # LLM-assisted label-space generation (provider-agnostic via LiteLLM).
 # LABEL_SPACE_LLM_MODEL uses LiteLLM's "<provider>/<model>" naming, e.g.
