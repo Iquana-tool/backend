@@ -28,9 +28,18 @@ router = APIRouter(prefix="/cross_image_suggestion", tags=["Cross-image Suggesti
 
 
 @router.get("/strategies")
-async def get_strategies(user: AuthenticatedUser = Depends(get_current_user)):
-    """List the selectable exemplar-retrieval strategies (for the frontend picker)."""
-    return strategy_options()
+async def get_strategies(
+    dataset_id: int | None = None,
+    db: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """List the selectable exemplar-retrieval strategies (for the frontend picker).
+
+    With a ``dataset_id`` the availability flags reflect that dataset's embedding store, so a
+    strategy that cannot run there is marked unavailable with a reason instead of being
+    offered and failing per image.
+    """
+    return strategy_options(db, dataset_id)
 
 
 @router.post("/suggest", response_model=CrossImageSuggestResponse)

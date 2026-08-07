@@ -149,6 +149,56 @@ def _contour_image_map(session: Session, contour_ids: Sequence[int]) -> dict[int
 # Strategies
 # --------------------------------------------------------------------------- #
 @register_retrieval_strategy(
+    "concept_annotations",
+    "Existing annotations of the label",
+    "Use the label's existing annotations elsewhere in the dataset as exemplars, reviewed "
+    "ones first, then the most recent. Needs no embeddings -- annotate a few images by hand, "
+    "then let an in-context model carry the concept across the rest.",
+    required_kinds=(),
+)
+def _concept_annotations(session: Session, query: RetrievalQuery, model_id: str) -> list[ExemplarMatch]:
+    """Rank the concept's own annotations, no embedding store involved.
+
+    The other strategies rank by *visual* similarity, which buys precision but costs a
+    populated pgvector store. This one asks a blunter question -- "what has a human already
+    marked as this concept?" -- which needs nothing but the annotations themselves. That makes
+    it the only strategy usable on a fresh dataset, and the one a batch run over a dataset
+    actually wants: the exemplars are the hand-annotated seed images.
+
+    Reviewed contours rank above unreviewed ones (an approved object is a better example of
+    the concept than an unverified one), then newest first, on the assumption that later
+    annotations reflect a settled understanding of the label. ``model_id`` is unused; it is
+    part of the strategy signature because the embedding-based strategies need it.
+    """
+    if query.concept_label_id is None:
+        raise ValueError("concept_annotations retrieval requires a concept_label_id.")
+
+    rows = (
+        session.query(Contours.id, Images.id, Contours.reviewed_by.any())
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .filter(Images.dataset_id == query.dataset_id,
+                Contours.temporary.is_(False),
+                Contours.label_id == query.concept_label_id)
+        # An object cannot be its own exemplar: the target image is what is being annotated,
+        # and feeding its existing objects back would bias the model toward what is already
+        # there instead of transferring the concept from elsewhere.
+        .filter(Images.id != query.target_image_id)
+        .order_by(Contours.reviewed_by.any().desc(), Contours.created_at.desc())
+        .limit(query.top_k)
+        .all()
+    )
+    # Scores are a rank-derived stand-in, not a similarity: this strategy has no metric space.
+    # They exist so the response shape matches the embedding-based strategies, and so the best
+    # exemplar still sorts first when the caller preserves order.
+    return [
+        ExemplarMatch(contour_id=contour_id, image_id=image_id,
+                      score=1.0 - (rank / max(len(rows), 1)))
+        for rank, (contour_id, image_id, _reviewed) in enumerate(rows)
+    ]
+
+
+@register_retrieval_strategy(
     "global_scene",
     "Global scene match",
     "Rank exemplars by how visually similar their source image is to the target image "
@@ -233,14 +283,63 @@ def _hybrid(session: Session, query: RetrievalQuery, model_id: str):  # pragma: 
 # --------------------------------------------------------------------------- #
 # Public API
 # --------------------------------------------------------------------------- #
-def strategy_options() -> list[RetrievalStrategyOption]:
-    return [
-        RetrievalStrategyOption(
-            key=s.key, label=s.label, description=s.description,
-            available=s.available, required_kinds=list(s.required_kinds),
+def _kinds_present(session: Session, dataset_id: int) -> set[str]:
+    """Embedding kinds that actually exist for a dataset's images and contours.
+
+    One query per subject type, and only the *kind* column -- this is a "does anything at all
+    exist" check, not a search, so it must stay cheap enough to run on every page load.
+    """
+    from app.database.embeddings import Embeddings
+
+    present: set[str] = set()
+    for subject_type, column in ((SUBJECT_IMAGE, Embeddings.image_id),
+                                 (SUBJECT_CONTOUR, Embeddings.contour_id)):
+        ids = _dataset_scoped_ids(session, subject_type, dataset_id)
+        if not ids:
+            continue
+        rows = (
+            session.query(Embeddings.kind)
+            .filter(column.in_(ids))
+            .distinct()
+            .all()
         )
-        for s in RETRIEVAL_STRATEGIES.values()
-    ]
+        present.update(row[0] for row in rows)
+    return present
+
+
+def strategy_options(
+    session: Session | None = None, dataset_id: int | None = None
+) -> list[RetrievalStrategyOption]:
+    """The selectable strategies, optionally narrowed to what can run on one dataset.
+
+    Without a session this reports what is *implemented*, which is all a generic listing can
+    say. Given a dataset it also reports what is *usable*: a strategy that ranks by visual
+    similarity is dead weight until somebody has embedded that dataset, and offering it
+    anyway means the user picks it and every image fails. The two notions are kept in one
+    flag on purpose -- a caller that has to distinguish "not written yet" from "not usable
+    here" reads ``unavailable_reason``, and everything else just filters on ``available``.
+    """
+    present = _kinds_present(session, dataset_id) if session is not None and dataset_id else None
+
+    options: list[RetrievalStrategyOption] = []
+    for strategy in RETRIEVAL_STRATEGIES.values():
+        available, reason = strategy.available, None
+        if not available:
+            reason = "Not implemented yet."
+        elif present is not None:
+            missing = [kind for kind in strategy.required_kinds if kind not in present]
+            if missing:
+                available = False
+                reason = (
+                    f"Needs {', '.join(missing)} embeddings, which this dataset does not have "
+                    f"yet. Run the embedding backfill to enable it."
+                )
+        options.append(RetrievalStrategyOption(
+            key=strategy.key, label=strategy.label, description=strategy.description,
+            available=available, required_kinds=list(strategy.required_kinds),
+            unavailable_reason=reason,
+        ))
+    return options
 
 
 def retrieve_exemplars(

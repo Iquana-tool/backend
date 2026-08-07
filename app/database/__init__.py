@@ -63,6 +63,7 @@ def _import_models():
         embeddings,
         image_calibrations,
         images,
+        inference_jobs,
         labels,
         masks,
         model_favorites,
