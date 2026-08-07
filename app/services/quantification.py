@@ -22,6 +22,12 @@ from app.database.contour_metrics import ContourMetrics
 from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
+# Safe at module scope in this direction only: the calibration service imports
+# `load_image_rgb` from here lazily, inside its functions, precisely so this
+# import can be eager. Eager matters — it is what registers the
+# ``image_calibrations`` model with the shared metadata before a caller runs
+# `create_all`.
+from app.services.calibration.service import load_calibrated_image_rgb
 
 logger = getLogger(__name__)
 
@@ -529,9 +535,15 @@ def compute_appearance_metrics_for_dataset(
     entry point: it groups contours by image (one DB round trip via a join, then a
     dict grouping), and for each image builds exactly one
     :class:`~iquana_toolbox.quantification.context.QuantContext` (via
-    :func:`build_quant_context` with :func:`load_image_rgb` as the loader) and calls
+    :func:`build_quant_context` with the calibrated loader) and calls
     :func:`compute_and_store_metrics`, so the image is decoded at most once per image
     regardless of how many metrics or contours it has (see ``QuantContext.image``).
+
+    Pixels are read through
+    :func:`~app.services.calibration.service.load_calibrated_image_rgb`, not the raw
+    :func:`load_image_rgb`: an appearance metric is only comparable across images once
+    the radiometric calibrations (intensity, colour) have been applied. Images with no
+    such calibration are returned untouched, so this is a no-op until one is set.
 
     Commits are batched every :data:`_APPEARANCE_BATCH_SIZE` images so a large dataset
     does not hold one giant transaction open.
@@ -572,7 +584,7 @@ def compute_appearance_metrics_for_dataset(
         image = image_by_id[image_id]
         total_rows += compute_and_store_metrics(
             db, metric_keys, contour_schemas, image,
-            image_loader=lambda img=image: load_image_rgb(img),
+            image_loader=lambda img=image: load_calibrated_image_rgb(db, img),
         )
         images_since_commit += 1
         if images_since_commit >= _APPEARANCE_BATCH_SIZE:

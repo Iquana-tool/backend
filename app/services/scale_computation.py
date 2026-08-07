@@ -19,19 +19,17 @@ from app.database.images import Images
 from app.database.masks import Masks
 from app.database.contours import Contours
 from app.exceptions import DatasetNotFoundError, ImageNotFoundError, InvalidScaleError
+from app.services.calibration import store as calibration_store
+from app.services.calibration.registry import SCALE_STALE_METRIC_KEYS, CalibrationSource
 
 logger = logging.getLogger(__name__)
 
 # Geometry and contextual metric keys that are scale-dependent.
 # Circularity is dimensionless (scale cancels out) and appearance metrics are
 # pixel-color based — neither group needs recomputation when scale changes.
-_SCALE_DEPENDENT_METRIC_KEYS: tuple[str, ...] = (
-    "area",
-    "perimeter",
-    "max_diameter",
-    "nn_distance",
-    "mean_knn_distance",
-)
+# Scale is one calibration kind among several now, so the list lives with the
+# other kinds' dependency declarations in the calibration registry.
+_SCALE_DEPENDENT_METRIC_KEYS: tuple[str, ...] = SCALE_STALE_METRIC_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +69,8 @@ def set_image_scale(
         scale_x: float,
         scale_y: float,
         unit: str,
+        source: str = CalibrationSource.MANUAL,
+        username: str | None = None,
 ) -> dict:
     """Persist a new physical scale for an image and mark dependent metrics stale.
 
@@ -78,6 +78,11 @@ def set_image_scale(
     only scale-dependent metric rows as stale so they are recomputed on the next
     batch quantification run. Scale-independent metrics (circularity, appearance)
     are intentionally left untouched.
+
+    It also records the change as a ``scale`` row in ``image_calibrations``, which
+    is where the Calibrate tab reads provenance from. The ``images`` columns stay
+    the value — see ``app.services.calibration.registry`` — so the two cannot
+    disagree; the row only adds who set it, when, and how.
 
     Args:
         db: SQLAlchemy session (caller does NOT need to commit separately —
@@ -88,6 +93,8 @@ def set_image_scale(
         scale_y: Physical size of one pixel along the y-axis in ``unit`` units.
             Must be positive.
         unit: Length unit string (e.g. ``"mm"``, ``"µm"``). Must not be empty.
+        source: How the scale was obtained, see ``CalibrationSource``.
+        username: Account making the change, recorded on the calibration row.
 
     Returns:
         dict with keys ``scale_x``, ``scale_y``, ``unit``.
@@ -116,6 +123,11 @@ def set_image_scale(
         image.scale_y = scale_y
         image.unit = unit
         _mark_scale_dependent_metrics_stale(db, image_id)
+        calibration_store.upsert(
+            db, image_id, "scale",
+            {"scale_x": scale_x, "scale_y": scale_y, "unit": unit},
+            source, username,
+        )
         db.commit()
     else:
         logger.debug("Scale for image %d unchanged; no update performed.", image_id)
@@ -134,6 +146,7 @@ def set_scale_from_drawn_line(
         p2: tuple[float, float],
         known_distance: float,
         unit: str,
+        username: str | None = None,
 ) -> dict:
     """Compute the physical scale from a user-drawn calibration line and persist it.
 
@@ -150,6 +163,7 @@ def set_scale_from_drawn_line(
         known_distance: Real-world distance between the two points in ``unit``.
             Must be positive.
         unit: Length unit of ``known_distance`` (e.g. ``"mm"``).
+        username: Account drawing the line, recorded on the calibration row.
 
     Returns:
         dict with keys ``scale_x``, ``scale_y``, ``unit``, ``pixel_distance``.
@@ -164,7 +178,10 @@ def set_scale_from_drawn_line(
         )
 
     scale_per_pixel = compute_pixel_scale_from_points(p1, p2, known_distance)
-    result = set_image_scale(db, image_id, scale_per_pixel, scale_per_pixel, unit)
+    result = set_image_scale(
+        db, image_id, scale_per_pixel, scale_per_pixel, unit,
+        source=CalibrationSource.MEASURED, username=username,
+    )
     pixel_distance = float(np.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2))
     return {**result, "pixel_distance": pixel_distance}
 
@@ -179,6 +196,7 @@ def apply_scale_to_dataset(
         scale_x: float,
         scale_y: float,
         unit: str,
+        username: str | None = None,
 ) -> dict:
     """Apply the same physical scale to all images in a dataset.
 
@@ -222,9 +240,19 @@ def apply_scale_to_dataset(
             image.unit = unit
             _mark_scale_dependent_metrics_stale(db, image.id)
             updated += 1
+        # Written for every image, not only the changed ones: an image that
+        # already happened to carry these values still gains the provenance row
+        # saying the value came from a dataset-wide apply.
+        calibration_store.upsert(
+            db, image.id, "scale",
+            {"scale_x": scale_x, "scale_y": scale_y, "unit": unit},
+            CalibrationSource.DATASET, username,
+        )
 
+    # Unconditional: even when no image's value changed, every one of them just
+    # gained (or had refreshed) its scale provenance row.
+    db.commit()
     if updated:
-        db.commit()
         logger.info(
             "Applied scale (scale_x=%s, scale_y=%s, unit=%s) to %d/%d images in dataset %d.",
             scale_x, scale_y, unit, updated, len(images), dataset_id,

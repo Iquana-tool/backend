@@ -87,7 +87,8 @@ async def set_pixel_scale(
     """
     ensure_permission_for(user, "image_id", body.image_id, Permission.PIXEL_SCALE_SET, db)
     try:
-        result = set_image_scale(db, body.image_id, body.scale_x, body.scale_y, body.unit)
+        result = set_image_scale(db, body.image_id, body.scale_x, body.scale_y, body.unit,
+                                 username=user.username)
     except ImageNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except InvalidScaleError as exc:
@@ -115,6 +116,7 @@ async def set_pixel_scale_via_drawn_line(
             (body.x2, body.y2),
             body.known_distance,
             body.unit,
+            username=user.username,
         )
     except ImageNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -138,7 +140,8 @@ async def apply_scale_to_dataset_endpoint(
     ensure_permission(user, body.dataset_id, Permission.PIXEL_SCALE_SET)
     try:
         result = apply_scale_to_dataset(
-            db, body.dataset_id, body.scale_x, body.scale_y, body.unit
+            db, body.dataset_id, body.scale_x, body.scale_y, body.unit,
+            username=user.username,
         )
     except DatasetNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

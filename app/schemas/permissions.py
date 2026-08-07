@@ -46,6 +46,10 @@ class Permission(StrEnum):
     # Changing the pixel scale silently rescales every quantification number in
     # the dataset, which is why it is not bundled with ordinary annotation work.
     PIXEL_SCALE_SET = "pixel_scale.set"
+    # The same argument for every other calibration kind (intensity, colour, ...):
+    # they change what the stored measurements mean, not what is annotated. Scale
+    # keeps its own older permission so an existing grant of it is not widened.
+    CALIBRATION_SET = "calibration.set"
 
     # -- Label space -------------------------------------------------------
     LABEL_READ = "label.read"
@@ -159,6 +163,7 @@ _CURATOR: frozenset[Permission] = _REVIEWER | {
     Permission.IMAGE_UPLOAD,
     Permission.IMAGE_DELETE,
     Permission.PIXEL_SCALE_SET,
+    Permission.CALIBRATION_SET,
     Permission.LABEL_MANAGE,
     Permission.AI_BATCH_INFER,
     Permission.AI_TRAIN,
