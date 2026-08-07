@@ -25,3 +25,17 @@ class InvalidScaleError(IQuanaBaseError):
 class DatasetNotFoundError(IQuanaBaseError):
     """Raised when a dataset_id does not match any row in the datasets table."""
     pass
+
+
+class UnknownCalibrationKindError(IQuanaBaseError):
+    """Raised when a calibration kind is not registered (see calibration.registry)."""
+    pass
+
+
+class InvalidCalibrationError(IQuanaBaseError):
+    """Raised when calibration parameters fail their kind's validation.
+
+    The scale kind keeps raising the older, more specific `InvalidScaleError`
+    instead, so the existing /scale routes' 422 mapping is unchanged.
+    """
+    pass

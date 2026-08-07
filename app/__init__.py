@@ -9,6 +9,7 @@ from app.database import init_db
 from app.routes.general.admin import router as admin_router
 from app.routes.general.annotation_queue import router as annotation_queue_router
 from app.routes.general.auth import router as auth_router
+from app.routes.general.calibration import router as calibration_router
 from app.routes.general.contours import router as contour_router
 from app.routes.general.datasets import router as dataset_router
 from app.routes.general.images import router as image_router
@@ -87,6 +88,9 @@ def create_app():
     app.include_router(contour_router)
     app.include_router(label_router)
     app.include_router(scale_router)
+    # Generalises the /scale router above to every calibration kind; /scale stays
+    # for the existing draw-a-line flow and its clients.
+    app.include_router(calibration_router)
     app.include_router(model_favorites_router)
 
     # Services; Add your own service here!
