@@ -14,3 +14,10 @@ class RetrievalStrategyOption(BaseModel):
     description: str
     available: bool
     required_kinds: list[str] = Field(default_factory=list)
+    unavailable_reason: str | None = Field(
+        default=None,
+        description="Why this strategy cannot run right now, when `available` is False. "
+                    "A strategy can be fully implemented and still be unusable on a given "
+                    "dataset -- ranking by visual similarity needs embeddings that nobody "
+                    "has computed yet.",
+    )
