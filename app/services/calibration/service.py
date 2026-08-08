@@ -17,11 +17,13 @@ The two contracts worth knowing:
   corrected is the subtle way this kind of feature goes wrong.
 """
 from logging import getLogger
+from typing import Iterable
 
 import numpy as np
 from sqlalchemy.orm import Session
 
 from app.database.dataset_calibration_defaults import DatasetCalibrationDefaults
+from app.database.image_calibrations import ImageCalibrations
 from app.database.images import Images
 from app.exceptions import DatasetNotFoundError, ImageNotFoundError, InvalidCalibrationError
 from app.services.calibration import cards, registry, store, strategies
@@ -111,6 +113,47 @@ def get_calibration_state(db: Session, image_id: int) -> dict:
         "calibrated_count": sum(1 for e in entries if e["calibrated"]),
         "total_count": len(entries),
     }
+
+
+def calibrated_counts(
+        db: Session,
+        images: Iterable[Images],
+) -> dict[int, tuple[int, int]]:
+    """``{image_id: (kinds calibrated, kinds registered)}`` for a batch of images.
+
+    The batch form exists because the Calibrate phase of every image in a dataset
+    is wanted at once (the gallery, the progress bars), and asking
+    :func:`get_calibration_state` per image would be one query per image plus a
+    dataset-defaults lookup nobody reads. Here it is two queries total.
+
+    Counting *registered* kinds, not stored rows, is what makes "fully calibrated"
+    mean the same thing for every image: a kind nobody has set yet is a kind that
+    is missing, not a kind that does not exist. Legacy rows for retired kinds are
+    ignored for the same reason.
+    """
+    images = list(images)
+    if not images:
+        return {}
+
+    kinds = registry.all_kinds()
+    image_ids = [image.id for image in images]
+    rows_by_image: dict[int, dict[str, object]] = {image_id: {} for image_id in image_ids}
+    for row in (
+            db.query(ImageCalibrations)
+            .filter(ImageCalibrations.image_id.in_(image_ids))
+            .all()
+    ):
+        rows_by_image.setdefault(row.image_id, {})[row.kind] = row
+
+    counts: dict[int, tuple[int, int]] = {}
+    for image in images:
+        rows = rows_by_image.get(image.id, {})
+        calibrated = sum(
+            1 for kind in kinds
+            if _read_params(image, kind, rows.get(kind.key)) is not None
+        )
+        counts[image.id] = (calibrated, len(kinds))
+    return counts
 
 
 # ---------------------------------------------------------------------------

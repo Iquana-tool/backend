@@ -25,62 +25,111 @@ class Masks(database):
     contours = relationship("Contours", backref="mask", passive_deletes=True)
     rejections = relationship("AnnotationRejections", back_populates="mask", passive_deletes=True)
 
-    @hybrid_property
-    def status(self) -> str:
-        """Where this mask sits in the annotate -> review -> done workflow.
+    # -- Phase statuses ------------------------------------------------------
+    #
+    # Annotate and review are two of the three phases an image goes through
+    # (calibrate is the first, and lives on the image because it has nothing to do
+    # with any mask -- see ``app.services.image_status``). Each phase answers the
+    # same three-way question independently, rather than being folded into one
+    # ranked lifecycle: the old single ``status`` could not say "reviewed but never
+    # calibrated", and had to invent a rank order between states that are not
+    # actually ordered.
 
-        ``rejected`` outranks ``reviewable``/``finished``: once a reviewer has sent
-        work back, the mask belongs to the annotator again regardless of how many
-        of its contours already carry approvals.
+    @hybrid_property
+    def annotate_status(self) -> str:
+        """Whether the objects on this mask have all been drawn.
+
+        ``finished`` means the annotator marked the mask as containing every
+        object. An open rejection pulls it back to ``in_progress``: a reviewer sent
+        the work back, so it belongs to the annotator again. (``reject`` also
+        clears ``fully_annotated``; the check is kept so the two can never disagree.)
         """
-        # Python-side logic (for when you already have the object)
         if not any(self.contours):
             return "not_started"
         if any(rejection.is_open for rejection in self.rejections):
-            return "rejected"
+            return "in_progress"
         if not self.fully_annotated:
             return "in_progress"
-        for contour in self.contours:
-            if not any(contour.reviewed_by):
-                return "reviewable"
         return "finished"
 
-    @status.expression
-    def status(cls):
-        # 1. Count contours for this mask
-        # We use scalar_subquery so it can be used inside the CASE statement
-        contour_count = (
-            select(func.count(Contours.id))
-            .where(Contours.mask_id == cls.id)
-            .scalar_subquery()
-        )
-
-        # 2. Check for an open (unresolved) rejection
-        open_rejection_exists = exists().where(
-            AnnotationRejections.mask_id == cls.id
-        ).where(
-            AnnotationRejections.resolved_at.is_(None)
-        )
-
-        # 3. Check for existence of unreviewed contours
-        unreviewed_exists = exists().where(
-            Contours.mask_id == cls.id
-        ).where(
-            ~Contours.reviewed_by.any()
-        )
-
+    @annotate_status.expression
+    def annotate_status(cls):
         return case(
-            # Check the count explicitly
-            (contour_count == 0, "not_started"),
-
-            # Sent back by a reviewer
-            (open_rejection_exists, "rejected"),
-
-            # Check the boolean flag
+            (_contour_count(cls) == 0, "not_started"),
+            (_open_rejection_exists(cls), "in_progress"),
             (not_(cls.fully_annotated), "in_progress"),
-
-            # Check the unreviewed subquery
-            (unreviewed_exists, "reviewable"),
-
-            else_="finished"
+            else_="finished",
         )
+
+    @hybrid_property
+    def review_status(self) -> str:
+        """How far a reviewer has got through this mask's objects.
+
+        ``finished`` needs both halves: every contour approved *and* the mask
+        submitted, because objects can still be added to a mask that was never
+        marked complete. An open rejection means a reviewer has been through it and
+        is waiting on a fix, which is ``in_progress`` however many approvals the
+        mask already carries.
+        """
+        if not any(self.contours):
+            return "not_started"
+        if any(rejection.is_open for rejection in self.rejections):
+            return "in_progress"
+        reviewed = [contour for contour in self.contours if any(contour.reviewed_by)]
+        if not reviewed:
+            return "not_started"
+        if len(reviewed) < len(self.contours) or not self.fully_annotated:
+            return "in_progress"
+        return "finished"
+
+    @review_status.expression
+    def review_status(cls):
+        return case(
+            (_contour_count(cls) == 0, "not_started"),
+            (_open_rejection_exists(cls), "in_progress"),
+            (not_(_reviewed_exists(cls)), "not_started"),
+            (_unreviewed_exists(cls), "in_progress"),
+            (not_(cls.fully_annotated), "in_progress"),
+            else_="finished",
+        )
+
+
+# -- Building blocks shared by the two SQL expressions above --------------------
+#
+# Written as module-level helpers rather than inlined so the two CASEs are read as
+# the same predicates in a different order, which is what they are.
+
+def _contour_count(cls):
+    """Correlated count of this mask's contours (scalar, usable inside CASE)."""
+    return (
+        select(func.count(Contours.id))
+        .where(Contours.mask_id == cls.id)
+        .scalar_subquery()
+    )
+
+
+def _open_rejection_exists(cls):
+    """Whether a reviewer sent this mask back and the complaint is still open."""
+    return exists().where(
+        AnnotationRejections.mask_id == cls.id
+    ).where(
+        AnnotationRejections.resolved_at.is_(None)
+    )
+
+
+def _reviewed_exists(cls):
+    """Whether at least one contour on this mask has been approved."""
+    return exists().where(
+        Contours.mask_id == cls.id
+    ).where(
+        Contours.reviewed_by.any()
+    )
+
+
+def _unreviewed_exists(cls):
+    """Whether at least one contour on this mask still awaits approval."""
+    return exists().where(
+        Contours.mask_id == cls.id
+    ).where(
+        ~Contours.reviewed_by.any()
+    )

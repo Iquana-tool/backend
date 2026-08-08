@@ -115,9 +115,13 @@ def _uploaded_image_ids(dataset_id: int, db: Session) -> list[int]:
 
 
 def _status_counts(dataset_id: int, db: Session) -> dict[str, int]:
-    """Per-status image counts for the dataset, from each image's mask.
+    """Per-state image counts for the dataset's Annotate phase.
 
-    ``Masks.status`` is a CASE expression built from correlated subqueries over
+    This card is about annotating, so it asks ``Masks.annotate_status`` rather than
+    the image's combined status: an image whose annotation is done but which was
+    never calibrated should not show up here as unfinished work for the annotator.
+
+    ``annotate_status`` is a CASE expression built from correlated subqueries over
     ``masks.id``. Grouping by it directly makes SQLAlchemy render that CASE twice --
     once in SELECT, once in GROUP BY -- with *different* bound parameters each time, so
     PostgreSQL no longer recognises the two as the same expression and rejects
@@ -126,7 +130,7 @@ def _status_counts(dataset_id: int, db: Session) -> dict[str, int]:
     avoids the double render.
     """
     status_sq = (
-        db.query(Masks.status.label("status"))
+        db.query(Masks.annotate_status.label("status"))
         .join(Images, Images.id == Masks.image_id)
         .filter(Images.dataset_id == dataset_id)
         .subquery()
@@ -204,10 +208,15 @@ def summarize(dataset_id: int, username: str, db: Session) -> AnnotationQueueSum
     counts = _status_counts(dataset_id, db)
     total = db.query(func.count(Images.id)).filter(Images.dataset_id == dataset_id).scalar() or 0
     saved = get_saved_queue(dataset_id, username, db)
+    in_progress = counts.get("in_progress", 0)
+    finished = counts.get("finished", 0)
     return AnnotationQueueSummary(
-        not_started=counts.get("not_started", 0),
-        in_progress=counts.get("in_progress", 0),
-        finished=counts.get("finished", 0),
+        # Derived rather than read off the tally: an image that has never been
+        # opened has no mask row, so it contributes to no bucket at all. It is
+        # not started, and the three counts have to add up to the total.
+        not_started=max(total - in_progress - finished, 0),
+        in_progress=in_progress,
+        finished=finished,
         total=total,
         has_saved_queue=saved is not None,
         saved_strategy=saved.strategy if saved else None,

@@ -47,6 +47,7 @@ from app.services.calibration.registry import (  # noqa: F401
 from app.services.calibration.service import (  # noqa: F401
     apply_calibration_pipeline,
     apply_to_dataset,
+    calibrated_counts,
     clear_calibration,
     get_calibration_state,
     get_dataset_defaults,

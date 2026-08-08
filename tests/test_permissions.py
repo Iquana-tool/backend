@@ -8,7 +8,7 @@ Covers, against a temp-file SQLite database (same pattern as the other tests):
   * dataset-id resolution from contour / mask / image / label ids,
   * membership grant / revoke / ownership transfer rules,
   * invite links: redemption, expiry, use limits, revocation and no-downgrade,
-  * rejections and the `rejected` mask status they produce,
+  * rejections and the reset of the annotate/review phases they produce,
   * separation of duties when a dataset opts into independent review.
 """
 import asyncio
@@ -474,35 +474,58 @@ def test_rejection_requires_a_note_only_for_other():
         RejectionCreate(reason=RejectionReason.OTHER, note="   ")
 
 
-def test_open_rejection_puts_the_mask_in_rejected_state(session):
+def test_open_rejection_resets_the_annotate_and_review_phases(session):
     ds, img, mask, label, contour = _seed(session)
     mask.fully_annotated = True
     session.commit()
-    assert mask.status == "reviewable"
+    # Submitted but nothing approved yet: annotating is done, reviewing has not begun.
+    assert mask.annotate_status == "finished"
+    assert mask.review_status == "not_started"
 
     rejection = asyncio.run(rejections_db.reject(
         mask.id, RejectionCreate(reason=RejectionReason.BAD_OUTLINE, contour_id=contour.id),
         username="owner", db=session))
     session.refresh(mask)
 
-    assert mask.status == "rejected"
+    # Sending work back reopens both mask phases.
+    assert mask.annotate_status == "in_progress"
+    assert mask.review_status == "in_progress"
     # Rejecting sends the mask back out of the review queue.
     assert mask.fully_annotated is False
 
     asyncio.run(rejections_db.resolve(rejection.id, username="owner", db=session))
     session.refresh(mask)
-    assert mask.status == "in_progress"
+    assert mask.annotate_status == "in_progress"
+    assert mask.review_status == "not_started"
 
 
-def test_rejected_status_is_visible_to_sql_filters(session):
-    """The hybrid_property and its SQL expression must agree."""
+def test_review_finishes_only_when_every_contour_is_approved_and_submitted(session):
+    ds, img, mask, label, contour = _seed(session)
+    owner = _auth(session, "owner")
+
+    asyncio.run(contours_db.review_contour(contour.id, owner, session))
+    session.refresh(mask)
+    # Approved, but the mask was never submitted, so more objects may still appear.
+    assert mask.annotate_status == "in_progress"
+    assert mask.review_status == "in_progress"
+
+    mask.fully_annotated = True
+    session.commit()
+    session.refresh(mask)
+    assert mask.annotate_status == "finished"
+    assert mask.review_status == "finished"
+
+
+def test_phase_statuses_are_visible_to_sql_filters(session):
+    """The hybrid_properties and their SQL expressions must agree."""
     ds, img, mask, label, contour = _seed(session)
     asyncio.run(rejections_db.reject(
         mask.id, RejectionCreate(reason=RejectionReason.MISSING_OBJECTS),
         username="owner", db=session))
 
-    rows = session.query(Masks).filter(Masks.status == "rejected").all()
-    assert [row.id for row in rows] == [mask.id]
+    for column in (Masks.annotate_status, Masks.review_status):
+        rows = session.query(Masks).filter(column == "in_progress").all()
+        assert [row.id for row in rows] == [mask.id]
 
 
 def test_rejection_must_belong_to_the_mask(session):
