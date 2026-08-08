@@ -214,8 +214,56 @@ def test_concept_region_unknown_concept_returns_empty(world):
 
 
 # --- registry / dispatch --------------------------------------------------- #
+# --- concept_annotations --------------------------------------------------- #
+def test_concept_annotations_needs_no_embeddings(world):
+    """The strategy a fresh dataset can actually use: exemplars are the annotations."""
+    s, ds = world["session"], world["ds"]
+    coral_b = _contour(s, world["mask_b"].id, label_id=world["l1"].id)
+    coral_c = _contour(s, world["mask_c"].id, label_id=world["l1"].id)
+    _contour(s, world["mask_b"].id, label_id=world["l2"].id)  # other label, must not appear
+    s.flush()
+
+    matches = retrieve_exemplars(
+        s, "concept_annotations",
+        RetrievalQuery(dataset_id=ds.id, target_image_id=world["img_a"].id,
+                       concept_label_id=world["l1"].id, top_k=5),
+        model_id=MODEL,
+    )
+    assert {m.contour_id for m in matches} == {coral_b.id, coral_c.id}
+
+
+def test_concept_annotations_excludes_the_target_image(world):
+    """An image's own objects must not be fed back as exemplars for annotating it."""
+    s, ds = world["session"], world["ds"]
+    img_a_mask = s.query(Masks).filter(Masks.image_id == world["img_a"].id).first()
+    own = _contour(s, img_a_mask.id, label_id=world["l1"].id)
+    other = _contour(s, world["mask_b"].id, label_id=world["l1"].id)
+    s.flush()
+
+    matches = retrieve_exemplars(
+        s, "concept_annotations",
+        RetrievalQuery(dataset_id=ds.id, target_image_id=world["img_a"].id,
+                       concept_label_id=world["l1"].id, top_k=5),
+        model_id=MODEL,
+    )
+    ids = {m.contour_id for m in matches}
+    assert other.id in ids and own.id not in ids
+
+
+def test_concept_annotations_requires_a_concept(world):
+    with pytest.raises(ValueError, match="concept_label_id"):
+        retrieve_exemplars(
+            world["session"], "concept_annotations",
+            RetrievalQuery(dataset_id=world["ds"].id, target_image_id=world["img_a"].id),
+            model_id=MODEL,
+        )
+
+
 def test_strategy_options_expose_required_kinds_and_placeholder():
     options = {o.key: o for o in strategy_options()}
+    # The only strategy that runs without a populated embedding store.
+    assert options["concept_annotations"].required_kinds == []
+    assert options["concept_annotations"].available is True
     assert options["global_scene"].required_kinds == ["image_cls"]
     assert options["concept_region"].required_kinds == ["region_mean"]
     assert options["global_scene"].available is True
