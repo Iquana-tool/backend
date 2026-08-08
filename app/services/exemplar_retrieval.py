@@ -27,6 +27,8 @@ from app.database.contours import Contours
 from app.database.embeddings import (
     SUBJECT_CONTOUR,
     SUBJECT_IMAGE,
+    Embeddings,
+    dataset_scoped_ids,
     get_embedding_vector,
     search_similar,
 )
@@ -289,12 +291,10 @@ def _kinds_present(session: Session, dataset_id: int) -> set[str]:
     One query per subject type, and only the *kind* column -- this is a "does anything at all
     exist" check, not a search, so it must stay cheap enough to run on every page load.
     """
-    from app.database.embeddings import Embeddings
-
     present: set[str] = set()
     for subject_type, column in ((SUBJECT_IMAGE, Embeddings.image_id),
                                  (SUBJECT_CONTOUR, Embeddings.contour_id)):
-        ids = _dataset_scoped_ids(session, subject_type, dataset_id)
+        ids = dataset_scoped_ids(session, subject_type, dataset_id)
         if not ids:
             continue
         rows = (

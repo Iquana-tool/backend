@@ -48,6 +48,7 @@ from iquana_toolbox.schemas.database.contours import Contour
 
 WIDTH, HEIGHT = 100, 100
 
+BLOCKED = image_status.BLOCKED
 NOT_STARTED = image_status.NOT_STARTED
 IN_PROGRESS = image_status.IN_PROGRESS
 FINISHED = image_status.FINISHED
@@ -150,6 +151,13 @@ class TestCombine:
     def test_all_untouched_is_not_started(self):
         assert image_status.combine(NOT_STARTED, NOT_STARTED, NOT_STARTED) == NOT_STARTED
 
+    def test_a_blocked_review_still_reads_as_untouched(self):
+        """The real shape of a fresh image: nothing done, review blocked."""
+        assert image_status.combine(NOT_STARTED, NOT_STARTED, BLOCKED) == NOT_STARTED
+
+    def test_a_blocked_review_cannot_be_finished(self):
+        assert image_status.combine(FINISHED, FINISHED, BLOCKED) == IN_PROGRESS
+
     @pytest.mark.parametrize("phases", [
         (FINISHED, FINISHED, NOT_STARTED),   # reviewed nothing yet
         (NOT_STARTED, FINISHED, FINISHED),   # annotated and reviewed, never calibrated
@@ -181,11 +189,40 @@ class TestImagePhases:
     def test_fresh_image_has_nothing_started(self, session, dataset):
         image = _image(session, dataset)
         state = image_status.status_for_image(session, image)
+        # Review is blocked, not "not started": there is nothing drawn to review.
         assert state["phases"] == {"calibrate": NOT_STARTED,
                                    "annotate": NOT_STARTED,
-                                   "review": NOT_STARTED}
+                                   "review": BLOCKED}
+        # A blocked review must not stop the image reading as untouched overall.
         assert state["status"] == NOT_STARTED
         assert state["mask_id"] is None
+
+    def test_review_unblocks_as_soon_as_anything_is_drawn(self, session, dataset):
+        """The boundary is "any annotation exists", not "annotation is finished".
+
+        The review queue defaults to only offering submitted masks, but a reviewer
+        can turn that off and sweep work in progress -- so a drawn-but-unsubmitted
+        mask really is reviewable, and calling it blocked would be wrong.
+        """
+        image = _image(session, dataset)
+        mask = _mask(session, image)
+        assert image_status.status_for_image(session, image)["phases"]["review"] == BLOCKED
+
+        _contour(session, dataset, mask)
+        session.refresh(mask)
+        phases = image_status.status_for_image(session, image)["phases"]
+        assert phases["annotate"] == IN_PROGRESS
+        assert phases["review"] == NOT_STARTED
+
+    def test_emptying_a_mask_blocks_review_again(self, session, dataset):
+        image = _image(session, dataset)
+        mask = _mask(session, image)
+        contour = _contour(session, dataset, mask)
+
+        session.delete(contour)
+        session.commit()
+        session.refresh(mask)
+        assert image_status.status_for_image(session, image)["phases"]["review"] == BLOCKED
 
     def test_partial_calibration_is_in_progress(self, session, dataset):
         image = _image(session, dataset)
@@ -283,6 +320,12 @@ class TestDatasetProgress:
         assert counts["annotate"] == {NOT_STARTED: 1, IN_PROGRESS: 1, FINISHED: 0}
         assert counts["calibrate"] == {NOT_STARTED: 2, IN_PROGRESS: 0, FINISHED: 0}
         assert counts["overall"] == {NOT_STARTED: 1, IN_PROGRESS: 1, FINISHED: 0}
+        # Only review carries a blocked bucket, and the untouched image is in it.
+        assert counts["review"] == {BLOCKED: 1, NOT_STARTED: 1, IN_PROGRESS: 0,
+                                    FINISHED: 0}
+        assert BLOCKED not in counts["calibrate"]
+        assert BLOCKED not in counts["annotate"]
+        assert BLOCKED not in counts["overall"]
 
     def test_every_phase_row_sums_to_the_image_count(self, session, dataset):
         for index in range(3):
@@ -323,5 +366,5 @@ class TestDatasetProgress:
             "mask_id": None,
             "status": NOT_STARTED,
             "phases": {"calibrate": NOT_STARTED, "annotate": NOT_STARTED,
-                       "review": NOT_STARTED},
+                       "review": BLOCKED},
         }]

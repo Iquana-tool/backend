@@ -291,8 +291,9 @@ async def get_annotation_progress(dataset_id: int,
             - message (str): A message indicating the result of the operation.
             - phases (dict): ``{phase: {state: count}}`` for ``calibrate``,
               ``annotate`` and ``review``, each state being one of ``not_started``,
-              ``in_progress`` or ``finished``. This is what the three progress bars
-              are drawn from.
+              ``in_progress`` or ``finished`` — plus ``blocked`` on ``review``,
+              which counts images with nothing drawn to review. This is what the
+              three progress bars are drawn from.
             - overall (dict): The same three counts for the combined status, which
               is ``finished`` only when all three phases are.
             - total_images (int): Total number of images in the dataset.
@@ -331,7 +332,7 @@ async def delete_dataset(
 @router.get("/{dataset_id}/images")
 async def list_images(
         dataset_id: int,
-        filter_for_status: Literal["not_started", "in_progress", "finished"] | None = None,
+        filter_for_status: Literal["blocked", "not_started", "in_progress", "finished"] | None = None,
         filter_for_phase: Literal["calibrate", "annotate", "review"] | None = None,
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ))

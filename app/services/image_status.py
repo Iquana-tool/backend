@@ -39,12 +39,32 @@ from app.services.calibration import calibrated_counts
 
 logger = getLogger(__name__)
 
+#: A phase that cannot be started yet because another phase has produced nothing
+#: for it to act on. Only Review has a prerequisite: with no contours drawn there
+#: is no object to approve, and calling that "not started" invites a reviewer to
+#: open an image that holds nothing for them.
+#:
+#: The boundary is "any annotation exists", not "annotation is finished", because
+#: it has to be true whatever the reviewer's queue settings are. The review queue
+#: defaults to ``only_submitted=True`` and so will not *offer* a drawn-but-unsubmitted
+#: mask, but a reviewer can turn that off and sweep it — so such a mask is
+#: reviewable, just not queued by default. Marking it blocked would be a lie.
+BLOCKED = "blocked"
 NOT_STARTED = "not_started"
 IN_PROGRESS = "in_progress"
 FINISHED = "finished"
 
-#: The three states every phase (and the overall status) can be in, in order.
-PHASE_STATES: tuple[str, ...] = (NOT_STARTED, IN_PROGRESS, FINISHED)
+#: Every state a phase can be in, in order from furthest-from-done to done.
+#: ``BLOCKED`` only ever occurs on Review; the other phases are independent.
+PHASE_STATES: tuple[str, ...] = (BLOCKED, NOT_STARTED, IN_PROGRESS, FINISHED)
+
+#: The states the *overall* status uses. An image is never globally blocked --
+#: there is always some phase that can be worked on.
+OVERALL_STATES: tuple[str, ...] = (NOT_STARTED, IN_PROGRESS, FINISHED)
+
+#: Which phases can report ``BLOCKED``, and what blocks them. Drives the UI's
+#: decision to show the state at all, so a Calibrate bar carries no dead segment.
+PHASE_BLOCKED_BY: dict[str, str] = {"review": "annotate"}
 
 #: The three phases, in workflow order. Also the display order of the progress bars.
 PHASES: tuple[str, ...] = ("calibrate", "annotate", "review")
@@ -63,11 +83,15 @@ def combine(calibrate: str, annotate: str, review: str) -> str:
     phase is, and as not started only while no phase has been touched. Everything
     between is in progress, which is the honest answer -- there is no useful way to
     rank "calibrated but unannotated" against "annotated but uncalibrated".
+
+    ``BLOCKED`` counts as untouched here. A blocked review means nothing has been
+    annotated, so it can never be the only thing standing between an image and
+    ``FINISHED``, and it must not stop a fresh image reading as ``NOT_STARTED``.
     """
     phases = (calibrate, annotate, review)
     if all(phase == FINISHED for phase in phases):
         return FINISHED
-    if all(phase == NOT_STARTED for phase in phases):
+    if all(phase in (NOT_STARTED, BLOCKED) for phase in phases):
         return NOT_STARTED
     return IN_PROGRESS
 
@@ -130,7 +154,9 @@ def status_for_images(
 
         mask = masks_by_image.get(image.id)
         annotate = mask.annotate_status if mask is not None else NOT_STARTED
-        review = mask.review_status if mask is not None else NOT_STARTED
+        # No mask row means no contours, which is the same as an empty mask as far
+        # as review is concerned: there is nothing to approve.
+        review = mask.review_status if mask is not None else BLOCKED
 
         result[image.id] = {
             "mask_id": mask.id if mask is not None else None,
@@ -156,12 +182,26 @@ def status_for_mask(db: Session, mask: Masks) -> dict:
     return status_for_image(db, mask.image)
 
 
+def states_for_phase(phase: str) -> tuple[str, ...]:
+    """The states a phase can actually report.
+
+    Only Review can be blocked, so the other two never emit that key at all -- the
+    client reads this to avoid drawing a segment and a legend entry that are
+    structurally always zero.
+    """
+    if phase in PHASE_BLOCKED_BY:
+        return PHASE_STATES
+    return OVERALL_STATES
+
+
 def empty_phase_counts() -> dict[str, dict[str, int]]:
     """A zeroed ``{phase: {state: 0}}`` table, plus the ``overall`` row."""
-    return {
-        phase: {state: 0 for state in PHASE_STATES}
-        for phase in (*PHASES, "overall")
+    counts = {
+        phase: {state: 0 for state in states_for_phase(phase)}
+        for phase in PHASES
     }
+    counts["overall"] = {state: 0 for state in OVERALL_STATES}
+    return counts
 
 
 def count_phases(statuses: Iterable[dict]) -> dict[str, dict[str, int]]:

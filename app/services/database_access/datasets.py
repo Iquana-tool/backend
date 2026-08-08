@@ -162,7 +162,7 @@ async def delete_dataset(
 async def get_image_and_mask_ids_of_dataset(
         dataset_id: int,
         db: Session,
-        filter_for_status: Literal["not_started", "in_progress", "finished"] | None = None,
+        filter_for_status: Literal["blocked", "not_started", "in_progress", "finished"] | None = None,
         filter_for_phase: Literal["calibrate", "annotate", "review"] | None = None,
 ):
     """Every image of a dataset with its mask id and its three phase statuses.
@@ -171,7 +171,8 @@ async def get_image_and_mask_ids_of_dataset(
         dataset_id: Dataset to list.
         db: SQLAlchemy session.
         filter_for_status: Keep only images in this state. Applied to the overall
-            status, or to one phase when ``filter_for_phase`` is given.
+            status, or to one phase when ``filter_for_phase`` is given. ``blocked``
+            only ever matches the review phase.
         filter_for_phase: Which phase ``filter_for_status`` refers to. Without it
             the filter is on the overall status.
 

@@ -65,6 +65,11 @@ class Masks(database):
     def review_status(self) -> str:
         """How far a reviewer has got through this mask's objects.
 
+        ``blocked`` -- nothing has been drawn, so there is no object to approve.
+        Distinct from ``not_started``, which means the work is there and waiting:
+        the two look the same to an annotator but not at all the same to a reviewer,
+        and calling both "not started" invites them to open an empty image.
+
         ``finished`` needs both halves: every contour approved *and* the mask
         submitted, because objects can still be added to a mask that was never
         marked complete. An open rejection means a reviewer has been through it and
@@ -72,7 +77,7 @@ class Masks(database):
         mask already carries.
         """
         if not any(self.contours):
-            return "not_started"
+            return "blocked"
         if any(rejection.is_open for rejection in self.rejections):
             return "in_progress"
         reviewed = [contour for contour in self.contours if any(contour.reviewed_by)]
@@ -85,7 +90,7 @@ class Masks(database):
     @review_status.expression
     def review_status(cls):
         return case(
-            (_contour_count(cls) == 0, "not_started"),
+            (_contour_count(cls) == 0, "blocked"),
             (_open_rejection_exists(cls), "in_progress"),
             (not_(_reviewed_exists(cls)), "not_started"),
             (_unreviewed_exists(cls), "in_progress"),
