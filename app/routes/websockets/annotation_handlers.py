@@ -32,6 +32,7 @@ from app.services.annotation_session.operations import (
     run_prompted_segmentation,
 )
 from app.schemas.permissions import Permission
+from app.services import image_status
 from app.services.annotation_session.state import AnnotationSessionState, Backends
 from app.services.auth import load_user
 from app.services.database_access import contours as contours_db
@@ -73,7 +74,11 @@ async def startup(websocket: WebSocket, state: AnnotationSessionState):
 
     with get_context_session() as db:
         mask_db = db.query(Masks).filter_by(id=state.mask_id).first()
-        mask_status = mask_db.status if mask_db else None
+        # The workspace pill shows where the *image* stands, so this is the
+        # combined Calibrate/Annotate/Review status plus the breakdown behind it.
+        image_state = image_status.status_for_mask(db, mask_db) if mask_db else None
+        mask_status = image_state["status"] if image_state else None
+        phase_status = image_state["phases"] if image_state else None
 
     await send_msg(
         websocket,
@@ -89,6 +94,7 @@ async def startup(websocket: WebSocket, state: AnnotationSessionState):
                 "failed": list(state._failed_backends.keys()),
                 "mask_id": state.mask_id,
                 "mask_status": mask_status,
+                "phase_status": phase_status,
             }
         )
     )

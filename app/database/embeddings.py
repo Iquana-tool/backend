@@ -293,11 +293,14 @@ def get_embedding_vector(
     return list(row[0]) if row is not None else None
 
 
-def _dataset_scoped_ids(session, subject_type: str, dataset_id: int) -> set[int]:
+def dataset_scoped_ids(session, subject_type: str, dataset_id: int) -> set[int]:
     """Subject ids (image or contour) belonging to ``dataset_id``.
 
     Used to constrain a search to one dataset's bank. Images join straight to the dataset;
     contours reach it through their mask's image.
+
+    Public because ``exemplar_retrieval`` needs the same scoping to answer "does this
+    dataset have any embeddings of kind X?" without running a search.
     """
     from app.database.images import Images
 
@@ -346,7 +349,7 @@ def search_similar(
     # restriction); ``None`` means "no positive filter -> all subjects of this kind".
     allowed: set[int] | None = None
     if dataset_id is not None:
-        allowed = _dataset_scoped_ids(session, subject_type, dataset_id)
+        allowed = dataset_scoped_ids(session, subject_type, dataset_id)
     if restrict_ids is not None:
         restrict = {int(x) for x in restrict_ids}
         allowed = restrict if allowed is None else (allowed & restrict)

@@ -270,6 +270,41 @@ def test_strategy_options_expose_required_kinds_and_placeholder():
     assert options["hybrid"].available is False
 
 
+def test_strategy_options_narrow_to_what_the_dataset_can_run(world):
+    """The dataset-scoped branch of `strategy_options`.
+
+    Regression test: this path called a helper it never imported, so every request
+    to `GET /inference/models` raised NameError. Nothing caught it because the only
+    coverage called `strategy_options()` with no session, which skips the whole
+    availability check — the branch that the model catalogue actually uses.
+
+    The fixture embeds scenes (`image_cls`) but no regions, so this also pins the
+    real behaviour: scene search is offered, region search is not.
+    """
+    options = {o.key: o for o in strategy_options(world["session"], world["ds"].id)}
+
+    assert options["concept_annotations"].available is True
+    assert options["global_scene"].available is True
+
+    assert options["concept_region"].available is False
+    assert "region_mean" in options["concept_region"].unavailable_reason
+
+
+def test_strategy_options_on_a_dataset_with_no_embeddings(session):
+    """An unembedded dataset offers only the strategy that needs no embeddings."""
+    session.add(Users(username="u2", hashed_password="x", is_admin=False))
+    session.flush()
+    empty = Datasets(name="empty", description="", dataset_type="image",
+                     folder_path="/tmp/empty", created_by="u2")
+    session.add(empty)
+    session.commit()
+
+    options = {o.key: o for o in strategy_options(session, empty.id)}
+    assert options["concept_annotations"].available is True
+    assert options["global_scene"].available is False
+    assert options["concept_region"].available is False
+
+
 def test_registry_declared_kinds():
     assert RETRIEVAL_STRATEGIES["global_scene"].required_kinds == ("image_cls",)
     assert RETRIEVAL_STRATEGIES["concept_region"].required_kinds == ("region_mean",)

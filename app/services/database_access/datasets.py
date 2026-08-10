@@ -24,6 +24,7 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
+from app.services import image_status
 from app.services.database_access.labels import get_hierarchical_label_name
 from app.services.database_access.members import ensure_owner_membership
 from config import DATASETS_DIR
@@ -84,15 +85,21 @@ async def get_annotation_progress_of_dataset(
         dataset_id: int,
         db: Session
 ):
-    masks = (
-        db.query(Masks)
-        .join(Images, Masks.image_id == Images.id)
-        .filter(Images.dataset_id == dataset_id).all()
-    )
-    status_dict = defaultdict(lambda: 0)
-    for mask in masks:
-        status_dict[mask.status] += 1
-    return status_dict, len(masks)
+    """Per-phase progress of a dataset: Calibrate, Annotate, Review and overall.
+
+    Counted over *images*, not masks. An image that has never been opened has no
+    mask row at all, and counting masks silently dropped it from the denominator —
+    a dataset of 100 images with 3 opened reported "3 total, 3 not started".
+
+    Returns:
+        ``(counts, total_images)`` where ``counts`` is
+        ``{phase: {state: n}}`` for each of ``calibrate`` / ``annotate`` / ``review``
+        plus an ``overall`` row. See :mod:`app.services.image_status`.
+    """
+    images = db.query(Images).filter(Images.dataset_id == dataset_id).all()
+    statuses = image_status.status_for_images(db, images)
+    counts = image_status.count_phases(statuses.values())
+    return counts, len(images)
 
 
 async def get_datasets_of_user(
@@ -155,21 +162,50 @@ async def delete_dataset(
 async def get_image_and_mask_ids_of_dataset(
         dataset_id: int,
         db: Session,
-        filter_for_status: Literal[
-            "not_started", "in_progress", "rejected", "reviewable", "finished"] | None = None,
-
+        filter_for_status: Literal["blocked", "not_started", "in_progress", "finished"] | None = None,
+        filter_for_phase: Literal["calibrate", "annotate", "review"] | None = None,
 ):
-    query = db.query(Images, Masks).join(Masks, Images.id == Masks.image_id).filter(Images.dataset_id == dataset_id)
-    if filter_for_status:
-        query = query.filter(Masks.status == filter_for_status)
-    result = query.all()
-    image_data = [
-        {
-            "image_id": img.id,
-            "mask_id": mask.id,
-            "status": mask.status
-        } for img, mask in result
-    ]
+    """Every image of a dataset with its mask id and its three phase statuses.
+
+    Args:
+        dataset_id: Dataset to list.
+        db: SQLAlchemy session.
+        filter_for_status: Keep only images in this state. Applied to the overall
+            status, or to one phase when ``filter_for_phase`` is given. ``blocked``
+            only ever matches the review phase.
+        filter_for_phase: Which phase ``filter_for_status`` refers to. Without it
+            the filter is on the overall status.
+
+    Returns:
+        A list of ``{image_id, mask_id, status, phases}`` dicts. ``mask_id`` is
+        None for an image that has never been opened for annotation.
+    """
+    # LEFT join: an image with no mask row is not started, not absent. The old
+    # inner join hid every untouched image from the gallery's status filters.
+    rows = (
+        db.query(Images, Masks)
+        .outerjoin(Masks, Images.id == Masks.image_id)
+        .filter(Images.dataset_id == dataset_id)
+        .all()
+    )
+    images = [image for image, _ in rows]
+    masks_by_image = {image.id: mask for image, mask in rows if mask is not None}
+    statuses = image_status.status_for_images(db, images, masks_by_image=masks_by_image)
+
+    image_data = []
+    for image in images:
+        entry = statuses[image.id]
+        if filter_for_status:
+            actual = (entry["phases"][filter_for_phase] if filter_for_phase
+                      else entry["status"])
+            if actual != filter_for_status:
+                continue
+        image_data.append({
+            "image_id": image.id,
+            "mask_id": entry["mask_id"],
+            "status": entry["status"],
+            "phases": entry["phases"],
+        })
     return image_data
 
 
@@ -513,7 +549,7 @@ async def get_quantification_summary(
     def _compute_object_counts() -> dict[str, dict[str, int]]:
         # Per-label census of annotated objects: total / reviewed / unreviewed. A contour
         # counts as reviewed iff at least one user has reviewed it (matching the semantics
-        # used elsewhere, e.g. Masks.status and Contours.reviewed_by.any()).
+        # used elsewhere, e.g. Masks.review_status and Contours.reviewed_by.any()).
         #
         # NB: this deliberately ignores both exclude filters. Applying exclude_unreviewed
         # would force "unreviewed" to always be 0, and applying exclude_not_fully_annotated

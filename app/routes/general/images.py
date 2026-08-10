@@ -1,13 +1,14 @@
 import json
 import logging
 
-from fastapi import APIRouter, UploadFile, File, Depends
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.images import Images
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
+from app.services import image_status
 from app.services.auth import get_current_user
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import images as images_db
@@ -121,6 +122,41 @@ async def delete_image(
     await images_db.delete_image(image_id, db=db)
     return {"success": True,
             "message": f"Deleted image {image_id}."}
+
+
+@router.get("/{image_id}/status")
+async def get_image_status(
+        image_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ, "image_id"))
+):
+    """Where an image stands in the Calibrate -> Annotate -> Review workflow.
+
+    Each phase is independently ``not_started``, ``in_progress`` or ``finished``;
+    ``status`` combines them and is ``finished`` only when all three are. This is
+    the image-level counterpart of ``GET /masks/{mask_id}/status`` — same payload,
+    addressed by the id the caller happens to hold.
+
+    Args:
+        image_id (int): The ID of the image.
+        db (Session): The database session.
+        user (AuthenticatedUser): The current authenticated user.
+
+    Returns:
+        dict: The overall status, the per-phase breakdown and the mask id (None
+        when the image has never been opened for annotation).
+    """
+    image = db.query(Images).filter_by(id=image_id).first()
+    if image is None:
+        raise HTTPException(status_code=404, detail=f"Image {image_id} not found.")
+    state = image_status.status_for_image(db, image)
+    return {
+        "success": True,
+        "message": "Image status retrieved successfully.",
+        "status": state["status"],
+        "phases": state["phases"],
+        "mask_id": state["mask_id"],
+    }
 
 
 @router.get("/{image_id}/b64")

@@ -278,7 +278,7 @@ async def get_number_of_images(
 async def get_annotation_progress(dataset_id: int,
                                   user: AuthenticatedUser = Depends(require(Permission.DATASET_READ)),
                                   db: Session = Depends(get_session)):
-    """Get the annotation progress of a dataset.
+    """Get the per-phase progress of a dataset.
 
     Args:
         dataset_id (int): The ID of the dataset to check.
@@ -286,21 +286,26 @@ async def get_annotation_progress(dataset_id: int,
         db (Session): The database session.
 
     Returns:
-        dict: A dictionary containing the annotation progress details. The dict contains:
+        dict: A dictionary containing the progress details. The dict contains:
             - success (bool): Indicates if the operation was successful.
             - message (str): A message indicating the result of the operation.
-            - manually_annotated (int): Number of images manually annotated.
-            - auto_annotated_reviewed (int): Number of images auto-annotated with review.
-            - auto_annotated_without_review (int): Number of images auto-annotated without review.
-            - missing (int): Number of images missing annotations.
+            - phases (dict): ``{phase: {state: count}}`` for ``calibrate``,
+              ``annotate`` and ``review``, each state being one of ``not_started``,
+              ``in_progress`` or ``finished`` — plus ``blocked`` on ``review``,
+              which counts images with nothing drawn to review. This is what the
+              three progress bars are drawn from.
+            - overall (dict): The same three counts for the combined status, which
+              is ``finished`` only when all three phases are.
             - total_images (int): Total number of images in the dataset.
     """
-    status_dict, num_masks = await datasets_db.get_annotation_progress_of_dataset(dataset_id, db=db, )
+    counts, total_images = await datasets_db.get_annotation_progress_of_dataset(dataset_id, db=db)
+    overall = counts.pop("overall")
     return {
         "success": True,
         "message": "Annotation progress retrieved successfully.",
-        "total_images": num_masks,
-        "num_masks_with_status": status_dict,
+        "total_images": total_images,
+        "phases": counts,
+        "overall": overall,
     }
 
 
@@ -327,24 +332,29 @@ async def delete_dataset(
 @router.get("/{dataset_id}/images")
 async def list_images(
         dataset_id: int,
-        filter_for_status: Literal["not_started", "in_progress", "rejected", "reviewable", "finished"] | None = None,
+        filter_for_status: Literal["blocked", "not_started", "in_progress", "finished"] | None = None,
+        filter_for_phase: Literal["calibrate", "annotate", "review"] | None = None,
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ))
 ):
-    """List all images with masks of certain status for a given image ID.
+    """List a dataset's images with their workflow status.
 
     Args:
         dataset_id: Dataset ID to retrieve images from.
-        filter_for_status: The status of the masks to filter by.
+        filter_for_status: Keep only images in this state.
+        filter_for_phase: Which phase ``filter_for_status`` applies to
+            (``calibrate`` / ``annotate`` / ``review``). Omit it to filter on the
+            overall status.
         db: Database session dependency.
         user (AuthenticatedUser): The current authenticated user.
 
     Returns:
-        A list of image IDs.
+        ``image_data``: one ``{image_id, mask_id, status, phases}`` entry per image.
     """
     image_data = await datasets_db.get_image_and_mask_ids_of_dataset(
         dataset_id,
         filter_for_status=filter_for_status,
+        filter_for_phase=filter_for_phase,
         db=db,
     )
     return {

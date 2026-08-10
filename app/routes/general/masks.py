@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
+from app.services import image_status
 from app.services.database_access import masks as masks_db
 from app.services.permissions import require
 
@@ -42,23 +43,27 @@ async def get_mask_annotation_status(
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ, "mask_id"))
 ):
-    """ Check the annotation status of a mask by its ID.
+    """ Check the workflow status of a mask's image by the mask ID.
 
-    One of ``not_started``, ``in_progress``, ``rejected``, ``reviewable`` or
-    ``finished``. ``rejected`` means a reviewer sent the mask back and at least one
-    rejection is still open.
+    Reports all three phases — ``calibrate``, ``annotate`` and ``review`` — each
+    one of ``not_started``, ``in_progress`` or ``finished``, plus the combined
+    ``status``, which is ``finished`` only when every phase is. A reviewer sending
+    work back (an open rejection) pulls annotate and review back to ``in_progress``.
 
     Args:
         mask_id (int): The ID of the mask.
         user (AuthenticatedUser): The current authenticated user.
 
     Returns:
-        dict: A dictionary containing the annotation status.
+        dict: A dictionary containing the overall status and the per-phase breakdown.
     """
+    mask = await masks_db.get_mask(mask_id, db)
+    state = image_status.status_for_mask(db, mask)
     return {
         "success": True,
         "message": "Mask status retrieved successfully.",
-        "status": (await masks_db.get_mask(mask_id, db)).status
+        "status": state["status"],
+        "phases": state["phases"],
     }
 
 
