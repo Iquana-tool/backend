@@ -64,7 +64,7 @@ async def suggest(
         strategy=body.strategy,
         concept_label_id=body.concept_label_id,
         query_contour_id=body.query_contour_id,
-        top_k=body.top_k,
+        max_exemplar_images=body.max_exemplar_images,
         user_id=str(user.username),
     )
     exemplars = [

@@ -20,7 +20,12 @@ class CrossImageSuggestRequest(BaseModel):
         description="For region-based strategies: an existing contour whose region embedding is "
                     "the query (e.g. a just-annotated object of the concept).",
     )
-    top_k: int = Field(default=5, ge=1, le=50, description="Max exemplars to retrieve/transfer from.")
+    max_exemplar_images: int = Field(
+        default=1, ge=1, le=8,
+        description="How many exemplar images to transfer from. Each one is pasted beside the "
+                    "target on a single canvas, so more exemplars cost target resolution; one "
+                    "is the sane default.",
+    )
 
 
 class ExemplarInfo(BaseModel):
