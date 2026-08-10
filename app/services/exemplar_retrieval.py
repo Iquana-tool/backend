@@ -47,10 +47,8 @@ class RetrievalQuery:
     ``dataset_id`` scopes the bank. ``target_image_id`` is the image being annotated (the
     scene-similarity query for ``global_scene``). ``concept_label_id`` restricts exemplars to
     one label. ``query_vector`` is an explicit region embedding for object-level ranking
-    (``concept_region``). ``top_k`` caps the shortlist, counted in *contours* -- several of the
-    best may share a source image, so a caller that cares about images (the concat handler
-    pastes one tile per exemplar image) asks for a wider shortlist and thins it itself. Not
-    every strategy uses every field -- each validates the ones it needs.
+    (``concept_region``). ``top_k`` caps the shortlist. Not every strategy uses every field --
+    each validates the ones it needs.
     """
 
     dataset_id: int

@@ -39,12 +39,6 @@ logger = getLogger(__name__)
 _SYSTEM_USER = "system"
 
 
-#: Contour candidates pulled from a strategy per exemplar image asked for. Strategies rank
-#: *contours*, and several of the best often sit in the same image, so the shortlist has to be
-#: wider than the number of images we want out of it.
-_CANDIDATES_PER_IMAGE = 4
-
-
 def build_cross_image_request(
     session: Session,
     *,
@@ -52,24 +46,16 @@ def build_cross_image_request(
     strategy: str,
     concept_label_id: int | None = None,
     query_contour_id: int | None = None,
-    max_exemplar_images: int = 1,
+    top_k: int = 5,
     model_id: str = EMBEDDING_MODEL_ID,
     cross_image_model_key: str = CROSS_IMAGE_MODEL_KEY,
     user_id: str = _SYSTEM_USER,
 ) -> tuple["CrossImageSuggestionRequest | None", list[ExemplarMatch]]:
     """Retrieve exemplars for a target image and assemble the ai-service request.
 
-    ``max_exemplar_images`` caps how many *source images* end up in the request, and defaults
-    to one. The concat handler pastes one tile per exemplar, so every extra exemplar shrinks
-    the target's share of a canvas the processor then resizes to a fixed input -- five
-    exemplars cost more resolution on the target than they buy in concept signal. Exemplars
-    are therefore thinned to the best-ranked one per image before resolution.
-
-    Returns ``(request, matches)``, where ``matches`` are the exemplars actually sent (not the
-    wider candidate shortlist retrieval ranked). ``request`` is ``None`` when retrieval finds no
-    exemplars (the caller then returns an empty suggestion rather than calling the model).
-    Raises 404 for a missing target image and 400 when a region strategy's query contour has no
-    embedding.
+    Returns ``(request, matches)``. ``request`` is ``None`` when retrieval finds no exemplars
+    (the caller then returns an empty suggestion rather than calling the model). Raises 404 for a
+    missing target image and 400 when a region strategy's query contour has no embedding.
     """
     from iquana_toolbox.schemas.networking.http.services import CrossImageSuggestionRequest
 
@@ -91,14 +77,12 @@ def build_cross_image_request(
                 f"{model_id!r}; embed it first.",
             )
 
-    candidates = retrieve_exemplars(
+    matches = retrieve_exemplars(
         session, strategy,
         RetrievalQuery(dataset_id=target.dataset_id, target_image_id=target_image_id,
-                       concept_label_id=concept_label_id, query_vector=query_vector,
-                       top_k=max_exemplar_images * _CANDIDATES_PER_IMAGE),
+                       concept_label_id=concept_label_id, query_vector=query_vector, top_k=top_k),
         model_id=model_id,
     )
-    matches = _one_per_image(candidates, max_exemplar_images)
     if not matches:
         return None, []
 
@@ -114,25 +98,6 @@ def build_cross_image_request(
         concept=_concept_label(session, concept_label_id),
     )
     return request, matches
-
-
-def _one_per_image(matches: list[ExemplarMatch], max_images: int) -> list[ExemplarMatch]:
-    """The best-ranked match per source image, keeping at most ``max_images`` images.
-
-    Two exemplars from the same image would paste that image onto the canvas twice, so a
-    second object in an already-picked image is dropped rather than merged: the request
-    schema carries one mask per exemplar image.
-    """
-    picked: list[ExemplarMatch] = []
-    seen: set[int] = set()
-    for match in matches:  # retrieval order: best first
-        if match.image_id in seen:
-            continue
-        seen.add(match.image_id)
-        picked.append(match)
-        if len(picked) >= max_images:
-            break
-    return picked
 
 
 def _resolve_exemplars(session: Session, matches: list[ExemplarMatch]) -> list:

@@ -105,7 +105,7 @@ def _predict_cross_image(
         target_image_id=image.id,
         strategy=step.retrieval_strategy,
         concept_label_id=step.label_id,
-        max_exemplar_images=step.max_exemplar_images,
+        top_k=step.top_k,
         cross_image_model_key=step.model_registry_key,
         user_id=username,
     )

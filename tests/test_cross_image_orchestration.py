@@ -110,50 +110,22 @@ def world(session):
 def test_global_scene_builds_request_with_resolved_exemplars(world):
     s = world["session"]
     cb = _contour(s, world["near_mask"].id, label_id=world["label"].id)
-    _contour(s, world["far_mask"].id, label_id=world["label"].id)
-
-    request, matches = build_cross_image_request(
-        s, target_image_id=world["target"].id, strategy="global_scene",
-        concept_label_id=world["label"].id, model_id=MODEL,
-        cross_image_model_key="sam3",
-    )
-    # One exemplar image by default, and it is the best-ranked one (near scene, not far).
-    assert [m.contour_id for m in matches] == [cb.id]
-    # Target + exemplar resolved to their image URLs; concept carried as a text prompt.
-    assert request.image_url == "/data/target.png"
-    assert request.model_registry_key == "sam3"
-    assert [ex.image_url for ex in request.exemplars] == ["/data/near.png"]
-    assert request.concept is not None and request.concept.name == "coral"
-    # Each exemplar carries a decodable mask.
-    assert request.exemplars[0].mask.mask.shape == (100, 100)
-
-
-def test_max_exemplar_images_admits_more_images_best_first(world):
-    s = world["session"]
-    cb = _contour(s, world["near_mask"].id, label_id=world["label"].id)
     cc = _contour(s, world["far_mask"].id, label_id=world["label"].id)
 
     request, matches = build_cross_image_request(
         s, target_image_id=world["target"].id, strategy="global_scene",
-        concept_label_id=world["label"].id, max_exemplar_images=2, model_id=MODEL,
+        concept_label_id=world["label"].id, top_k=5, model_id=MODEL,
+        cross_image_model_key="sam3",
     )
+    # Ordered best-first: near-scene exemplar before far.
     assert [m.contour_id for m in matches] == [cb.id, cc.id]
+    # Target + exemplars resolved to their image URLs; concept carried as a text prompt.
+    assert request.image_url == "/data/target.png"
+    assert request.model_registry_key == "sam3"
     assert [ex.image_url for ex in request.exemplars] == ["/data/near.png", "/data/far.png"]
-
-
-def test_second_object_in_the_same_image_is_dropped(world):
-    """One tile per exemplar: a second object in an already-picked image adds no image."""
-    s = world["session"]
-    first = _contour(s, world["near_mask"].id, label_id=world["label"].id)
-    _contour(s, world["near_mask"].id, label_id=world["label"].id)
-
-    request, matches = build_cross_image_request(
-        s, target_image_id=world["target"].id, strategy="global_scene",
-        concept_label_id=world["label"].id, max_exemplar_images=2, model_id=MODEL,
-    )
-    # Both objects rank, but the far image has none -- so only the near image's best survives.
-    assert [m.contour_id for m in matches] == [first.id]
-    assert [ex.image_url for ex in request.exemplars] == ["/data/near.png"]
+    assert request.concept is not None and request.concept.name == "coral"
+    # Each exemplar carries a decodable mask.
+    assert request.exemplars[0].mask.mask.shape == (100, 100)
 
 
 def test_no_exemplars_returns_none(world):
@@ -174,17 +146,14 @@ def test_missing_target_image_raises_404(world):
 
 def test_concept_region_uses_query_contour_embedding(world):
     s = world["session"]
-    # The candidate sits in a different image than the query source, so the one-per-image
-    # thinning cannot confuse the two.
-    ca = _contour(s, world["far_mask"].id, label_id=world["label"].id)
+    ca = _contour(s, world["near_mask"].id, label_id=world["label"].id)
     src = _contour(s, world["near_mask"].id, label_id=world["label"].id)  # the query source
     upsert_embedding(s, contour_id=ca.id, kind="region_mean", model_id=MODEL, vector=_axis((0, 1.0)))
     upsert_embedding(s, contour_id=src.id, kind="region_mean", model_id=MODEL, vector=_axis((0, 1.0)))
 
     request, matches = build_cross_image_request(
         s, target_image_id=world["target"].id, strategy="concept_region",
-        concept_label_id=world["label"].id, query_contour_id=src.id,
-        max_exemplar_images=2, model_id=MODEL,
+        concept_label_id=world["label"].id, query_contour_id=src.id, top_k=5, model_id=MODEL,
     )
     assert request is not None
     assert ca.id in {m.contour_id for m in matches}

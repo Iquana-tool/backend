@@ -86,11 +86,9 @@ class InferenceStepRequest(BaseModel):
         default=None,
         description="Exemplar-retrieval strategy; required for cross-image steps.",
     )
-    max_exemplar_images: int = Field(
-        default=1, ge=1, le=8,
-        description="How many exemplar images a cross-image step transfers from, per target "
-                    "image. Each exemplar is composited beside the target, so raising this "
-                    "trades target resolution for concept signal.",
+    top_k: int = Field(
+        default=5, ge=1, le=32,
+        description="How many exemplars a cross-image step retrieves per image.",
     )
 
     @model_validator(mode="after")
