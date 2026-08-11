@@ -17,10 +17,12 @@ from starlette.responses import JSONResponse, StreamingResponse
 
 from app.database import get_session
 from app.database.images import Images
+from app.exceptions import InvalidMetadataError
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import DatasetRole, Permission
 from app.services.auth import get_current_user
 from app.services.database_access import datasets as datasets_db
+from app.services.database_access import image_metadata as metadata_db
 from app.services.database_access import labels as labels_db
 from app.services.database_access import members as members_db
 from app.services.database_access import quantification_profiles as profiles_db
@@ -349,7 +351,10 @@ async def list_images(
         user (AuthenticatedUser): The current authenticated user.
 
     Returns:
-        ``image_data``: one ``{image_id, mask_id, status, phases}`` entry per image.
+        ``image_data``: one ``{image_id, file_name, mask_id, status, phases,
+        metadata}`` entry per image, where ``metadata`` is the image's grouping
+        key/values (see ``GET /metadata/dataset/{id}`` for the dataset's whole
+        metadata vocabulary).
     """
     image_data = await datasets_db.get_image_and_mask_ids_of_dataset(
         dataset_id,
@@ -501,6 +506,7 @@ async def get_dataset_quantification_summary(
         include_relational: bool = True,
         include_distribution: bool = False,
         profile_id: int | None = None,
+        group_by: str | None = None,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
@@ -554,6 +560,15 @@ async def get_dataset_quantification_summary(
             metrics (number of children) before aggregating. Defaults to True.
         include_distribution (bool): Whether to also compute and return per-(label, metric)
             box/violin distribution stats for the numeric metrics. Defaults to False.
+        group_by (str | None): An image-metadata key to additionally break the results
+            down by, so the page can compare the same label across sites / treatments
+            rather than only across labels. Metadata is effectively an image-wide label
+            that every object on the image inherits, which is why this is a grouping key
+            on the existing aggregation rather than a new kind of metric.
+
+            Only *groupable* key types are accepted (category, yes/no); a number or a
+            date is near-unique per image and would draw one band per image, so it is
+            refused with a 422 rather than rendered. See ``GET /metadata/types``.
         db (Session): The database session.
         user (User): The current authenticated user.
 
@@ -565,6 +580,12 @@ async def get_dataset_quantification_summary(
         dataset's images share one scale unit and which unit the numbers are in (pixels when
         the scales are mixed), so the client can warn when quantifications fall back to
         pixels. When ``include_distribution`` is set, a ``distribution`` key is added.
+
+        With ``group_by``, three more keys appear: ``groups`` (``group_value ->`` the same
+        shape as ``metrics``), ``group_by`` and the display-ordered ``group_values``.
+        ``metrics`` itself stays dataset-wide and unchanged, so a client that ignores the
+        grouping sees exactly what it saw before. A ``distribution`` requested alongside
+        ``group_by`` gains the same extra level.
     """
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
@@ -573,6 +594,15 @@ async def get_dataset_quantification_summary(
     # bother lazily computing, so a geometry-only profile skips the appearance/contextual/
     # relational compute cost entirely.
     metric_scoping, profile_tiers = _resolve_profile_scoping(db, dataset_id, profile_id)
+
+    # Refuse an ungroupable key before doing any of the expensive lazy compute below.
+    group_by_key = None
+    if group_by:
+        try:
+            group_by_key = metadata_db.assert_groupable(db, dataset_id, group_by)
+        except InvalidMetadataError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=str(exc))
 
     if "geometry" in profile_tiers:
         compute_geometry_metrics_for_dataset(db, dataset_id, only_stale=True)
@@ -585,7 +615,7 @@ async def get_dataset_quantification_summary(
 
     summary = await datasets_db.get_quantification_summary(
         dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db,
-        metric_scoping=metric_scoping,
+        metric_scoping=metric_scoping, group_by_key=group_by_key,
     )
     labels_hierarchy = await labels_db.get_label_hierarchy(dataset_id, db=db)
     response = {
@@ -597,10 +627,14 @@ async def get_dataset_quantification_summary(
         "scale_status": summary["scale_status"],
         "labels": labels_hierarchy.model_dump(),
     }
+    if group_by_key:
+        response["groups"] = summary["groups"]
+        response["group_by"] = summary["group_by"]
+        response["group_values"] = summary["group_values"]
     if include_distribution:
         response["distribution"] = await datasets_db.get_quantification_distribution(
             dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db,
-            metric_scoping=metric_scoping,
+            metric_scoping=metric_scoping, group_by_key=group_by_key,
         )
     return response
 

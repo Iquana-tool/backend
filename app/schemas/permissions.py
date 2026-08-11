@@ -43,6 +43,10 @@ class Permission(StrEnum):
     IMAGE_READ = "image.read"
     IMAGE_UPLOAD = "image.upload"
     IMAGE_DELETE = "image.delete"
+    # Image metadata defines the subgroups a dataset is later compared across, so
+    # editing it is curation rather than annotation work: an annotator retagging
+    # images would silently redraw the groups someone else's analysis is built on.
+    IMAGE_METADATA_WRITE = "image.metadata_write"
     # Changing the pixel scale silently rescales every quantification number in
     # the dataset, which is why it is not bundled with ordinary annotation work.
     PIXEL_SCALE_SET = "pixel_scale.set"
@@ -162,6 +166,7 @@ _CURATOR: frozenset[Permission] = _REVIEWER | {
     Permission.DATASET_UPDATE,
     Permission.IMAGE_UPLOAD,
     Permission.IMAGE_DELETE,
+    Permission.IMAGE_METADATA_WRITE,
     Permission.PIXEL_SCALE_SET,
     Permission.CALIBRATION_SET,
     Permission.LABEL_MANAGE,
