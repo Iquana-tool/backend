@@ -340,6 +340,7 @@ async def handle_prompted_segmentation(
         model_key=model_identifier,
         prompts=prompts_model,
         user_id=state.user_id,
+        session_id=state.telemetry_session,
         previous_mask=previous_mask,
         parent_id=state.focussed_contour_id,
         focus_contour=focus_contour,
@@ -462,6 +463,7 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
         image_url=state.image_db.file_path,
         model_key=client_msg.data.get('model_key'),
         user_id=state.user_id,
+        session_id=state.telemetry_session,
         positive_exemplars=positive_exemplars,
         concept=concept,
     )
@@ -540,6 +542,7 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         image_height=state.image_db.height,
         model_registry_key=model_registry_key,
         user_id=state.user_id,
+        session_id=state.telemetry_session,
     )
 
     # Replace the existing contours with the freshly detected instances.

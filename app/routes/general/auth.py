@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.users import Users
 from app.services.auth import create_access_token, get_current_user, verify_password, get_password_hash
+from app.services.telemetry.emit import emit_navigation
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -28,13 +29,21 @@ def register_user(name, password, db: Session = Depends(get_session)):
 
 
 @router.post("/login")
-def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_session)):
+def login_user(request: Request,
+               form_data: OAuth2PasswordRequestForm = Depends(),
+               db: Session = Depends(get_session)):
     user = db.query(Users).filter_by(username=form_data.username).first()
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username")
     elif not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid password")
     access_token = create_access_token(data={"sub": user.username})
+    # Marks the start of a participant's session server-side. Failed attempts are
+    # deliberately not recorded here: the api component already logs the 401, and a
+    # study has no use for a per-attempt record tied to a password entry.
+    emit_navigation("session.login",
+                    username=user.username,
+                    session_id=request.headers.get("x-telemetry-session"))
     return {
         "success": True,
         "message": "Successfully logged in.",

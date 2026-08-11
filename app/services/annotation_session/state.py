@@ -34,6 +34,10 @@ class AnnotationSessionState(BaseModel):
     dataset_id: int | None = Field(default=None, title="Dataset ID",
                                    description="Dataset the image belongs to, resolved once at "
                                                "connection time for permission checks.")
+    telemetry_session: str | None = Field(default=None, title="Study session id",
+                                          description="Groups the events this connection emits "
+                                                      "with the participant's client-side events. "
+                                                      "Capture only; never used for access.")
     contour_hierarchy: ContourHierarchy | None = Field(default=None, title="Contour Hierarchy")
     focussed_contour_id: int | None = Field(default=None, title="Contour ID")
     refinement_contour_id: int | None = Field(default=None, title="Contour ID")

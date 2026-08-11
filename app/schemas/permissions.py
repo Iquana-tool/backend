@@ -89,6 +89,10 @@ class Permission(StrEnum):
     USER_MANAGE = "user.manage"
     USER_SET_GLOBAL_ROLE = "user.set_global_role"
     SYSTEM_MANAGE_MODELS = "system.manage_models"
+    # Switching study capture on/off and reading or purging the collected events.
+    # Global rather than dataset-scoped: a study run spans datasets, and the event
+    # log records who did what across all of them.
+    TELEMETRY_MANAGE = "telemetry.manage"
 
 
 #: Permissions that are meaningless per dataset and are answered by the global role.
@@ -97,6 +101,7 @@ GLOBAL_PERMISSIONS: frozenset[Permission] = frozenset({
     Permission.USER_MANAGE,
     Permission.USER_SET_GLOBAL_ROLE,
     Permission.SYSTEM_MANAGE_MODELS,
+    Permission.TELEMETRY_MANAGE,
 })
 
 

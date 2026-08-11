@@ -69,6 +69,8 @@ def _import_models():
         quantification_profiles,
         rejections,
         scans,
+        telemetry_settings,
+        user_events,
         users,
     )
 

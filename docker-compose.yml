@@ -57,6 +57,17 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-iquana}:${POSTGRES_PASSWORD:-iquana}@postgres:5432/${POSTGRES_DB:-iquana}}
       - MLFLOW_URL=${MLFLOW_URL:-http://mlflow:5000}
       - DATA_DIR=/Users/prpr02-admin/Documents/DFKI/Project_Coral/iquana-tool/backend/data
+      # User telemetry / study logging; see app/services/telemetry/README.md.
+      # USER_EVENTS_ENABLED is read at boot, so changing it needs a container
+      # restart; the rest are boot defaults, changeable live via the API.
+      - USER_EVENTS_ENABLED=${USER_EVENTS_ENABLED:-false}
+      - USER_EVENTS_CAPTURE=${USER_EVENTS_CAPTURE:-false}
+      - USER_EVENTS_COMPONENTS=${USER_EVENTS_COMPONENTS:-annotation,ai,navigation,api}
+      - USER_EVENTS_FLUSH_INTERVAL_MS=${USER_EVENTS_FLUSH_INTERVAL_MS:-5000}
+      - USER_EVENTS_BATCH_SIZE=${USER_EVENTS_BATCH_SIZE:-50}
+      - USER_EVENTS_MAX_PAYLOAD_BYTES=${USER_EVENTS_MAX_PAYLOAD_BYTES:-4096}
+      - USER_EVENTS_MAX_BATCH=${USER_EVENTS_MAX_BATCH:-200}
+      - USER_EVENTS_QUEUE_SIZE=${USER_EVENTS_QUEUE_SIZE:-10000}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

@@ -30,6 +30,8 @@ from iquana_toolbox.schemas.networking.http.services import (
 )
 
 from app.services.ai_services.base_service import BaseService
+from app.services.telemetry.config import TelemetryComponent
+from app.services.telemetry.emit import track_duration
 
 logger = getLogger(__name__)
 
@@ -178,6 +180,21 @@ def assign_hierarchy_parents(
     return found
 
 
+def _prompt_counts(prompts: Prompts) -> dict:
+    """How the user prompted this call, as counts only.
+
+    Shapes and coordinates stay out of the event: a study wants to know *how* a
+    participant prompted (three clicks, or one box), not to reconstruct the
+    annotation, which is already in the database.
+    """
+    return {
+        "points": len(prompts.point_prompts or []),
+        "box": prompts.box_prompt is not None,
+        "circle": prompts.circle_prompt is not None,
+        "polygon": prompts.polygon_prompt is not None,
+    }
+
+
 async def run_prompted_segmentation(
         *,
         service: BaseService,
@@ -187,6 +204,9 @@ async def run_prompted_segmentation(
         model_key: str,
         prompts: Prompts,
         user_id: str,
+        #: Study session the call belongs to, for joining the latency
+        #: event to the participant's timeline. None outside a study.
+        session_id: str | None = None,
         previous_mask=None,
         parent_id: int | None = None,
         focus_contour: Contour | None = None,
@@ -204,18 +224,26 @@ async def run_prompted_segmentation(
         previous_mask=previous_mask,
         prompts=prompts,
     )
-    response = await service.inference(request)
+    # Every AI call is timed here rather than at each caller, so HTTP routes and the
+    # WebSocket handlers are both covered and a study measures the wait a
+    # participant actually experienced (including transport, not just model time).
+    with track_duration(TelemetryComponent.AI, "ai.prompted.invoke",
+                        username=str(user_id), session_id=session_id) as span:
+        span["model"] = model_key
+        span["prompt_counts"] = _prompt_counts(prompts)
+        response = await service.inference(request)
 
-    # The service may return a list of candidates or (for backwards compatibility) a single
-    # contour / None.
-    result_data = response["result"]
-    if result_data is None:
-        items = []
-    elif isinstance(result_data, list):
-        items = result_data
-    else:
-        items = [result_data]
-    candidates = [Contour.model_validate(item) for item in items]
+        # The service may return a list of candidates or (for backwards compatibility) a single
+        # contour / None.
+        result_data = response["result"]
+        if result_data is None:
+            items = []
+        elif isinstance(result_data, list):
+            items = result_data
+        else:
+            items = [result_data]
+        candidates = [Contour.model_validate(item) for item in items]
+        span["candidate_count"] = len(candidates)
 
     best = select_best_prompted_contour(candidates, focus_contour)
     if best is not None:
@@ -236,6 +264,9 @@ async def run_semantic_segmentation(
         image_url: str,
         model_registry_key: str,
         user_id: str,
+        #: Study session the call belongs to, for joining the latency
+        #: event to the participant's timeline. None outside a study.
+        session_id: str | None = None,
 ) -> SemanticSegmentationResult:
     """Run semantic segmentation and parse the resulting contour hierarchy."""
     request = SemanticSegmentationRequest(
@@ -243,7 +274,10 @@ async def run_semantic_segmentation(
         image_url=image_url,
         user_id=user_id,
     )
-    response = await service.inference(request)
+    with track_duration(TelemetryComponent.AI, "ai.semantic.invoke",
+                        username=str(user_id), session_id=session_id) as span:
+        span["model"] = model_registry_key
+        response = await service.inference(request)
     hierarchy = ContourHierarchy.model_validate(response["result"])
     return SemanticSegmentationResult(
         hierarchy=hierarchy,
@@ -260,6 +294,9 @@ async def run_instance_segmentation(
         image_height: int,
         model_registry_key: str,
         user_id: str,
+        #: Study session the call belongs to, for joining the latency
+        #: event to the participant's timeline. None outside a study.
+        session_id: str | None = None,
 ) -> InstanceSegmentationResult:
     """Run instance segmentation and parse the detected instance contours.
 
@@ -272,8 +309,12 @@ async def run_instance_segmentation(
         image_url=image_url,
         user_id=user_id,
     )
-    response = await service.inference(request)
-    contours = [Contour.model_validate(item) for item in (response["result"] or [])]
+    with track_duration(TelemetryComponent.AI, "ai.instance.invoke",
+                        username=str(user_id), session_id=session_id) as span:
+        span["model"] = model_registry_key
+        response = await service.inference(request)
+        contours = [Contour.model_validate(item) for item in (response["result"] or [])]
+        span["instance_count"] = len(contours)
     for contour in contours:
         contour.compute_path(image_width=image_width, image_height=image_height)
     return InstanceSegmentationResult(
@@ -289,6 +330,9 @@ async def run_suggestion_segmentation(
         image_url: str,
         model_key: str,
         user_id: str,
+        #: Study session the call belongs to, for joining the latency
+        #: event to the participant's timeline. None outside a study.
+        session_id: str | None = None,
         positive_exemplars: list,
         concept=None,
         negative_exemplars: list | None = None,
@@ -308,8 +352,14 @@ async def run_suggestion_segmentation(
         negative_exemplars=negative_exemplars,
         concept=concept,
     )
-    response = await service.inference(request)
-    contours = [Contour.model_validate(contour_json) for contour_json in (response["result"] or [])]
+    with track_duration(TelemetryComponent.AI, "ai.suggestion.invoke",
+                        username=str(user_id), session_id=session_id) as span:
+        span["model"] = model_key
+        span["positive_exemplars"] = len(positive_exemplars or [])
+        span["negative_exemplars"] = len(negative_exemplars or [])
+        response = await service.inference(request)
+        contours = [Contour.model_validate(contour_json) for contour_json in (response["result"] or [])]
+        span["suggestion_count"] = len(contours)
     return SuggestionResult(
         contours=contours,
         success=response["success"],

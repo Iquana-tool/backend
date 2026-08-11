@@ -1,11 +1,12 @@
 import logging
 import os
+from contextlib import asynccontextmanager
 from logging import getLogger
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.database import init_db
+from app.database import get_context_session, init_db
 from app.routes.general.admin import router as admin_router
 from app.routes.general.annotation_queue import router as annotation_queue_router
 from app.routes.general.auth import router as auth_router
@@ -20,15 +21,32 @@ from app.routes.general.model_favorites import router as model_favorites_router
 from app.routes.general.reviews import router as review_router
 from app.routes.general.pixel_scale import router as scale_router
 from app.routes.general.status import router as status_router
+from app.routes.general.telemetry import router as telemetry_router
 from app.routes.services.suggestion_router import router as suggestion_segmentation_router
 from app.routes.services.label_space_router import router as label_space_router
 from app.routes.services.prompted_router import router as prompted_segmentation_router
 from app.routes.services.instance_seg_router import router as instance_segmentation_router
 from app.routes.services.cross_image_router import router as cross_image_router
 from app.routes.websockets.image_annotation_session import router as image_annotation_session_router
+from app.services.telemetry.config import get_config as get_telemetry_config
+from app.services.telemetry.middleware import TelemetryMiddleware
+from app.services.telemetry.recorder import recorder as telemetry_recorder
 from config import *
 
 logger = getLogger(__name__)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Application startup/shutdown.
+
+    Currently only telemetry: the recorder's queue is drained on the way out so a
+    restart during a study does not lose the last few seconds of a participant's
+    session. `stop()` is a no-op when the recorder never started.
+    """
+    yield
+    telemetry_recorder.stop()
+
 
 def create_app():
     logger.setLevel(logging.DEBUG)
@@ -55,6 +73,7 @@ def create_app():
         version="0.1.0",
         # Keep empty for local runs; set FASTAPI_ROOT_PATH behind reverse proxy.
         root_path=root_path,
+        lifespan=_lifespan,
     )
 
     # Configure CORS
@@ -65,6 +84,20 @@ def create_app():
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # User telemetry / study logging. Everything here is conditional on the
+    # deployment-level USER_EVENTS_ENABLED lock: when it is off the middleware is
+    # never installed and the /telemetry routes do not exist, so the feature has
+    # no runtime cost and no attack surface on a deployment that opted out.
+    if get_telemetry_config().enabled:
+        logger.info("Telemetry enabled; installing capture middleware and routes.")
+        # Resolve once here, with a session, so the stored runtime override is
+        # read and cached at boot. Emit sites on the request path then hit the
+        # cache instead of re-parsing the component list per event.
+        with get_context_session() as telemetry_db:
+            get_telemetry_config(telemetry_db)
+        app.add_middleware(TelemetryMiddleware)
+        app.include_router(telemetry_router)
 
     # Root endpoint
     @app.get("/")
