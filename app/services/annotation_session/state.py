@@ -22,9 +22,16 @@ class Backends(StrEnum):
 
 
 class AnnotationSessionState(BaseModel):
-    """ A class to track the state of the annotation session. """
-    image_id: int = Field(..., title="Image ID")
-    mask_id: int | None = Field(..., title="Mask ID",
+    """ A class to track the state of the annotation session.
+
+    A session belongs to a user, not to an image: the client opens one socket and points
+    it at whichever image it is showing (see ``switch_to_image``). It may therefore start
+    without an image at all, which is why ``image_id`` is optional.
+    """
+    image_id: int | None = Field(default=None, title="Image ID",
+                                 description="The image currently being annotated. None until the "
+                                             "client points the session at one.")
+    mask_id: int | None = Field(default=None, title="Mask ID",
                                 description="The mask id. If None, will be validated and the correct"
                                             "id is fetched from the db.")
     # Always the authenticated username, resolved from the connection's bearer
@@ -47,6 +54,10 @@ class AnnotationSessionState(BaseModel):
     @field_validator("image_id", mode="before")
     @classmethod
     def validate_image_id(cls, value):
+        if value is None:
+            # An imageless session is legitimate: the socket is opened per user and only
+            # later told which image to work on.
+            return value
         with get_context_session() as session:
             # exists() is faster than fetching the whole object
             exists = session.query(Images.id).filter_by(id=value).scalar() is not None
@@ -58,6 +69,8 @@ class AnnotationSessionState(BaseModel):
     @classmethod
     def validate_mask_id(cls, value, info: ValidationInfo):
         image_id = info.data.get("image_id")
+        if value is None and image_id is None:
+            return None
 
         with get_context_session() as session:
             # If mask_id is missing, try to find it via image_id
@@ -85,6 +98,42 @@ class AnnotationSessionState(BaseModel):
         with get_context_session() as session:
             mask_db = session.query(Masks).filter_by(id=self.mask_id).one()
         return mask_db
+
+    def switch_to_image(self, image_id: int, dataset_id: int | None = None) -> None:
+        """ Point this session at another image, keeping everything that is not per-image.
+
+            The AI backends stay registered and the models they hold stay loaded, which is
+            the reason a switch is a message rather than a reconnect: re-running the health
+            checks and the model selection for every image is what made stepping through a
+            dataset slow.
+
+            Everything that describes the *previous* image is dropped, including the two
+            cached ORM rows -- ``functools.cached_property`` stores its value in the
+            instance dict, so removing the key is what forces a re-read.
+
+            :param image_id: The image to annotate from now on. Must exist.
+            :param dataset_id: The dataset it belongs to, for the per-message permission
+                checks. Resolved by the caller, which needs it for its own check anyway.
+            :raises ValueError: If the image has no mask, or does not exist.
+        """
+        self.__dict__.pop("image_db", None)
+        self.__dict__.pop("mask_db", None)
+
+        # Round-trips through the validators so an unknown image or a missing mask is
+        # rejected here rather than surfacing later as a confusing handler error.
+        validated = AnnotationSessionState(
+            image_id=image_id,
+            mask_id=None,
+            user_id=self.user_id,
+            dataset_id=dataset_id,
+        )
+
+        self.image_id = validated.image_id
+        self.mask_id = validated.mask_id
+        self.dataset_id = dataset_id
+        self.contour_hierarchy = None
+        self.focussed_contour_id = None
+        self.refinement_contour_id = None
 
     async def check_and_register_backend(self, service: BaseService, key):
         if not await service.check_backend():

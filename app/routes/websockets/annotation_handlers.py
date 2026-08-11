@@ -35,6 +35,7 @@ from app.schemas.permissions import Permission
 from app.services import image_status
 from app.services.annotation_session.state import AnnotationSessionState, Backends
 from app.services.auth import load_user
+from app.services.permissions import dataset_id_for_image
 from app.services.database_access import contours as contours_db
 from app.services.database_access import labels as labels_db
 from app.services.database_access import masks as masks_db
@@ -63,22 +64,62 @@ async def _deny(websocket: WebSocket, client_msg: ClientMessage, permission: Per
     ))
 
 
-async def startup(websocket: WebSocket, state: AnnotationSessionState):
-    """Function to be called at the start of an annotation session. Any initialization code can be placed here.
-    """
-    print(f"Annotation session initialized: {state.model_dump()}")
-    # Check for running backends
-    await state.check_and_register_backend(PromptedSegmentationService(), Backends.PROMPTED_SEGMENTATION.value)
-    await state.check_and_register_backend(SuggestionService(), Backends.SUGGESTION_SEGMENTATION.value)
-    await state.check_and_register_backend(InstanceSegmentationService(), Backends.INSTANCE_SEGMENTATION.value)
+def _mask_state(state: AnnotationSessionState) -> dict:
+    """The current image's mask id and workflow status, for the workspace status pill.
 
+    Returns nulls for a session that is not pointed at an image yet.
+    """
+    if state.mask_id is None:
+        return {"mask_id": None, "mask_status": None, "phase_status": None}
     with get_context_session() as db:
         mask_db = db.query(Masks).filter_by(id=state.mask_id).first()
         # The workspace pill shows where the *image* stands, so this is the
         # combined Calibrate/Annotate/Review status plus the breakdown behind it.
         image_state = image_status.status_for_mask(db, mask_db) if mask_db else None
-        mask_status = image_state["status"] if image_state else None
-        phase_status = image_state["phases"] if image_state else None
+    return {
+        "mask_id": state.mask_id,
+        "mask_status": image_state["status"] if image_state else None,
+        "phase_status": image_state["phases"] if image_state else None,
+    }
+
+
+async def send_objects(websocket: WebSocket, state: AnnotationSessionState, message_id: str):
+    """Send the current image's full contour hierarchy and remember it on the session.
+
+    The hierarchy comes from the read-through cache, and is therefore shared with any
+    other session showing the same mask. Handlers must treat ``state.contour_hierarchy``
+    as read-only; anything that changes contours goes through the database-access layer,
+    which invalidates the cache entry.
+    """
+    if state.mask_id is None:
+        return
+    with get_context_session() as db:
+        hierarchy, payload = await masks_db.get_cached_contour_hierarchy_of_mask(state.mask_id, db)
+    state.contour_hierarchy = hierarchy
+    await send_msg(
+        websocket,
+        ServerMessage(
+            id=message_id,
+            type=ServerMessageType.OBJECTS,
+            success=True,
+            message=f"Retrieved annotations",
+            data=payload,
+        )
+    )
+
+
+async def startup(websocket: WebSocket, state: AnnotationSessionState):
+    """Function to be called at the start of an annotation session. Any initialization code can be placed here.
+
+    Runs once per socket, not once per image: the AI backends are health-checked here and
+    stay registered for as long as the connection lives, however many images the client
+    steps through (see :func:`handle_switch_image`).
+    """
+    logger.info("Initializing annotation session for %s.", state.user_id)
+    # Check for running backends
+    await state.check_and_register_backend(PromptedSegmentationService(), Backends.PROMPTED_SEGMENTATION.value)
+    await state.check_and_register_backend(SuggestionService(), Backends.SUGGESTION_SEGMENTATION.value)
+    await state.check_and_register_backend(InstanceSegmentationService(), Backends.INSTANCE_SEGMENTATION.value)
 
     await send_msg(
         websocket,
@@ -92,27 +133,78 @@ async def startup(websocket: WebSocket, state: AnnotationSessionState):
             data={
                 "running": list(state._running_backends.keys()),
                 "failed": list(state._failed_backends.keys()),
-                "mask_id": state.mask_id,
-                "mask_status": mask_status,
-                "phase_status": phase_status,
+                **_mask_state(state),
             }
         )
     )
 
     logger.info("Annotation session initialized.")
+    # A socket opened with an image in its URL gets that image's objects straight away.
+    # One opened per user instead waits for the first switch_image.
+    await send_objects(websocket, state, message_id="1")
+
+
+async def handle_switch_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+    """ Point the session at a different image.
+
+        This exists so that stepping through a dataset does not tear the socket down and
+        rebuild it: reconnecting re-ran authentication, three backend health checks and the
+        model preloading before the first contour could even be requested. Switching keeps
+        all of that and only swaps the per-image state.
+
+        Permissions are re-checked here rather than trusted from connection time, because
+        the new image may live in another dataset entirely.
+    """
+    # Coerced rather than trusted: JSON has no integer type distinct from a numeric
+    # string, and a string id would reach the database as one and fail there instead of
+    # here, where the message can say what was actually wrong.
+    try:
+        image_id = int(client_msg.data.get("image_id"))
+    except (TypeError, ValueError):
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.ERROR,
+            success=False,
+            message="switch_image requires a numeric image_id.",
+            data=None,
+        ))
+        return
+
     with get_context_session() as db:
-        hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
-    state.contour_hierarchy = hierarchy
-    await send_msg(
-        websocket,
-        ServerMessage(
-            id="1",
-            type=ServerMessageType.OBJECTS,
-            success=True,
-            message=f"Retrieved annotations",
-            data=hierarchy.model_dump()
-        )
-    )
+        dataset_id = dataset_id_for_image(image_id, db)
+        if dataset_id is None:
+            await send_msg(websocket, ServerMessage(
+                id=client_msg.id,
+                type=ServerMessageType.ERROR,
+                success=False,
+                message=f"Unknown image {image_id}.",
+                data=None,
+            ))
+            return
+        user = session_user(state, db)
+        if user is None or not user.has_permission(dataset_id, Permission.ANNOTATION_CREATE):
+            await _deny(websocket, client_msg, Permission.ANNOTATION_CREATE)
+            return
+
+    state.switch_to_image(image_id, dataset_id)
+
+    # The client blocks its canvas on this reply, so it is sent before the contours: the
+    # spinner it shows needs to know which mask it is waiting for.
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.IMAGE_SWITCHED,
+        success=True,
+        message=f"Switched to image {image_id}.",
+        data={
+            "image_id": image_id,
+            "running": list(state._running_backends.keys()),
+            "failed": list(state._failed_backends.keys()),
+            **_mask_state(state),
+        },
+    ))
+
+    # A distinct id: the client's pending request was already resolved by the reply above.
+    await send_objects(websocket, state, message_id=f"{client_msg.id}_objects")
 
 
 async def handle_focus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -369,10 +461,11 @@ async def handle_prompted_segmentation(
         if old_contour.label_id is not None:
             contour_model.label_id = old_contour.label_id
 
-        # Replace it in our session state
-        state.contour_hierarchy.id_to_contour[state.refinement_contour_id] = contour_model
-
-        # Replace in the db
+        # The session's hierarchy is not patched here. It came from the shared read-through
+        # cache, so writing into it would change what other readers of this mask see - and
+        # it patched only one of the hierarchy's three indexes anyway, leaving root_contours
+        # and the parent's children list pointing at the replaced contour. Replacing the
+        # contour invalidates the cache entry, so the next read rebuilds it in full.
         await replace_object(state.refinement_contour_id, contour_model, websocket, client_msg, state)
     else:
         await add_object(contour_model, websocket, client_msg, state)
@@ -553,7 +646,7 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         await masks_db.delete_all_contours_of_mask(state.mask_id, db=db)
         for contour in result.contours:
             await masks_db.add_contour_to_mask(state.mask_id, contour, db=db)
-        hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
+        hierarchy, payload = await masks_db.get_cached_contour_hierarchy_of_mask(state.mask_id, db)
     state.contour_hierarchy = hierarchy
 
     # Send the full hierarchy so the client refreshes its object list in one go.
@@ -565,7 +658,7 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         type=ServerMessageType.OBJECTS,
         success=result.success,
         message=result.message or f"Instance segmentation detected {len(result.contours)} objects.",
-        data=hierarchy.model_dump(),
+        data=payload,
     ))
 
 

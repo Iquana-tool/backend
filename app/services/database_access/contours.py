@@ -16,6 +16,7 @@ from app.database.images import Images
 from app.database.masks import Masks
 from app.database.rejections import AnnotationRejections
 from app.database.users import Users
+from app.services import hierarchy_cache
 from app.services.database_access.labels import get_label_hierarchy
 from app.services.quantification import (
     mark_appearance_stale,
@@ -263,6 +264,8 @@ async def review_contour(
     if user_db not in contour_db.reviewed_by:
         contour_db.reviewed_by.append(user_db)
         db.commit()
+        # reviewed_by rides along in the hierarchy payload, so an approval changes it.
+        hierarchy_cache.invalidate(contour_db.mask_id)
     return True
 
 
@@ -293,6 +296,7 @@ async def delete_contour(
     db.delete(contour)
     db.flush()
     db.commit()
+    hierarchy_cache.invalidate(mask_id)
 
 
 async def remove_review(
@@ -309,6 +313,7 @@ async def remove_review(
     if user_db is not None and user_db in contour_db.reviewed_by:
         contour_db.reviewed_by.remove(user_db)
         db.commit()
+        hierarchy_cache.invalidate(contour_db.mask_id)
 
 
 async def modify_contour(
@@ -386,6 +391,7 @@ async def modify_contour(
         )
 
     db.commit()
+    hierarchy_cache.invalidate(contour_db.mask_id)
 
     return True
 
@@ -488,4 +494,5 @@ async def replace_contour(
     # mark_appearance_stale above.
     mark_contextual_stale_for_group(db, mask_id, parent_id)
     db.commit()
+    hierarchy_cache.invalidate(mask_id)
     return True

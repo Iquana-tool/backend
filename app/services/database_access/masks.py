@@ -6,11 +6,13 @@ import numpy as np
 from PIL import Image
 from iquana_toolbox.schemas.database.contour_hierarchy import ContourHierarchy
 from iquana_toolbox.schemas.database.contours import Contour
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, selectinload
 
 from app.database.contours import Contours, save_contour_tree
 from app.database.images import Images
 from app.database.masks import Masks
+from app.services import hierarchy_cache
 from app.services.database_access import labels as labels_db
 
 logger = getLogger(__name__)
@@ -109,12 +111,55 @@ async def get_contour_hierarchy_of_mask(
         mask_id: int,
         db: Session
 ):
-    contours_query = db.query(Contours).filter_by(mask_id=mask_id).all()
+    """Build the contour hierarchy of a mask.
+
+    ``reviewed_by`` is eager-loaded: ``Contour.from_db`` reads it for every contour, and
+    without this each one costs its own SELECT, which is what made large masks load
+    slowly (and, on a cold connection, appear to hang).
+    """
+    contours_query = (db.query(Contours)
+                      .options(selectinload(Contours.reviewed_by))
+                      .filter_by(mask_id=mask_id)
+                      .all())
     size = await get_size_of_mask(mask_id, db)
     return ContourHierarchy.from_query(contours_query,
                                        height=size["height"],
                                        width=size["width"]
                                        )
+
+
+def contour_fingerprint(mask_id: int, db: Session) -> tuple[int, int]:
+    """A cheap ``(row count, highest id)`` signature of a mask's contours.
+
+    Used to spot contour writes made by another process -- batch inference runs in a
+    Celery worker, whose cache invalidations never reach the API process. One aggregate
+    query is a rounding error next to rebuilding the hierarchy it guards.
+    """
+    row = (db.query(func.count(Contours.id), func.coalesce(func.max(Contours.id), 0))
+           .filter(Contours.mask_id == mask_id)
+           .one())
+    return int(row[0]), int(row[1])
+
+
+async def get_cached_contour_hierarchy_of_mask(
+        mask_id: int,
+        db: Session
+) -> tuple[ContourHierarchy, dict]:
+    """Return ``(hierarchy, client_payload)`` for a mask, from cache when possible.
+
+    Read-only callers only. The returned hierarchy is shared with every other reader of
+    the same mask, so mutating it (``add_contour``, re-parenting) would corrupt what the
+    next reader sees -- those paths must keep using
+    :func:`get_contour_hierarchy_of_mask`, which always rebuilds.
+    """
+    fingerprint = contour_fingerprint(mask_id, db)
+    cached = hierarchy_cache.get(mask_id, fingerprint)
+    if cached is not None:
+        logger.debug("Serving contour hierarchy of mask %s from cache.", mask_id)
+        return cached
+
+    hierarchy = await get_contour_hierarchy_of_mask(mask_id, db)
+    return hierarchy, hierarchy_cache.put(mask_id, fingerprint, hierarchy)
 
 
 async def add_contours_from_hierarchy(
@@ -135,6 +180,7 @@ async def add_contours_from_hierarchy(
     for root_contours in hierarchy.root_contours:
         save_contour_tree(db, root_contours, mask_id, author_username=author_username,
                           invalidate_metrics=False)
+    hierarchy_cache.invalidate(mask_id)
 
 
 async def get_size_of_mask(
@@ -177,6 +223,7 @@ async def add_contour_to_mask(
     entry = save_contour_tree(db, contour_to_add, mask_id, parent_id=contour_to_add.parent_id,
                               author_username=author_username)
     db.commit()
+    hierarchy_cache.invalidate(mask_id)
     contour_to_add.id = entry.id
 
     # SVG path computation for the frontend
@@ -201,3 +248,4 @@ async def delete_all_contours_of_mask(
     mask = db.query(Masks).filter_by(id=mask_id).first()
     mask.fully_annotated = False
     db.commit()
+    hierarchy_cache.invalidate(mask_id)
