@@ -14,7 +14,7 @@ from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.database.image import Image
 from iquana_toolbox.schemas.database.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
-from sqlalchemy import case, func
+from sqlalchemy import and_, case, func
 from sqlalchemy.orm import Session, aliased
 
 from app.database.contour_metrics import ContourMetrics
@@ -25,6 +25,7 @@ from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
 from app.services import image_status
+from app.services.database_access.image_metadata import get_metadata_for_dataset
 from app.services.database_access.labels import get_hierarchical_label_name
 from app.services.database_access.members import ensure_owner_membership
 from config import DATASETS_DIR
@@ -177,8 +178,12 @@ async def get_image_and_mask_ids_of_dataset(
             the filter is on the overall status.
 
     Returns:
-        A list of ``{image_id, mask_id, status, phases}`` dicts. ``mask_id`` is
-        None for an image that has never been opened for annotation.
+        A list of ``{image_id, file_name, mask_id, status, phases, metadata}``
+        dicts. ``mask_id`` is None for an image that has never been opened for
+        annotation; ``metadata`` is the image's ``{key: value}`` pairs, empty for
+        an untagged image. The metadata rides along here rather than behind its
+        own request so the gallery can filter on a subgroup with the data it
+        already has, exactly as it filters on workflow status.
     """
     # LEFT join: an image with no mask row is not started, not absent. The old
     # inner join hid every untouched image from the gallery's status filters.
@@ -191,6 +196,7 @@ async def get_image_and_mask_ids_of_dataset(
     images = [image for image, _ in rows]
     masks_by_image = {image.id: mask for image, mask in rows if mask is not None}
     statuses = image_status.status_for_images(db, images, masks_by_image=masks_by_image)
+    metadata_by_image = get_metadata_for_dataset(db, dataset_id)
 
     image_data = []
     for image in images:
@@ -202,9 +208,11 @@ async def get_image_and_mask_ids_of_dataset(
                 continue
         image_data.append({
             "image_id": image.id,
+            "file_name": image.file_name,
             "mask_id": entry["mask_id"],
             "status": entry["status"],
             "phases": entry["phases"],
+            "metadata": metadata_by_image.get(image.id, {}),
         })
     return image_data
 
@@ -244,9 +252,13 @@ async def get_dataset_as_df(
     contextual / multi-component metrics are exportable too: a multi-component metric
     becomes one column per component (e.g. ``mean_color_rgb_r`` / ``_g`` / ``_b``), and a
     metric only fills a row when that row's label is in the metric's scope.
+
+    Both paths also emit one ``meta_<key>`` column per image-metadata key used
+    anywhere in the dataset (see :func:`_metadata_columns`), so the subgroup an
+    object came from travels with its measurements.
     """
     query = (
-        db.query(Contours, Images.file_name, Labels)
+        db.query(Contours, Images.file_name, Labels, Images.id)
         .join(Masks, Masks.id == Contours.mask_id)
         .join(Images, Images.id == Masks.image_id)
         .join(Labels, Labels.id == Contours.label_id)
@@ -265,13 +277,20 @@ async def get_dataset_as_df(
             exclude_not_fully_annotated, exclude_unreviewed,
         )
 
+    metadata_by_image, metadata_keys = _metadata_columns(db, dataset_id)
+
     df_data = {}
     for row in data:
         contour: Contours = row[0]
         file_name: str = row[1]
         label_db: Labels = row[2]
+        image_id: int = row[3]
 
         df_data.setdefault("file_name", []).append(file_name)
+        for key in metadata_keys:
+            df_data.setdefault(f"meta_{key}", []).append(
+                metadata_by_image.get(image_id, {}).get(key)
+            )
         df_data.setdefault("label", []).append(label_db.name)
         df_data.setdefault("label_id", []).append(contour.label_id)
         df_data.setdefault("contour_id", []).append(contour.id)
@@ -282,6 +301,19 @@ async def get_dataset_as_df(
         df_data.setdefault("coords_x", []).append(contour.x)
         df_data.setdefault("coords_y", []).append(contour.y)
     return pd.DataFrame(df_data)
+
+
+def _metadata_columns(db: Session, dataset_id: int) -> tuple[dict[int, dict[str, str]], list[str]]:
+    """``({image_id: {key: value}}, sorted_keys)`` for a dataset's image metadata.
+
+    The key list is the union over the whole dataset rather than per row, so every
+    exported row has the same columns — a subgroup column that appears halfway
+    down a CSV is not something a stats package can read.
+    """
+    metadata_by_image = get_metadata_for_dataset(db, dataset_id)
+    keys = sorted({key for entries in metadata_by_image.values() for key in entries},
+                  key=str.lower)
+    return metadata_by_image, keys
 
 
 def _metric_column_name(metric_key: str, component: int) -> str:
@@ -366,13 +398,20 @@ def _dataset_df_from_profile(
         value_dim = metric.value_dim if metric is not None else 1
         metric_components[key] = list(range(value_dim))
 
+    metadata_by_image, metadata_keys = _metadata_columns(db, dataset_id)
+
     df_data: dict[str, list] = {}
     for row in rows:
         contour: Contours = row[0]
         file_name: str = row[1]
         label_db: Labels = row[2]
+        image_id: int = row[3]
 
         df_data.setdefault("file_name", []).append(file_name)
+        for key in metadata_keys:
+            df_data.setdefault(f"meta_{key}", []).append(
+                metadata_by_image.get(image_id, {}).get(key)
+            )
         df_data.setdefault("label", []).append(label_db.name)
         df_data.setdefault("label_id", []).append(contour.label_id)
         df_data.setdefault("contour_id", []).append(contour.id)
@@ -506,12 +545,55 @@ def _pixel_to_physical_factor(metric_key: str, scale_x: float, scale_y: float) -
     return 1.0
 
 
+#: Bucket label for images that carry no value for the grouping key. Comparing
+#: the subgroups against "the ones nobody labelled yet" is exactly how an
+#: incomplete grouping gets noticed, so they are shown rather than dropped. A
+#: metadata value spelled literally like this would merge with the bucket, which
+#: is an acceptable trade for not inventing a parallel encoding.
+UNTAGGED_GROUP = "(untagged)"
+
+
+def _group_value_expression(group_by_key: str):
+    """The column to group metric rows by, and the join that produces it.
+
+    Returns a ``(join_condition, column)`` pair for an OUTER join to
+    ``image_metadata`` restricted to one key. Outer, because an image with no
+    value for the key still has contours: an inner join would silently drop them
+    and every group would sum to less than the dataset.
+    """
+    from app.database.image_metadata import ImageMetadata
+
+    condition = and_(
+        ImageMetadata.image_id == Images.id,
+        ImageMetadata.key == group_by_key,
+    )
+    return ImageMetadata, condition, ImageMetadata.value
+
+
+def _sort_group_values(values: Iterable[str]) -> list[str]:
+    """Order group buckets for display: numeric-aware, untagged last.
+
+    Untagged goes last because it is not a subgroup — it is the residue, and a
+    chart that opens with it reads as though it were a category of its own.
+    """
+    def sort_key(value: str) -> tuple[int, float, str]:
+        if value == UNTAGGED_GROUP:
+            return (2, 0.0, "")
+        try:
+            return (0, float(value), "")
+        except ValueError:
+            return (1, 0.0, value.lower())
+
+    return sorted(values, key=sort_key)
+
+
 async def get_quantification_summary(
         dataset_id: int,
         exclude_not_fully_annotated: bool,
         exclude_unreviewed: bool,
         db: Session,
         metric_scoping: dict[str, list[int] | None] | None = None,
+        group_by_key: str | None = None,
 ) -> dict[str, Any]:
     """Aggregate the tall ``contour_metrics`` rows of a dataset server-side.
 
@@ -687,48 +769,103 @@ async def get_quantification_summary(
             }
         metric_query = metric_query.filter(ContourMetrics.metric_key.in_(list(metric_scoping)))
 
-    metrics: dict[str, dict[str, Any]] = {}
-    for row in metric_query.all():
-        # Honor per-metric label scoping: skip rows for labels not in this metric's scope.
-        if metric_scoping is not None:
-            allowed_labels = metric_scoping.get(row.metric_key)
-            if allowed_labels is not None and row.label_id not in allowed_labels:
-                continue
-        mean = float(row.mean) if row.mean is not None else 0.0
-        mean_sq = float(row.mean_sq) if row.mean_sq is not None else 0.0
-        # Population std = sqrt(max(0, E[x^2] - E[x]^2)); clamp to guard float noise.
-        variance = max(0.0, mean_sq - mean * mean)
-        std = float(np.sqrt(variance))
+    def _assemble(rows) -> dict[str, dict[str, Any]]:
+        """Turn aggregate rows into the ``label_id -> metric_key -> entry`` payload.
 
-        # The reported unit is derived (not read from the stored row) from the metric's unit
-        # kind and the dataset display unit: "mm"/"mm²" when reporting physical, else px.
-        unit = resolve_unit(get_metric(row.metric_key).unit_kind, display_unit)
+        Shared by the dataset-wide aggregation and each group's, so a grouped
+        number is produced by exactly the same arithmetic as the ungrouped one.
+        """
+        metrics: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            # Honor per-metric label scoping: skip rows for labels not in this metric's scope.
+            if metric_scoping is not None:
+                allowed_labels = metric_scoping.get(row.metric_key)
+                if allowed_labels is not None and row.label_id not in allowed_labels:
+                    continue
+            mean = float(row.mean) if row.mean is not None else 0.0
+            mean_sq = float(row.mean_sq) if row.mean_sq is not None else 0.0
+            # Population std = sqrt(max(0, E[x^2] - E[x]^2)); clamp to guard float noise.
+            variance = max(0.0, mean_sq - mean * mean)
+            std = float(np.sqrt(variance))
 
-        label_key = str(row.label_id)
-        metric_entry = metrics.setdefault(label_key, {}).setdefault(
-            row.metric_key, {"unit": unit, "components": {}}
-        )
-        metric_entry["components"][int(row.component)] = {
-            "count": int(row.count),
-            "mean": mean,
-            "std": std,
-            "min": float(row.min) if row.min is not None else 0.0,
-            "max": float(row.max) if row.max is not None else 0.0,
-        }
+            # The reported unit is derived (not read from the stored row) from the metric's
+            # unit kind and the dataset display unit: "mm"/"mm²" when physical, else px.
+            unit = resolve_unit(get_metric(row.metric_key).unit_kind, display_unit)
 
-    # Flatten each metric's component dict into an ordered list (component 0, 1, ...).
-    for label_metrics in metrics.values():
-        for metric_entry in label_metrics.values():
-            components = metric_entry.pop("components")
-            metric_entry["components"] = [components[i] for i in sorted(components)]
+            label_key = str(row.label_id)
+            metric_entry = metrics.setdefault(label_key, {}).setdefault(
+                row.metric_key, {"unit": unit, "components": {}}
+            )
+            metric_entry["components"][int(row.component)] = {
+                "count": int(row.count),
+                "mean": mean,
+                "std": std,
+                "min": float(row.min) if row.min is not None else 0.0,
+                "max": float(row.max) if row.max is not None else 0.0,
+            }
 
-    # --- Child-count / object-count aggregation ------------------------------
-    return {
-        "metrics": metrics,
+        # Flatten each metric's component dict into an ordered list (component 0, 1, ...).
+        for label_metrics in metrics.values():
+            for metric_entry in label_metrics.values():
+                components = metric_entry.pop("components")
+                metric_entry["components"] = [components[i] for i in sorted(components)]
+        return metrics
+
+    result: dict[str, Any] = {
+        "metrics": _assemble(metric_query.all()),
         "child_counts_per_label_id": _compute_child_counts(),
         "object_counts_per_label_id": _compute_object_counts(),
         "scale_status": scale_display,
     }
+
+    # --- Grouping by an image-metadata key -----------------------------------
+    # A second aggregation rather than a re-slice of the first: the dataset-wide
+    # numbers stay byte-identical to what they were before grouping existed, so a
+    # client that ignores `groups` is unaffected. Combining per-group means back
+    # into a total is possible but is arithmetic nobody has to trust this way.
+    if group_by_key:
+        metadata_model, join_condition, group_column = _group_value_expression(group_by_key)
+        # The outer join has to come AFTER the dataset joins: its ON clause names
+        # `images`, and SQLite rejects a join whose condition references a table
+        # to its right.
+        grouped_query = _apply_filters(
+            db.query(
+                group_column.label("group_value"),
+                Contours.label_id.label("label_id"),
+                ContourMetrics.metric_key.label("metric_key"),
+                ContourMetrics.component.label("component"),
+                func.count(value_expr).label("count"),
+                func.avg(value_expr).label("mean"),
+                func.avg(value_expr * value_expr).label("mean_sq"),
+                func.min(value_expr).label("min"),
+                func.max(value_expr).label("max"),
+            ).join(ContourMetrics, ContourMetrics.contour_id == Contours.id)
+        ).outerjoin(metadata_model, join_condition).group_by(
+            group_column,
+            Contours.label_id,
+            ContourMetrics.metric_key,
+            ContourMetrics.component,
+        )
+        if metric_scoping is not None:
+            grouped_query = grouped_query.filter(
+                ContourMetrics.metric_key.in_(list(metric_scoping))
+            )
+
+        rows_by_group: dict[str, list] = defaultdict(list)
+        for row in grouped_query.all():
+            rows_by_group[row.group_value or UNTAGGED_GROUP].append(row)
+
+        groups = {
+            group_value: _assemble(rows)
+            for group_value, rows in rows_by_group.items()
+        }
+        # Drop buckets that scoping emptied, so the chart never draws a blank band.
+        groups = {key: value for key, value in groups.items() if value}
+        result["groups"] = groups
+        result["group_by"] = group_by_key
+        result["group_values"] = _sort_group_values(groups)
+
+    return result
 
 
 # --- Distribution (box / violin) statistics ----------------------------------------
@@ -891,6 +1028,7 @@ async def get_quantification_distribution(
         exclude_unreviewed: bool,
         db: Session,
         metric_scoping: dict[str, list[int] | None] | None = None,
+        group_by_key: str | None = None,
 ) -> dict[str, Any]:
     """Compute per-label box/violin distributions for a dataset's metrics.
 
@@ -911,11 +1049,16 @@ async def get_quantification_distribution(
             :func:`get_quantification_summary`: only the listed metric keys are computed,
             and each key's label list (or ``None`` for all labels) restricts which labels
             it is reported for.
+        group_by_key: Optional image-metadata key to split the distributions by, so a
+            box plot compares the same label across sites rather than only across labels.
+            Adds one level to the returned mapping.
 
     Returns:
         ``{label_id: {metric_key: {component: stats}}}`` with every key stringified for
         JSON. Labels and metrics with no values are omitted entirely, so an empty dict
-        means nothing in scope had a stored value.
+        means nothing in scope had a stored value. With ``group_by_key`` the mapping is
+        ``{group_value: {label_id: ...}}`` instead — one extra level, keyed by the
+        metadata value (see :data:`UNTAGGED_GROUP` for images that have none).
     """
     eligible_keys = _distribution_metric_keys(
         None if metric_scoping is None else metric_scoping.keys()
@@ -931,37 +1074,52 @@ async def get_quantification_distribution(
     display_unit = scale_display["display_unit"]
     display_physical = scale_display["display_physical"]
 
-    value_query = _scope_contour_query(
-        db.query(
-            Contours.label_id.label("label_id"),
-            ContourMetrics.metric_key.label("metric_key"),
-            ContourMetrics.component.label("component"),
-            ContourMetrics.value.label("value"),
-            Images.scale_x.label("scale_x"),
-            Images.scale_y.label("scale_y"),
-        ).join(ContourMetrics, ContourMetrics.contour_id == Contours.id),
-        dataset_id, exclude_not_fully_annotated, exclude_unreviewed,
-    ).filter(ContourMetrics.metric_key.in_(sorted(eligible_keys)))
+    columns = [
+        Contours.label_id.label("label_id"),
+        ContourMetrics.metric_key.label("metric_key"),
+        ContourMetrics.component.label("component"),
+        ContourMetrics.value.label("value"),
+        Images.scale_x.label("scale_x"),
+        Images.scale_y.label("scale_y"),
+    ]
+    metadata_model = join_condition = None
+    if group_by_key:
+        metadata_model, join_condition, group_column = _group_value_expression(group_by_key)
+        columns.append(group_column.label("group_value"))
 
-    # Bucket the values by (label, metric, component), converting each pixel value to the
-    # display unit per its own image scale (a no-op factor of 1 when reporting pixels).
-    buckets: dict[tuple[int, str, int], list[float]] = defaultdict(list)
+    value_query = _scope_contour_query(
+        db.query(*columns).join(ContourMetrics, ContourMetrics.contour_id == Contours.id),
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed,
+    )
+    if group_by_key:
+        # Outer, so contours on images with no value for the key are still counted
+        # — into the untagged bucket rather than out of the dataset. It has to come
+        # after the dataset joins: its ON clause names `images`, and SQLite rejects
+        # a join whose condition references a table to its right.
+        value_query = value_query.outerjoin(metadata_model, join_condition)
+    value_query = value_query.filter(ContourMetrics.metric_key.in_(sorted(eligible_keys)))
+
+    # Bucket the values by (group, label, metric, component), converting each pixel value
+    # to the display unit per its own image scale (a no-op factor of 1 for pixels).
+    buckets: dict[tuple[str | None, int, str, int], list[float]] = defaultdict(list)
     for row in value_query.all():
         if metric_scoping is not None:
             allowed_labels = metric_scoping.get(row.metric_key)
             if allowed_labels is not None and row.label_id not in allowed_labels:
                 continue
-        key = (row.label_id, row.metric_key, int(row.component))
+        group = (getattr(row, "group_value", None) or UNTAGGED_GROUP) if group_by_key else None
+        key = (group, row.label_id, row.metric_key, int(row.component))
         value = float(row.value)
         if display_physical:
             value *= _pixel_to_physical_factor(row.metric_key, row.scale_x, row.scale_y)
         buckets[key].append(value)
 
     result: dict[str, Any] = {}
-    for (label_id, metric_key, component), values in buckets.items():
+    for (group, label_id, metric_key, component), values in buckets.items():
         stats = _compute_distribution_stats(np.asarray(values, dtype=np.float64))
         stats["unit"] = resolve_unit(get_metric(metric_key).unit_kind, display_unit)
-        result.setdefault(str(label_id), {}).setdefault(metric_key, {})[str(component)] = stats
+        target = result if group is None else result.setdefault(group, {})
+        target.setdefault(str(label_id), {}).setdefault(metric_key, {})[str(component)] = stats
     return result
 
 
@@ -1038,12 +1196,19 @@ def _filter_contour_rows(
 def build_coco_payload(
         dataset: "Datasets",
         rows: list[tuple[Any, Any, Any]],
+        metadata_by_image: dict[int, dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], set[int]]:
     """Build a COCO JSON payload from pre-fetched (contour, image, label) rows.
 
     This is the single source of truth for the COCO document, shared by the ZIP
     export and the annotations-only endpoint. Returns the payload and the set of
     image ids it actually references, so callers can keep bundled images in sync.
+
+    ``metadata_by_image`` adds each image's grouping key/values to its COCO image
+    entry as a ``metadata`` object. COCO tolerates extra keys on an image, and an
+    export that drops the subgroups is an export you cannot analyse per site or
+    per treatment. The key is omitted entirely for an untagged image, so an
+    export of a dataset that uses no metadata is unchanged.
     """
     images_by_id: dict[int, dict[str, Any]] = {}
     native_size_by_id: dict[int, tuple[int, int]] = {}
@@ -1065,6 +1230,9 @@ def build_coco_payload(
                 "width": native_width,
                 "height": native_height,
             }
+            metadata = (metadata_by_image or {}).get(image.id)
+            if metadata:
+                images_by_id[image.id]["metadata"] = metadata
         width, height = native_size_by_id[image.id]
 
         if label.id not in categories_by_id:
@@ -1156,7 +1324,9 @@ async def export_dataset_contours_to_coco(
         query = query.filter(Contours.reviewed_by.any())
 
     rows = _filter_contour_rows(query.all(), contour_selection)
-    coco_payload, image_ids = build_coco_payload(dataset, rows)
+    coco_payload, image_ids = build_coco_payload(
+        dataset, rows, metadata_by_image=get_metadata_for_dataset(db, dataset_id)
+    )
 
     result: dict[str, Any] = {
         "success": True,

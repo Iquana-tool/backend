@@ -363,8 +363,10 @@ class TestDatasetProgress:
             datasets_db.get_image_and_mask_ids_of_dataset(dataset.id, session))
         assert rows == [{
             "image_id": image.id,
+            "file_name": image.file_name,
             "mask_id": None,
             "status": NOT_STARTED,
             "phases": {"calibrate": NOT_STARTED, "annotate": NOT_STARTED,
                        "review": BLOCKED},
+            "metadata": {},
         }]

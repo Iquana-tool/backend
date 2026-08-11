@@ -59,9 +59,11 @@ def _import_models():
         contours,
         dataset_calibration_defaults,
         dataset_members,
+        dataset_metadata_keys,
         datasets,
         embeddings,
         image_calibrations,
+        image_metadata,
         images,
         inference_jobs,
         labels,
@@ -81,6 +83,9 @@ def _import_models():
 #: only applied when the column is absent.
 _ADDED_COLUMNS = [
     ("annotation_rejections", "resolution", "VARCHAR(16)"),
+    # Added with the metadata type system; a dev database that ran the untyped
+    # first cut of image_metadata has the table but not this column.
+    ("image_metadata", "value_num", "FLOAT"),
 ]
 
 

@@ -12,6 +12,7 @@ from app.routes.general.auth import router as auth_router
 from app.routes.general.calibration import router as calibration_router
 from app.routes.general.contours import router as contour_router
 from app.routes.general.datasets import router as dataset_router
+from app.routes.general.image_metadata import router as image_metadata_router
 from app.routes.general.images import router as image_router
 from app.routes.general.labels import router as label_router
 from app.routes.general.masks import router as mask_router
@@ -84,6 +85,7 @@ def create_app():
     app.include_router(review_router)
     app.include_router(annotation_queue_router)
     app.include_router(image_router)
+    app.include_router(image_metadata_router)
     app.include_router(image_annotation_session_router)
     app.include_router(mask_router)
     app.include_router(contour_router)

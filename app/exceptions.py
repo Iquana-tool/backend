@@ -32,6 +32,11 @@ class UnknownCalibrationKindError(IQuanaBaseError):
     pass
 
 
+class InvalidMetadataError(IQuanaBaseError):
+    """Raised when an image metadata key or value is empty or over its length cap."""
+    pass
+
+
 class InvalidCalibrationError(IQuanaBaseError):
     """Raised when calibration parameters fail their kind's validation.
 
