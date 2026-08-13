@@ -9,6 +9,7 @@ service modules (for persistence), and sends a ``ServerMessage`` back to the cli
 from logging import getLogger
 
 from fastapi.websockets import WebSocket
+from iquana_toolbox.inference import nms
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.networking.websockets.annotation_session import (
     ServerMessageType,
@@ -632,10 +633,22 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
                                        state: AnnotationSessionState):
     """ Handle instance segmentation inference.
 
-        Instance segmentation re-segments the whole image, so the detected instances
-        replace every contour currently on the mask (the client warns the user about
-        this before requesting it).
+        ``override`` re-segments the whole image and replaces every contour currently on
+        the mask. ``patch`` keeps existing contours and adds only non-overlapping model
+        predictions. Omitted ``write_mode`` remains the destructive override behavior.
     """
+    message_data = client_msg.data or {}
+    write_mode = message_data.get("write_mode", "override")
+    if write_mode not in {"patch", "override"}:
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.ERROR,
+            success=False,
+            message="write_mode must be either 'patch' or 'override'.",
+            data=None,
+        ))
+        return
+
     if Backends.INSTANCE_SEGMENTATION.value not in state._running_backends:
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
@@ -646,7 +659,7 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         ))
         return
 
-    model_registry_key = client_msg.data.get("model_registry_key")
+    model_registry_key = message_data.get("model_registry_key")
     result = await run_instance_segmentation(
         service=state._running_backends[Backends.INSTANCE_SEGMENTATION.value],
         image_url=state.image_db.file_path,
@@ -656,11 +669,30 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         user_id=state.user_id,
     )
 
-    # Replace the existing contours with the freshly detected instances.
+    contours_to_add = result.contours
+    suppressed_count = 0
     with get_context_session() as db:
-        await masks_db.delete_all_contours_of_mask(state.mask_id, db=db)
-        for contour in result.contours:
-            await masks_db.add_contour_to_mask(state.mask_id, contour, db=db)
+        if write_mode == "patch":
+            existing_hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
+            existing_contours = list(existing_hierarchy.id_to_contour.values())
+            nms_result = nms(result.contours, existing=existing_contours)
+            contours_to_add = [result.contours[index] for index in nms_result.kept]
+            suppressed_count = len(nms_result.suppressed)
+        else:
+            # Preserve the established destructive behavior for override and for
+            # clients that omit write_mode.
+            await masks_db.delete_all_contours_of_mask(state.mask_id, db=db)
+
+        for contour in contours_to_add:
+            await masks_db.add_contour_to_mask(
+                state.mask_id,
+                contour,
+                db=db,
+                # Instance models currently return a flat list. Patch writes must
+                # preserve that geometry and must not infer a hierarchy.
+                check_hierarchy=write_mode == "override",
+                author_username=state.user_id,
+            )
         hierarchy, payload = await masks_db.get_cached_contour_hierarchy_of_mask(state.mask_id, db)
     state.contour_hierarchy = hierarchy
 
@@ -672,8 +704,12 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         id=client_msg.id,
         type=ServerMessageType.OBJECTS,
         success=result.success,
-        message=result.message or f"Instance segmentation detected {len(result.contours)} objects.",
-        data=payload,
+        message=result.message or f"Instance segmentation detected {len(contours_to_add)} objects.",
+        data={
+            **payload,
+            "added_count": len(contours_to_add),
+            "suppressed_count": suppressed_count,
+        },
     ))
 
 

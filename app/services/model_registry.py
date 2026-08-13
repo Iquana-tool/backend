@@ -71,7 +71,7 @@ def _full_model_info(registry_key: str) -> dict:
     Falls back to a minimal stub if an older artifact carries no metadata.
     """
     try:
-        info = mlflow.models.get_model_info(f"models:/{registry_key}@latest")
+        info = mlflow.models.get_model_info(f"models:/{registry_key}/latest")
         if info.metadata:
             return info.metadata
         logger.warning("Model '%s' has no artifact metadata; returning stub.", registry_key)

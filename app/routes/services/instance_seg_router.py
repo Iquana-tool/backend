@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 from logging import getLogger
 from typing import Optional
 
@@ -50,6 +51,9 @@ _MLFLOW_STATUS_BY_CELERY_STATE = {
     "REVOKED": "KILLED",
 }
 _TERMINAL_STATES = {"SUCCESS", "FAILED", "CANCELLED"}
+_VALIDATION_METRIC_PATTERN = re.compile(
+    r"^val_mask_(iou|f1|precision|recall)_label_(\d+)$"
+)
 
 
 class StartTrainingBody(BaseModel):
@@ -226,6 +230,52 @@ def _parse_label_ids(raw) -> list[int]:
         return []
 
 
+def _validation_metrics_from_run(run) -> dict | None:
+    """Expose final held-out quality metrics in a UI-friendly shape."""
+    per_label: dict[int, dict[str, float | int]] = {}
+    for metric_name, value in run.data.metrics.items():
+        match = _VALIDATION_METRIC_PATTERN.fullmatch(metric_name)
+        if match is None:
+            continue
+        metric, raw_label_id = match.groups()
+        label_id = int(raw_label_id)
+        per_label.setdefault(label_id, {"label_id": label_id})[metric] = float(value)
+
+    macro_iou = run.data.metrics.get("val_mask_iou_macro")
+    macro_f1 = run.data.metrics.get("val_mask_f1_macro")
+    macro_precision = run.data.metrics.get("val_mask_precision_macro")
+    macro_recall = run.data.metrics.get("val_mask_recall_macro")
+    ap = run.data.metrics.get("val_mask_ap")
+    ap50 = run.data.metrics.get("val_mask_ap50")
+    ap75 = run.data.metrics.get("val_mask_ap75")
+    if not per_label and all(
+        metric is None
+        for metric in (
+            macro_iou,
+            macro_f1,
+            macro_precision,
+            macro_recall,
+            ap,
+            ap50,
+            ap75,
+        )
+    ):
+        return None
+
+    return {
+        "ap": float(ap) if ap is not None else None,
+        "ap50": float(ap50) if ap50 is not None else None,
+        "ap75": float(ap75) if ap75 is not None else None,
+        "macro_iou": float(macro_iou) if macro_iou is not None else None,
+        "macro_f1": float(macro_f1) if macro_f1 is not None else None,
+        "macro_precision": (
+            float(macro_precision) if macro_precision is not None else None
+        ),
+        "macro_recall": float(macro_recall) if macro_recall is not None else None,
+        "per_label": [per_label[label_id] for label_id in sorted(per_label)],
+    }
+
+
 def _snapshot_from_run(client, run, task_id: Optional[str] = None) -> dict:
     """Build a progress snapshot dict from an MLflow run."""
     run_id = run.info.run_id
@@ -249,6 +299,7 @@ def _snapshot_from_run(client, run, task_id: Optional[str] = None) -> dict:
 
     epoch_metric = run.data.metrics.get("epoch")
     epoch = int(epoch_metric) if epoch_metric is not None else (loss[-1]["epoch"] if loss else 0)
+    validation_metrics = _validation_metrics_from_run(run)
 
     return {
         "task_id": task_id if task_id is not None else run.data.tags.get("celery_task_id"),
@@ -259,6 +310,8 @@ def _snapshot_from_run(client, run, task_id: Optional[str] = None) -> dict:
         "total_epochs": total_epochs,
         "training_parameters": training_parameters,
         "loss": loss,
+        "validation_metrics": validation_metrics,
+        "validation_metrics_unavailable": run.data.tags.get("validation_metrics_unavailable"),
         "label_ids": _parse_label_ids(run.data.tags.get("label_ids")),
         "run_name": run.data.tags.get("run_name"),  # user-supplied alias; None when not set
         "start_time": run.info.start_time,
