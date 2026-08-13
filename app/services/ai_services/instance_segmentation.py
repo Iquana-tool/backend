@@ -35,6 +35,7 @@ class InstanceSegmentationService(BaseService):
         self,
         request: InstanceSegmentationTrainingRequest,
         model_run_name: str | None = None,
+        dataset_name: str | None = None,
     ) -> dict:
         """Dispatch a training job to the instance-segmentation service.
 
@@ -48,10 +49,14 @@ class InstanceSegmentationService(BaseService):
                 MLflow tag (e.g. ``"Cells-FineTuned-v1"``).  Passed as a query
                 parameter so the shared ``InstanceSegmentationTrainingRequest`` schema
                 in ``iquana_toolbox`` does not need to change.
+            dataset_name: Optional snapshot of the dataset's human-readable name,
+                also passed as a query parameter for model provenance metadata.
         """
         params = {}
         if model_run_name:
             params["model_run_name"] = model_run_name
+        if dataset_name:
+            params["dataset_name"] = dataset_name
         async with httpx.AsyncClient(timeout=120) as client:
             url = f"{self.backend_url}/train"
             response = await client.post(url, json=request.model_dump(), params=params)

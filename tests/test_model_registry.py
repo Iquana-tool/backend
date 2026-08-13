@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+import json
 from types import SimpleNamespace
 
 from app.services import model_registry
@@ -21,6 +23,55 @@ def test_full_model_info_returns_trained_model_metadata_name(monkeypatch):
 
     assert requested_uris == ["models:/trained-model/latest"]
     assert result["name"] == "Trained Model"
+
+
+def test_full_model_info_resolves_legacy_training_ids_to_names(monkeypatch):
+    class FakeQuery:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def filter(self, *_conditions):
+            return self
+
+        def first(self):
+            return self.rows[0] if self.rows else None
+
+        def all(self):
+            return self.rows
+
+    dataset = SimpleNamespace(id=1, name="Cells dataset")
+    labels = [
+        SimpleNamespace(id=5, name="cell"),
+        SimpleNamespace(id=6, name="nucleus"),
+    ]
+
+    class FakeDB:
+        def query(self, model):
+            rows = [dataset] if model is model_registry.Datasets else labels
+            return FakeQuery(rows)
+
+    @contextmanager
+    def fake_context_session():
+        yield FakeDB()
+
+    def get_model_info(_uri):
+        return SimpleNamespace(
+            metadata={
+                "registry_key": "legacy-model",
+                "name": "Legacy Model",
+                "label_ids": [5, 6],
+                "tags": {"dataset_id": "1"},
+            }
+        )
+
+    monkeypatch.setattr(model_registry.mlflow.models, "get_model_info", get_model_info)
+    monkeypatch.setattr(model_registry, "get_context_session", fake_context_session)
+
+    result = model_registry._full_model_info("legacy-model")
+
+    assert result["tags"]["trained_on_dataset_id"] == "1"
+    assert result["tags"]["trained_on_dataset_name"] == "Cells dataset"
+    assert json.loads(result["tags"]["trained_label_names"]) == ["cell", "nucleus"]
 
 
 def test_full_model_info_falls_back_when_metadata_lookup_fails(monkeypatch):

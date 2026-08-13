@@ -188,7 +188,11 @@ async def start_training(
     )
 
     try:
-        result = await service.start_training(request, model_run_name=body.model_run_name)
+        result = await service.start_training(
+            request,
+            model_run_name=body.model_run_name,
+            dataset_name=dataset.name,
+        )
     except Exception as exc:
         logger.exception("Failed to start instance segmentation training.")
         raise HTTPException(status_code=http_status.HTTP_502_BAD_GATEWAY,

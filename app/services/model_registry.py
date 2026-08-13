@@ -4,17 +4,112 @@ The backend reads available models straight from the shared MLflow registry
 instead of HTTP-hopping through each AI service's ``/models`` endpoint. MLflow
 is the source of truth, so this removes one network round-trip per request.
 """
+import json
 from logging import getLogger
 
 import mlflow
 from iquana_toolbox.mlflow import MLFlowModelRegistry
 
+from app.database import get_context_session
+from app.database.datasets import Datasets
+from app.database.labels import Labels
 from config import MLFLOW_URL
 
 logger = getLogger(__name__)
 
 # Client only; no connection is made until a query runs.
 MODEL_REGISTRY = MLFlowModelRegistry(MLFLOW_URL)
+
+
+def _model_tag_value(model_info: dict, key: str):
+    tags = model_info.get("tags")
+    if isinstance(tags, dict):
+        return tags.get(key)
+    if isinstance(tags, list):
+        for tag in tags:
+            if isinstance(tag, dict) and tag.get("key") == key:
+                return tag.get("value")
+    return None
+
+
+def _parse_id_list(value) -> list[int]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            value = value.split(",")
+    if not isinstance(value, (list, tuple)):
+        return []
+
+    ids = []
+    for item in value:
+        try:
+            ids.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _set_model_tag(model_info: dict, key: str, value: str):
+    tags = model_info.get("tags")
+    if isinstance(tags, dict):
+        tags[key] = value
+        return
+    if isinstance(tags, list):
+        for tag in tags:
+            if isinstance(tag, dict) and tag.get("key") == key:
+                tag["value"] = value
+                return
+        tags.append({"key": key, "value": value})
+        return
+    model_info["tags"] = {key: value}
+
+
+def _enrich_model_provenance(model_info: dict) -> dict:
+    """Add names for legacy trained models that only stored database IDs."""
+    dataset_id_value = (
+        _model_tag_value(model_info, "trained_on_dataset_id")
+        or _model_tag_value(model_info, "dataset_id")
+        or model_info.get("dataset_id")
+    )
+    try:
+        dataset_id = int(dataset_id_value)
+    except (TypeError, ValueError):
+        return model_info
+
+    label_ids = _parse_id_list(model_info.get("label_ids"))
+    if not label_ids:
+        label_ids = _parse_id_list(_model_tag_value(model_info, "selected_label_ids"))
+
+    needs_dataset_name = not _model_tag_value(model_info, "trained_on_dataset_name")
+    needs_label_names = bool(label_ids) and not _model_tag_value(model_info, "trained_label_names")
+    if not needs_dataset_name and not needs_label_names:
+        return model_info
+
+    try:
+        with get_context_session() as db:
+            dataset = db.query(Datasets).filter(Datasets.id == dataset_id).first()
+            if dataset and needs_dataset_name:
+                _set_model_tag(model_info, "trained_on_dataset_id", str(dataset.id))
+                _set_model_tag(model_info, "trained_on_dataset_name", dataset.name)
+
+            if dataset and needs_label_names:
+                labels = (
+                    db.query(Labels)
+                    .filter(Labels.dataset_id == dataset_id, Labels.id.in_(label_ids))
+                    .all()
+                )
+                names_by_id = {label.id: label.name for label in labels}
+                names = [names_by_id.get(label_id, "") for label_id in label_ids]
+                _set_model_tag(
+                    model_info,
+                    "trained_label_names",
+                    json.dumps(names, ensure_ascii=False),
+                )
+    except Exception:
+        logger.exception("Failed to resolve provenance for trained model metadata.")
+
+    return model_info
 
 
 def _search_registered_models_by_tags(tags: dict):
@@ -73,7 +168,15 @@ def _full_model_info(registry_key: str) -> dict:
     try:
         info = mlflow.models.get_model_info(f"models:/{registry_key}/latest")
         if info.metadata:
-            return info.metadata
+            metadata = dict(info.metadata)
+            if isinstance(metadata.get("tags"), dict):
+                metadata["tags"] = dict(metadata["tags"])
+            elif isinstance(metadata.get("tags"), list):
+                metadata["tags"] = [
+                    dict(tag) if isinstance(tag, dict) else tag
+                    for tag in metadata["tags"]
+                ]
+            return _enrich_model_provenance(metadata)
         logger.warning("Model '%s' has no artifact metadata; returning stub.", registry_key)
     except Exception:
         logger.exception("Failed to read artifact metadata for model '%s'.", registry_key)
