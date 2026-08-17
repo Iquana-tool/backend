@@ -9,6 +9,7 @@ from app.database import get_session
 from app.database.contours import Contours
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
+from app.services.database_access import annotation_history as history_db
 from app.services.database_access import contours as contours_db
 from app.services.permissions import ensure_permission_for, require
 
@@ -72,12 +73,16 @@ async def modify_contour(
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the edited contour.
     """
-    await _ensure_may_edit(contour_id, user, db)
+    contour = await _ensure_may_edit(contour_id, user, db)
+    previous_label_id, mask_id = contour.label_id, contour.mask_id
     # `reviewed_by` is a review action, not an edit: setting it here would let an
     # annotator approve their own work through the back door.
     kwargs.pop("reviewed_by", None)
     kwargs.pop("author_username", None)
     modified = await contours_db.modify_contour(contour_id, db, **kwargs)
+    if modified and "label_id" in kwargs:
+        history_db.record_label_change(db, mask_id, user.username, contour_id,
+                                       previous_label_id, kwargs["label_id"])
     return {
         "success": modified,
         "message": "Contour updated successfully." if modified else "Contour could not be updated.",
@@ -127,10 +132,13 @@ async def change_contour_label(
     """
     dataset_id = ensure_permission_for(user, "contour_id", contour_id,
                                        Permission.ANNOTATION_EDIT_OWN, db)
-    await _ensure_may_edit(contour_id, user, db)
+    contour = await _ensure_may_edit(contour_id, user, db)
+    previous_label_id, mask_id = contour.label_id, contour.mask_id
 
     # 1. Change the label_id, this checks if the new label is valid
     await contours_db.modify_contour(contour_id, label_id=new_label_id, db=db)
+    history_db.record_label_change(db, mask_id, user.username, contour_id,
+                                   previous_label_id, new_label_id)
 
     # 2. Record a review only if this caller is entitled to give one
     reviewed = False
@@ -215,8 +223,13 @@ async def delete_contour(
     Delete a contour and all its descendants (via CASCADE).
     Returns the list of deleted contour IDs.
     """
-    await _ensure_may_edit(contour_id, user, db)
+    contour = await _ensure_may_edit(contour_id, user, db)
+    mask_id = contour.mask_id
+    # Taken before the delete: the CASCADE removes the descendants too, and undo
+    # has to be able to bring the whole subtree back.
+    snapshot = history_db.snapshot_subtree(contour_id, db)
     await contours_db.delete_contour(contour_id, db)
+    history_db.record_delete(db, mask_id, user.username, snapshot)
 
     return {
         "success": True,

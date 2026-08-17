@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db
 from app.routes.general.admin import router as admin_router
+from app.routes.general.annotation_history import router as annotation_history_router
 from app.routes.general.annotation_queue import router as annotation_queue_router
 from app.routes.general.auth import router as auth_router
 from app.routes.general.calibration import router as calibration_router
@@ -89,6 +90,7 @@ def create_app():
     app.include_router(image_annotation_session_router)
     app.include_router(mask_router)
     app.include_router(contour_router)
+    app.include_router(annotation_history_router)
     app.include_router(label_router)
     app.include_router(scale_router)
     # Generalises the /scale router above to every calibration kind; /scale stays

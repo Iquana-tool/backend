@@ -36,6 +36,7 @@ from app.services import image_status
 from app.services.annotation_session.state import AnnotationSessionState, Backends
 from app.services.auth import load_user
 from app.services.permissions import dataset_id_for_image
+from app.services.database_access import annotation_history as history_db
 from app.services.database_access import contours as contours_db
 from app.services.database_access import labels as labels_db
 from app.services.database_access import masks as masks_db
@@ -324,7 +325,11 @@ async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, 
     """ Handle removing an object from the mask. """
     contour_id = client_msg.data.get("contour_id")
     with get_context_session() as db:
-        response = await contours_db.delete_contour(contour_id, db)
+        # Snapshot first: the delete cascades to the descendants, so once it has
+        # run there is nothing left to describe what undo would have to bring back.
+        snapshot = history_db.snapshot_subtree(contour_id, db)
+        await contours_db.delete_contour(contour_id, db)
+        history_db.record_delete(db, state.mask_id, state.user_id, snapshot)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_REMOVED,
@@ -362,8 +367,15 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
             await _deny(websocket, client_msg, Permission.ANNOTATION_EDIT_ANY)
             return
 
+        # Read the label before the update so the history knows what to go back to.
+        previous_label_id = existing.label_id if existing is not None else None
+
         if fields_to_be_updated:
             await contours_db.modify_contour(contour_id, db=db, **fields_to_be_updated)
+            if assigns_label:
+                history_db.record_label_change(db, state.mask_id, state.user_id, contour_id,
+                                               previous_label_id,
+                                               fields_to_be_updated["label_id"])
 
         # Assigning a label counts as a review only for callers entitled to give
         # one; for everyone else the label change simply stands on its own.
@@ -585,8 +597,11 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
         message=result.message,
         data={"added_count": len(suggested)},
     ))
+    # One suggestion run is one thing the user did, so it is one undo step however
+    # many instances came back.
+    group_id = history_db.new_group_id()
     for contour in suggested:
-        await add_object(contour, websocket, client_msg, state)
+        await add_object(contour, websocket, client_msg, state, group_id=group_id)
 
 
 async def handle_instance_select_model(websocket: WebSocket, client_msg: ClientMessage,
@@ -663,7 +678,20 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
 
 
 async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage,
-                     state: AnnotationSessionState):
+                     state: AnnotationSessionState, group_id: str | None = None):
+    """Persist one new object and tell the client about it.
+
+    Every interactive add reaches the database through here -- manual drawing,
+    prompted segmentation and instance suggestion alike -- which makes it the one
+    place the undo history has to be told about a creation. Instance segmentation
+    is the exception, and deliberately so: it wipes and repopulates the mask
+    through ``masks_db`` directly, and a per-object undo of half a replace-all
+    would leave the mask in a state the user never saw.
+
+    Args:
+        group_id: Ties this creation to others made in the same operation, so a
+            suggestion run that adds thirty objects is undone in one step.
+    """
     with get_context_session() as db:
         response = await masks_db.add_contour_to_mask(
             mask_id=state.mask_id,
@@ -671,6 +699,8 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
             db=db,
             author_username=state.user_id,
         )
+        history_db.record_create(db, state.mask_id, state.user_id, response.id,
+                                 group_id=group_id)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_ADDED,
