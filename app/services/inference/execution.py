@@ -80,8 +80,12 @@ def _predict_instance_segmentation(
     db: Session, step: ResolvedStep, image: Images, username: str
 ) -> list[Contour]:
     from app.services.ai_services.instance_segmentation import InstanceSegmentationService
+    from app.services.inference.conditioning_dispatcher import dispatch_conditioning
 
+    cond_result = dispatch_conditioning(db, step, image, username)
     label_row = db.get(Labels, step.label_id)
+    parameters = step.inputs.get("parameters", {})
+
     request = InstanceSegmentationRequest(
         image_url=str(image.file_path),
         user_id=username,
@@ -89,6 +93,9 @@ def _predict_instance_segmentation(
         # Multiclass models honour this and return only the asked-for class; models that
         # ignore it are filtered gateway-side anyway (see filter_for_step).
         label=Label.from_db(label_row) if label_row is not None else None,
+        parameters=parameters,
+        contour_ids=cond_result.get("contour_ids", []),
+        embeddings=cond_result.get("vectors", {}),
     )
     response = asyncio.run(InstanceSegmentationService().inference(request))
     return _as_contours(response)
@@ -98,23 +105,43 @@ def _predict_cross_image(
     db: Session, step: ResolvedStep, image: Images, username: str
 ) -> list[Contour]:
     from app.services.ai_services.cross_image import CrossImageService
-    from app.services.cross_image_orchestration import build_cross_image_request
+    from app.services.inference.conditioning_dispatcher import dispatch_conditioning
+    from iquana_toolbox.schemas.networking.http.services import CrossImageSuggestionRequest
 
-    request, matches = build_cross_image_request(
-        db,
-        target_image_id=image.id,
-        strategy=step.retrieval_strategy,
-        concept_label_id=step.label_id,
-        top_k=step.top_k,
-        cross_image_model_key=step.model_registry_key,
+    cond_result = dispatch_conditioning(db, step, image, username)
+    cond_kind = step.input_contract.conditioning.kind
+
+    if cond_kind == "reference_images":
+        exemplars = cond_result.get("exemplars", [])
+        if not exemplars:
+            logger.info(
+                "No exemplars for label %s on image %s; nothing to predict.",
+                step.label_id,
+                image.id,
+            )
+            return []
+    else:
+        exemplars = cond_result.get("exemplars", [])
+
+    parameters = step.inputs.get("parameters", {})
+
+    request = CrossImageSuggestionRequest(
+        image_url=str(image.file_path),
         user_id=username,
+        model_registry_key=step.model_registry_key,
+        exemplars=exemplars,
+        concept=cond_result.get("concept"),
+        parameters=parameters,
+        contour_ids=cond_result.get("contour_ids", []),
+        embeddings=cond_result.get("vectors", {}),
     )
-    if request is None:
-        logger.info("No exemplars for label %s on image %s; nothing to predict.",
-                    step.label_id, image.id)
-        return []
-    logger.debug("Image %s: %d exemplars retrieved for label %s.",
-                 image.id, len(matches), step.label_id)
+    logger.debug(
+        "Image %s: %d exemplars retrieved for label %s (conditioning kind: %s).",
+        image.id,
+        len(exemplars),
+        step.label_id,
+        cond_kind,
+    )
     return _as_contours(asyncio.run(CrossImageService().inference(request)))
 
 
@@ -233,7 +260,8 @@ def run_unit(
     except Exception as exc:  # network, model load, bad response -- all report the same way
         raise InferenceUnitError(_prediction_error(exc, step)) from exc
 
-    candidates = filter_for_step(raw, step, min_confidence=step.min_confidence)
+    threshold = step.inputs.get("parameters", {}).get("threshold", step.min_confidence or 0.0)
+    candidates = filter_for_step(raw, step, min_confidence=threshold)
     if not candidates:
         return UnitResult()
 

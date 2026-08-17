@@ -477,13 +477,16 @@ def test_preserve_reviewed_spares_approved_objects_and_their_subtree(ctx):
 
 
 # --------------------------------------------------------------------------- #
-# Stubs
-# --------------------------------------------------------------------------- #
+from app.services.inference.contract_resolver import LEGACY_TASK_DEFAULTS
+
+
 def _stub_catalog(monkeypatch, ctx, label_ids=()):
     """Pretend one ready instance-segmentation model exists, without touching MLflow."""
+    contract = LEGACY_TASK_DEFAULTS["instance-segmentation"]
     monkeypatch.setattr(planning, "model_catalog", lambda db, dataset_id: ModelCatalog(
         models=[ModelOption(registry_key="m2f", name="Mask2Former",
-                            task="instance-segmentation", label_ids=list(label_ids))],
+                            task="instance-segmentation", label_ids=list(label_ids),
+                            input_contract=contract, provenance="legacy_default")],
     ))
 
 
