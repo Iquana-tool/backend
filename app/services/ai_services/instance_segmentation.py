@@ -71,10 +71,18 @@ class InstanceSegmentationService(BaseService):
             response.raise_for_status()
             return response.json()
 
-    async def get_training_task_state(self, task_id: str) -> str:
-        """Read the authoritative Celery state for a training task."""
+    async def get_training_task_status(self, task_id: str) -> dict:
+        """Read the full training lifecycle status from the instance-segmentation service."""
         async with httpx.AsyncClient(timeout=10) as client:
             url = f"{self.backend_url}/train/{task_id}"
             response = await client.get(url)
             response.raise_for_status()
-            return response.json().get("state", "PENDING")
+            return response.json()
+
+    async def get_training_task_state(self, task_id: str) -> str:
+        """Read the authoritative Celery state for a training task.
+
+        Compatibility wrapper returning the coarse Celery state.
+        """
+        payload = await self.get_training_task_status(task_id)
+        return payload.get("state", "PENDING")
