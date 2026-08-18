@@ -54,6 +54,7 @@ def _import_models():
     mapper and the table missing from a fresh database.
     """
     from app.database import (  # noqa: F401  (imported for their side effects)
+        annotation_actions,
         annotation_queues,
         contour_metrics,
         contours,

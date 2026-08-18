@@ -241,10 +241,16 @@ async def delete_all_contours_of_mask(
         db: Session,
         unreviewed_only: bool = False,
 ):
+    # Local import: annotation_history reaches back into the contour access layer.
+    from app.services.database_access.annotation_history import clear_for_mask
+
     if unreviewed_only:
         db.query(Contours).filter(Contours.mask_id == mask_id, ~Contours.reviewed_by.any()).delete()
     else:
         db.query(Contours).filter_by(mask_id=mask_id).delete()
+    # The undo history describes contours that are gone now. Left in place, an undo
+    # recorded before this wipe would put one of them back into the emptied mask.
+    clear_for_mask(mask_id, db)
     mask = db.query(Masks).filter_by(id=mask_id).first()
     mask.fully_annotated = False
     db.commit()
