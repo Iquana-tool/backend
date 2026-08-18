@@ -1,7 +1,6 @@
 import io
 import os
 import zipfile
-from io import StringIO
 from logging import getLogger
 from typing import Literal
 
@@ -13,7 +12,7 @@ from iquana_toolbox.schemas.user import User
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette import status
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from app.database import get_session
 from app.database.images import Images
@@ -925,8 +924,8 @@ async def download_dataset_quantification(
         user (AuthenticatedUser): The current authenticated user.
 
     Returns:
-        dict: A dictionary containing the success status and message if error, or a
-        StreamingResponse with the CSV file.
+        dict: ``{success: False, message}`` when the dataset has no rows, otherwise a
+        ``Response`` carrying the whole document as JSON or CSV.
     """
 
     # When a profile is given, the export emits one column per profile metric/component
@@ -953,15 +952,29 @@ async def download_dataset_quantification(
             "message": "No data found for the given dataset and filters."
         }
     else:
-        file_data = None
+        # Sent as one whole response rather than streamed.
+        #
+        # `to_json` / `to_csv` build the entire document in memory before this point, so
+        # there is nothing left to stream and a `StreamingResponse` only costs. It costs a
+        # lot in the JSON case: given a plain `str` it iterates the *string*, which yields
+        # one character at a time, so a 150 KB export left here as one ASGI body message
+        # per character — 150,000 chunked-transfer frames, each with its own framing
+        # overhead and socket write. Measured on a real dataset that was 1.3 minutes of
+        # "content download" for a few hundred rows. (The CSV branch happened to escape it
+        # by wrapping in `StringIO`, which iterates by line.)
+        #
+        # A plain `Response` also sets `Content-Length`, which lets the client show real
+        # progress and lets `GZipMiddleware` compress the body in one pass.
         match file_format:
             case "json":
-                file_data = df.to_json(orient="records", default_handler=str)
+                content = df.to_json(orient="records", default_handler=str)
+                media_type = "application/json"
             case "csv":
-                file_data = StringIO(df.to_csv(index=False))
+                content = df.to_csv(index=False)
+                media_type = "text/csv"
             case _:
                 raise ValueError(f"Invalid file format: {file_format}")
-        response = StreamingResponse(file_data, media_type=f"text/{file_format}")
+        response = Response(content=content, media_type=media_type)
         response.headers[
             "Content-Disposition"] = f'attachment; filename="{dataset_name.replace(' ', '_')}_dataset.{file_format}"'
         return response
