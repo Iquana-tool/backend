@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 from logging import getLogger
 from typing import Optional
 
@@ -37,19 +38,116 @@ DEFAULT_MODEL_REGISTRY_KEY = "mask2former"
 # its MLflow run.
 TRAINING_EXPERIMENT = "instance-segmentation-training"
 
-# Map MLflow run statuses to the coarse state the frontend renders.
-_STATE_BY_MLFLOW_STATUS = {
+# Canonical-to-public lifecycle state mapping.
+_CANONICAL_TO_PUBLIC_STATE = {
+    "starting": "STARTING",
+    "running": "PROGRESS",
+    "completed": "SUCCESS",
+    "failed": "FAILED",
+    "cancelled": "CANCELLED",
+    "timed_out": "TIMED_OUT",
+}
+
+# Legacy MLflow status fallback mapping when training_state tag is absent.
+_LEGACY_MLFLOW_STATUS_TO_PUBLIC_STATE = {
+    "RUNNING": "PROGRESS",
     "FINISHED": "SUCCESS",
     "FAILED": "FAILED",
     "KILLED": "CANCELLED",
 }
 
-_MLFLOW_STATUS_BY_CELERY_STATE = {
-    "SUCCESS": "FINISHED",
-    "FAILURE": "FAILED",
-    "REVOKED": "KILLED",
-}
-_TERMINAL_STATES = {"SUCCESS", "FAILED", "CANCELLED"}
+_TERMINAL_STATES = {"SUCCESS", "FAILED", "CANCELLED", "TIMED_OUT"}
+_VALIDATION_METRIC_PATTERN = re.compile(
+    r"^val_mask_(iou|f1|precision|recall)_label_(\d+)$"
+)
+
+
+def _parse_timestamp(raw_value) -> float | None:
+    """Safely parse optional numeric queue timestamps (e.g. Unix seconds)."""
+    if raw_value is None:
+        return None
+    try:
+        return float(raw_value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _map_training_state_to_public_state(
+    training_state: Optional[str], mlflow_status: Optional[str] = None
+) -> str:
+    """Map canonical/durable training state to public state with legacy MLflow fallback."""
+    canonical = str(training_state).lower().strip() if training_state else None
+
+    # If MLflow status is terminal (FINISHED, FAILED, KILLED) but the training_state tag is still
+    # non-terminal (starting, running), the terminal MLflow status takes precedence over the stale tag.
+    if mlflow_status in _LEGACY_MLFLOW_STATUS_TO_PUBLIC_STATE and mlflow_status != "RUNNING":
+        legacy_state = _LEGACY_MLFLOW_STATUS_TO_PUBLIC_STATE[mlflow_status]
+        if (
+            canonical not in _CANONICAL_TO_PUBLIC_STATE
+            or _CANONICAL_TO_PUBLIC_STATE[canonical] not in _TERMINAL_STATES
+        ):
+            return legacy_state
+
+    if canonical and canonical in _CANONICAL_TO_PUBLIC_STATE:
+        return _CANONICAL_TO_PUBLIC_STATE[canonical]
+    if mlflow_status:
+        return _LEGACY_MLFLOW_STATUS_TO_PUBLIC_STATE.get(mlflow_status, "PROGRESS")
+    return "STARTING"
+
+
+
+def _empty_snapshot(task_id: str, ai_status: Optional[dict] = None) -> dict:
+    """Build an initial/fallback snapshot when no MLflow run exists yet."""
+    ai_status = ai_status or {}
+    raw_training_state = ai_status.get("training_state")
+    celery_or_effective_state = ai_status.get("state")
+
+    if raw_training_state:
+        training_state = str(raw_training_state).lower().strip()
+        state = _map_training_state_to_public_state(training_state)
+    elif celery_or_effective_state == "REVOKED":
+        state = "CANCELLED"
+        training_state = "cancelled"
+    elif celery_or_effective_state == "FAILURE":
+        state = "FAILED"
+        training_state = "failed"
+    elif celery_or_effective_state == "SUCCESS":
+        state = "SUCCESS"
+        training_state = "completed"
+    else:
+        state = "STARTING"
+        training_state = "starting"
+
+    mlflow_status = None
+    if state in {"CANCELLED", "TIMED_OUT"}:
+        mlflow_status = "KILLED"
+    elif state == "FAILED":
+        mlflow_status = "FAILED"
+    elif state == "SUCCESS":
+        mlflow_status = "FINISHED"
+
+    return {
+        "task_id": task_id,
+        "run_id": ai_status.get("run_id"),
+        "state": state,
+        "training_state": training_state,
+        "message": ai_status.get("message"),
+        "queued_at": _parse_timestamp(ai_status.get("queued_at")),
+        "start_deadline": _parse_timestamp(ai_status.get("start_deadline")),
+        "started_at": ai_status.get("started_at"),
+        "mlflow_status": mlflow_status,
+        "epoch": 0,
+        "total_epochs": None,
+        "training_parameters": {},
+        "loss": [],
+        "validation_metrics": None,
+        "validation_metrics_unavailable": None,
+        "label_ids": [],
+        "run_name": None,
+        "start_time": None,
+        "end_time": None,
+    }
+
 
 
 class StartTrainingBody(BaseModel):
@@ -184,7 +282,11 @@ async def start_training(
     )
 
     try:
-        result = await service.start_training(request, model_run_name=body.model_run_name)
+        result = await service.start_training(
+            request,
+            model_run_name=body.model_run_name,
+            dataset_name=dataset.name,
+        )
     except Exception as exc:
         logger.exception("Failed to start instance segmentation training.")
         raise HTTPException(status_code=http_status.HTTP_502_BAD_GATEWAY,
@@ -226,48 +328,142 @@ def _parse_label_ids(raw) -> list[int]:
         return []
 
 
-def _snapshot_from_run(client, run, task_id: Optional[str] = None) -> dict:
+def _validation_metrics_from_run(run) -> dict | None:
+    """Expose final held-out quality metrics in a UI-friendly shape."""
+    per_label: dict[int, dict[str, float | int]] = {}
+    for metric_name, value in run.data.metrics.items():
+        match = _VALIDATION_METRIC_PATTERN.fullmatch(metric_name)
+        if match is None:
+            continue
+        metric, raw_label_id = match.groups()
+        label_id = int(raw_label_id)
+        per_label.setdefault(label_id, {"label_id": label_id})[metric] = float(value)
+
+    macro_iou = run.data.metrics.get("val_mask_iou_macro")
+    macro_f1 = run.data.metrics.get("val_mask_f1_macro")
+    macro_precision = run.data.metrics.get("val_mask_precision_macro")
+    macro_recall = run.data.metrics.get("val_mask_recall_macro")
+    ap = run.data.metrics.get("val_mask_ap")
+    ap50 = run.data.metrics.get("val_mask_ap50")
+    ap75 = run.data.metrics.get("val_mask_ap75")
+    if not per_label and all(
+        metric is None
+        for metric in (
+            macro_iou,
+            macro_f1,
+            macro_precision,
+            macro_recall,
+            ap,
+            ap50,
+            ap75,
+        )
+    ):
+        return None
+
+    return {
+        "ap": float(ap) if ap is not None else None,
+        "ap50": float(ap50) if ap50 is not None else None,
+        "ap75": float(ap75) if ap75 is not None else None,
+        "macro_iou": float(macro_iou) if macro_iou is not None else None,
+        "macro_f1": float(macro_f1) if macro_f1 is not None else None,
+        "macro_precision": (
+            float(macro_precision) if macro_precision is not None else None
+        ),
+        "macro_recall": float(macro_recall) if macro_recall is not None else None,
+        "per_label": [per_label[label_id] for label_id in sorted(per_label)],
+    }
+
+
+def _snapshot_from_run(
+    client, run, task_id: Optional[str] = None, ai_status: Optional[dict] = None
+) -> dict:
     """Build a progress snapshot dict from an MLflow run."""
     run_id = run.info.run_id
     mlflow_status = run.info.status
-    state = _STATE_BY_MLFLOW_STATUS.get(mlflow_status, "PROGRESS")
+    tags = getattr(run.data, "tags", {}) or {}
+    ai_status = ai_status or {}
 
-    try:
-        loss_history = client.get_metric_history(run_id, "loss")
-    except Exception:
-        loss_history = []
-    loss = [{"epoch": int(m.step), "value": m.value}
-            for m in sorted(loss_history, key=lambda m: m.step)]
+    raw_training_state = tags.get("training_state") or ai_status.get("training_state")
+    training_state = (
+        str(raw_training_state).lower().strip() if raw_training_state else None
+    )
+    state = _map_training_state_to_public_state(training_state, mlflow_status)
 
-    total_epochs = run.data.params.get("epochs")
+    loss_history = []
+    if client is not None:
+        try:
+            loss_history = client.get_metric_history(run_id, "loss")
+        except Exception:
+            loss_history = []
+    loss = [
+        {"epoch": int(m.step), "value": m.value}
+        for m in sorted(loss_history, key=lambda m: m.step)
+    ]
+
+    params = getattr(run.data, "params", {}) or {}
+    total_epochs = params.get("epochs")
     total_epochs = int(total_epochs) if total_epochs is not None else None
     training_parameters = {
         key: value
-        for key, value in run.data.params.items()
+        for key, value in params.items()
         if key not in {"dataset_id", "selected_database_label_ids"}
     }
 
-    epoch_metric = run.data.metrics.get("epoch")
+    metrics = getattr(run.data, "metrics", {}) or {}
+    epoch_metric = metrics.get("epoch")
     epoch = int(epoch_metric) if epoch_metric is not None else (loss[-1]["epoch"] if loss else 0)
+    validation_metrics = _validation_metrics_from_run(run)
+
+    message = (
+        tags.get("status_message")
+        or tags.get("message")
+        or ai_status.get("message")
+    )
+    queued_at = _parse_timestamp(
+        tags.get("queued_at") or ai_status.get("queued_at")
+    )
+    start_deadline = _parse_timestamp(
+        tags.get("start_deadline") or ai_status.get("start_deadline")
+    )
+    started_at = (
+        tags.get("started_at")
+        or ai_status.get("started_at")
+    )
+
+    resolved_task_id = task_id if task_id is not None else tags.get("celery_task_id")
 
     return {
-        "task_id": task_id if task_id is not None else run.data.tags.get("celery_task_id"),
+        "task_id": resolved_task_id,
         "run_id": run_id,
         "state": state,
+        "training_state": training_state,
+        "message": message,
+        "queued_at": queued_at,
+        "start_deadline": start_deadline,
+        "started_at": started_at,
         "mlflow_status": mlflow_status,
         "epoch": epoch,
         "total_epochs": total_epochs,
         "training_parameters": training_parameters,
         "loss": loss,
-        "label_ids": _parse_label_ids(run.data.tags.get("label_ids")),
-        "run_name": run.data.tags.get("run_name"),  # user-supplied alias; None when not set
+        "validation_metrics": validation_metrics,
+        "validation_metrics_unavailable": tags.get("validation_metrics_unavailable"),
+        "label_ids": _parse_label_ids(tags.get("label_ids")),
+        "run_name": tags.get("run_name"),  # user-supplied alias; None when not set
         "start_time": run.info.start_time,
         "end_time": run.info.end_time,
     }
 
 
-def _set_run_terminated(client, run_id: str, mlflow_status: str):
-    """Set a verified terminal MLflow state and return the fresh run record."""
+def _set_run_terminated(
+    client, run_id: str, mlflow_status: str, training_state: Optional[str] = None
+):
+    """Set a verified terminal MLflow state and optional tag, and return the fresh run record."""
+    if training_state:
+        try:
+            client.set_tag(run_id, "training_state", training_state)
+        except Exception:
+            pass
     client.set_terminated(run_id, status=mlflow_status)
     return client.get_run(run_id)
 
@@ -283,45 +479,79 @@ async def _reconcile_run_with_celery(run):
     if run.info.status != "RUNNING":
         return run
 
-    task_id = run.data.tags.get("celery_task_id")
+    tags = getattr(run.data, "tags", {}) or {}
+    task_id = tags.get("celery_task_id")
     if not task_id:
         return run
 
     try:
-        celery_state = await service.get_training_task_state(task_id)
+        ai_status = await service.get_training_task_status(task_id)
     except Exception:
-        logger.warning("Could not read Celery state for training task %s.", task_id)
+        logger.warning("Could not read Celery/AI state for training task %s.", task_id)
         return run
 
-    mlflow_status = _MLFLOW_STATUS_BY_CELERY_STATE.get(celery_state)
-    if mlflow_status is None:
+    # If the AI call updated shared MLflow tags, refetch the run before creating the snapshot
+    try:
+        refreshed_run = await asyncio.to_thread(MODEL_REGISTRY.client.get_run, run.info.run_id)
+        if refreshed_run is not None:
+            run = refreshed_run
+    except Exception:
+        pass
+
+    if run.info.status != "RUNNING":
+        return run
+
+    training_state = (ai_status.get("training_state") or "").lower().strip()
+    celery_state = ai_status.get("state")
+
+    target_mlflow_status = None
+    target_training_state = None
+    if training_state == "completed" or celery_state == "SUCCESS":
+        target_mlflow_status = "FINISHED"
+        target_training_state = "completed"
+    elif training_state == "failed" or celery_state == "FAILURE":
+        target_mlflow_status = "FAILED"
+        target_training_state = "failed"
+    elif training_state in {"cancelled", "timed_out"} or celery_state == "REVOKED":
+        target_mlflow_status = "KILLED"
+        target_training_state = "timed_out" if training_state == "timed_out" else "cancelled"
+
+    if target_mlflow_status is None:
         return run
 
     return await asyncio.to_thread(
-        _set_run_terminated, MODEL_REGISTRY.client, run.info.run_id, mlflow_status
+        _set_run_terminated,
+        MODEL_REGISTRY.client,
+        run.info.run_id,
+        target_mlflow_status,
+        target_training_state,
     )
+
 
 
 async def _read_training_snapshot(task_id: str) -> dict:
     """Read a progress snapshot for a Celery ``task_id`` straight from MLflow.
 
-    Returns a ``"starting"`` snapshot while no run exists yet (task queued but not
-    picked up by a worker).
+    Returns an initial snapshot while no MLflow run exists yet.
     """
     run = await asyncio.to_thread(_find_training_run, task_id)
     if run is None:
+        ai_status = None
         try:
-            celery_state = await service.get_training_task_state(task_id)
+            ai_status = await service.get_training_task_status(task_id)
         except Exception:
-            celery_state = None
-        if celery_state == "REVOKED":
-            return {"task_id": task_id, "run_id": None, "state": "CANCELLED", "mlflow_status": "KILLED",
-                    "epoch": 0, "total_epochs": None, "loss": [], "label_ids": []}
-        if celery_state == "FAILURE":
-            return {"task_id": task_id, "run_id": None, "state": "FAILED", "mlflow_status": "FAILED",
-                    "epoch": 0, "total_epochs": None, "loss": [], "label_ids": []}
-        return {"task_id": task_id, "run_id": None, "state": "starting", "mlflow_status": None,
-                "epoch": 0, "total_epochs": None, "loss": [], "label_ids": []}
+            logger.warning("Could not read training task status from AI service for task %s.", task_id)
+            ai_status = None
+
+        if ai_status and ai_status.get("run_id"):
+            try:
+                run = await asyncio.to_thread(MODEL_REGISTRY.client.get_run, ai_status["run_id"])
+            except Exception:
+                run = None
+
+        if run is None:
+            return _empty_snapshot(task_id, ai_status)
+
     run = await _reconcile_run_with_celery(run)
     return await asyncio.to_thread(_snapshot_from_run, MODEL_REGISTRY.client, run, task_id)
 
@@ -385,7 +615,7 @@ async def get_training_status_stream(task_id: str, request: Request,
     """Stream MLflow-backed progress for a training job as Server-Sent Events.
 
     Polls the MLflow run every couple of seconds and emits one ``data:`` event per
-    tick until the run reaches a terminal state (FINISHED/FAILED/KILLED).
+    tick until the run reaches a terminal state (SUCCESS/FAILED/CANCELLED/TIMED_OUT).
     """
 
     async def event_generator():
@@ -408,21 +638,43 @@ async def get_training_status_stream(task_id: str, request: Request,
 @router.delete("/training/{task_id}")
 async def cancel_training_of_model(task_id: str, user: User = Depends(get_current_user)):
     """Cancel a task and close its matching MLflow run as cancelled."""
+    ai_status = None
     try:
-        await service.cancel_training(task_id)
+        ai_status = await service.cancel_training(task_id)
+    except Exception as cancel_exc:
+        # Check if the task/run is already terminal before failing
         run = await asyncio.to_thread(_find_training_run, task_id)
-        if run is not None and run.info.status == "RUNNING":
-            run = await asyncio.to_thread(
-                _set_run_terminated, MODEL_REGISTRY.client, run.info.run_id, "KILLED"
+        if run is not None and run.info.status in {"FINISHED", "FAILED", "KILLED"}:
+            return await asyncio.to_thread(
+                _snapshot_from_run, MODEL_REGISTRY.client, run, task_id
             )
-        if run is None:
-            return {"task_id": task_id, "run_id": None, "state": "CANCELLED", "mlflow_status": "KILLED",
-                    "epoch": 0, "total_epochs": None, "loss": [], "label_ids": []}
-        return await asyncio.to_thread(_snapshot_from_run, MODEL_REGISTRY.client, run, task_id)
-    except Exception as exc:
-        logger.exception("Failed to cancel instance segmentation training.")
-        raise HTTPException(status_code=http_status.HTTP_502_BAD_GATEWAY,
-                            detail=f"Could not cancel training: {exc}")
+
+        logger.exception(
+            "Failed to cancel instance segmentation training on AI service for %s.", task_id
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not cancel training: {cancel_exc}",
+        )
+
+    run = await asyncio.to_thread(_find_training_run, task_id)
+    if run is not None and run.info.status == "RUNNING":
+        run = await asyncio.to_thread(
+            _set_run_terminated, MODEL_REGISTRY.client, run.info.run_id, "KILLED", "cancelled"
+        )
+
+    if run is None:
+        cancel_payload = ai_status or {
+            "training_state": "cancelled",
+            "state": "REVOKED",
+            "message": "Training cancelled by user.",
+        }
+        return _empty_snapshot(task_id, cancel_payload)
+    return await asyncio.to_thread(
+        _snapshot_from_run, MODEL_REGISTRY.client, run, task_id, ai_status
+    )
+
+
 
 
 # The POST /run inference endpoint was removed: nothing called it, and its request

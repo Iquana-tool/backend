@@ -35,6 +35,7 @@ class InstanceSegmentationService(BaseService):
         self,
         request: InstanceSegmentationTrainingRequest,
         model_run_name: str | None = None,
+        dataset_name: str | None = None,
     ) -> dict:
         """Dispatch a training job to the instance-segmentation service.
 
@@ -48,10 +49,14 @@ class InstanceSegmentationService(BaseService):
                 MLflow tag (e.g. ``"Cells-FineTuned-v1"``).  Passed as a query
                 parameter so the shared ``InstanceSegmentationTrainingRequest`` schema
                 in ``iquana_toolbox`` does not need to change.
+            dataset_name: Optional snapshot of the dataset's human-readable name,
+                also passed as a query parameter for model provenance metadata.
         """
         params = {}
         if model_run_name:
             params["model_run_name"] = model_run_name
+        if dataset_name:
+            params["dataset_name"] = dataset_name
         async with httpx.AsyncClient(timeout=120) as client:
             url = f"{self.backend_url}/train"
             response = await client.post(url, json=request.model_dump(), params=params)
@@ -66,10 +71,18 @@ class InstanceSegmentationService(BaseService):
             response.raise_for_status()
             return response.json()
 
-    async def get_training_task_state(self, task_id: str) -> str:
-        """Read the authoritative Celery state for a training task."""
+    async def get_training_task_status(self, task_id: str) -> dict:
+        """Read the full training lifecycle status from the instance-segmentation service."""
         async with httpx.AsyncClient(timeout=10) as client:
             url = f"{self.backend_url}/train/{task_id}"
             response = await client.get(url)
             response.raise_for_status()
-            return response.json().get("state", "PENDING")
+            return response.json()
+
+    async def get_training_task_state(self, task_id: str) -> str:
+        """Read the authoritative Celery state for a training task.
+
+        Compatibility wrapper returning the coarse Celery state.
+        """
+        payload = await self.get_training_task_status(task_id)
+        return payload.get("state", "PENDING")
