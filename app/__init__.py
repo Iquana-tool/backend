@@ -16,6 +16,7 @@ from app.routes.general.contours import router as contour_router
 from app.routes.general.datasets import router as dataset_router
 from app.routes.general.image_metadata import router as image_metadata_router
 from app.routes.general.images import router as image_router
+from app.routes.general.instance import router as instance_router
 from app.routes.general.labels import router as label_router
 from app.routes.general.masks import router as mask_router
 from app.routes.general.members import invite_router, router as member_router
@@ -55,7 +56,7 @@ def create_app():
 
     app = FastAPI(
         title="IQUANA API",
-        description="FastAPI backend for interactive coral prompted_segmentation",
+        description="FastAPI backend for IQUANA — Intelligent QUANtification, Annotation and Analysis",
         version="0.1.0",
         # Keep empty for local runs; set FASTAPI_ROOT_PATH behind reverse proxy.
         root_path=root_path,
@@ -101,6 +102,7 @@ def create_app():
     # Include the routers
     # General Routers
     app.include_router(status_router)
+    app.include_router(instance_router)
     app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(dataset_router)
