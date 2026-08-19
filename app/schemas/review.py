@@ -24,6 +24,13 @@ class RejectionReason(StrEnum):
     BAD_OUTLINE = "bad_outline"
     WRONG_LABEL = "wrong_label"
     MISSING_OBJECTS = "missing_objects"
+    #: One outline covers several real objects and has to be split.
+    MERGED_OBJECTS = "merged_objects"
+    #: The outline covers only part of its object -- typically because another
+    #: object overlaps it and the rest was never traced. Distinct from
+    #: BAD_OUTLINE (which is about accuracy) and MISSING_OBJECTS (whole objects
+    #: absent from the image), because the fix is "extend this outline".
+    MISSING_PARTS = "missing_parts"
     EXTRA_OBJECTS = "extra_objects"
     DUPLICATE_OBJECT = "duplicate_object"
     WRONG_HIERARCHY = "wrong_hierarchy"
@@ -49,6 +56,8 @@ REJECTION_REASON_LABELS: dict[RejectionReason, str] = {
     RejectionReason.BAD_OUTLINE: "Outline is inaccurate",
     RejectionReason.WRONG_LABEL: "Wrong label assigned",
     RejectionReason.MISSING_OBJECTS: "Objects are missing",
+    RejectionReason.MERGED_OBJECTS: "Merged objects — should be several",
+    RejectionReason.MISSING_PARTS: "Only part of the object is outlined",
     RejectionReason.EXTRA_OBJECTS: "Contains objects that are not there",
     RejectionReason.DUPLICATE_OBJECT: "Duplicate of another object",
     RejectionReason.WRONG_HIERARCHY: "Wrong parent/child nesting",
