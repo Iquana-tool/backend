@@ -231,7 +231,12 @@ async def delete_contour(
     await contours_db.delete_contour(contour_id, db)
     history_db.record_delete(db, mask_id, user.username, snapshot)
 
+    # The descendants go with the CASCADE, so a caller holding its own list of
+    # this mask's contours (the review queue does) needs to know which ids are
+    # gone, not just that the root one is.
+    deleted_ids = [entry["id"] for entry in (snapshot or {}).get("contours", [])]
     return {
         "success": True,
         "message": "Contour and descendants deleted successfully.",
+        "deleted_ids": deleted_ids,
     }
