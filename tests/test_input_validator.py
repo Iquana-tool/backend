@@ -200,13 +200,13 @@ def test_validate_and_normalize_inputs_query_contour_id():
             {"conditioning": {"strategy": "global_scene", "query_contour_id": 42}},
         )
 
-    # 3. Rejected on instances conditioning
+    # 3. Rejected on instances conditioning without retrieval strategy
     contract_inst = InputContract(
         task="instance-segmentation",
         conditioning=ConditioningSpec(kind="instances", unit="instance", min_units=1, max_units=5),
         parameters=[],
     )
-    with pytest.raises(ValueError, match="Conditioning kind 'instances' does not accept query_contour_id"):
+    with pytest.raises(ValueError, match="Conditioning kind 'instances' without a retrieval strategy does not accept query_contour_id"):
         validate_and_normalize_inputs(contract_inst, {"conditioning": {"query_contour_id": 42}})
 
     # 4. Accepted on embeddings with region_mean
@@ -244,3 +244,20 @@ def test_validate_and_normalize_inputs_query_contour_id():
     )
     with pytest.raises(ValueError, match="does not accept query_contour_id"):
         validate_and_normalize_inputs(contract_none, {"conditioning": {"query_contour_id": 42}})
+
+
+def test_validate_and_normalize_inputs_strategy_registration_check():
+    """Unregistered retrieval strategies are rejected; known ones are accepted."""
+    contract = InputContract(
+        task="cross-image-suggestion",
+        conditioning=ConditioningSpec(kind="reference_images", unit="image", min_units=1, max_units=1),
+        parameters=[],
+    )
+
+    # 1. Unregistered strategy fails
+    with pytest.raises(ValueError, match="Unknown retrieval strategy 'not_registered'"):
+        validate_and_normalize_inputs(contract, {"conditioning": {"strategy": "not_registered"}})
+
+    # 2. Known strategy succeeds
+    res = validate_and_normalize_inputs(contract, {"conditioning": {"strategy": "concept_annotations"}})
+    assert res["conditioning"]["strategy"] == "concept_annotations"

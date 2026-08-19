@@ -217,13 +217,35 @@ def validate_and_normalize_inputs(
 
         if cond_kind == "instances":
             if strategy is not None:
-                raise ValueError("Conditioning kind 'instances' does not accept a retrieval strategy.")
-            if query_contour_id is not None:
-                raise ValueError("Conditioning kind 'instances' does not accept query_contour_id.")
+                effective_strat = strategy
+                from app.services.exemplar_retrieval import (
+                    RETRIEVAL_STRATEGIES,
+                    is_region_based_strategy,
+                )
+                if effective_strat not in RETRIEVAL_STRATEGIES:
+                    raise ValueError(
+                        f"Unknown retrieval strategy '{effective_strat}'. "
+                        f"Known strategies: {sorted(RETRIEVAL_STRATEGIES.keys())}."
+                    )
+                if query_contour_id is not None and not is_region_based_strategy(effective_strat):
+                    raise ValueError(
+                        f"Retrieval strategy '{effective_strat}' does not accept query_contour_id; "
+                        "query_contour_id is only accepted for region-based retrieval strategies."
+                    )
+            elif query_contour_id is not None:
+                raise ValueError("Conditioning kind 'instances' without a retrieval strategy does not accept query_contour_id.")
 
         elif cond_kind == "reference_images":
             effective_strat = strategy or "global_scene"
-            from app.services.exemplar_retrieval import is_region_based_strategy
+            from app.services.exemplar_retrieval import (
+                RETRIEVAL_STRATEGIES,
+                is_region_based_strategy,
+            )
+            if effective_strat not in RETRIEVAL_STRATEGIES:
+                raise ValueError(
+                    f"Unknown retrieval strategy '{effective_strat}'. "
+                    f"Known strategies: {sorted(RETRIEVAL_STRATEGIES.keys())}."
+                )
             if query_contour_id is not None and not is_region_based_strategy(effective_strat):
                 raise ValueError(
                     f"Retrieval strategy '{effective_strat}' does not accept query_contour_id; "

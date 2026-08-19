@@ -95,6 +95,7 @@ def _predict_instance_segmentation(
         label=Label.from_db(label_row) if label_row is not None else None,
         parameters=parameters,
         contour_ids=cond_result.get("contour_ids", []),
+        positive_exemplars=cond_result.get("positive_exemplars", []),
         embeddings=cond_result.get("vectors", {}),
     )
     response = asyncio.run(InstanceSegmentationService().inference(request))
@@ -111,7 +112,7 @@ def _predict_cross_image(
     cond_result = dispatch_conditioning(db, step, image, username)
     cond_kind = step.input_contract.conditioning.kind
 
-    if cond_kind == "reference_images":
+    if cond_kind in ("reference_images", "instances"):
         exemplars = cond_result.get("exemplars", [])
         if not exemplars:
             logger.info(
@@ -133,6 +134,7 @@ def _predict_cross_image(
         concept=cond_result.get("concept"),
         parameters=parameters,
         contour_ids=cond_result.get("contour_ids", []),
+        positive_exemplars=cond_result.get("positive_exemplars", []),
         embeddings=cond_result.get("vectors", {}),
     )
     logger.debug(

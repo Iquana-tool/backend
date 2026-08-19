@@ -28,9 +28,49 @@ def test_resolve_input_contract_empty_contracts():
     contract, provenance = resolve_input_contract({"input_contracts": []}, "cross-image-suggestion")
     assert provenance == "legacy_default"
     assert contract == LEGACY_TASK_DEFAULTS["cross-image-suggestion"]
-    assert contract.conditioning.kind == "reference_images"
+    assert contract.conditioning.kind == "instances"
+    assert contract.conditioning.unit == "instance"
     assert contract.conditioning.min_units == 1
-    assert contract.conditioning.max_units == 1
+    assert contract.conditioning.max_units == 32
+    assert contract.conditioning.user_selectable_count is True
+    assert contract.parameters == []
+
+
+def test_resolve_input_contract_tag_overrides_artifact_contract():
+    """Registered model tag contracts override stale artifact-level contracts."""
+    stale_artifact_contract = {
+        "task": "instance-segmentation",
+        "conditioning": {"kind": "none", "user_selectable_count": False},
+        "parameters": [
+            {
+                "key": "threshold",
+                "label": "Stale Old Threshold",
+                "type": "float",
+                "default_value": 0.1,
+            }
+        ],
+    }
+    updated_tag_contract = {
+        "task": "instance-segmentation",
+        "conditioning": {"kind": "none", "user_selectable_count": False},
+        "parameters": [
+            {
+                "key": "threshold",
+                "label": "Updated Tag Threshold",
+                "type": "float",
+                "default_value": 0.85,
+            }
+        ],
+    }
+    model_info = {
+        "name": "model_with_stale_artifact",
+        "input_contracts": [stale_artifact_contract],
+        "tags": {"input_contracts": json.dumps([updated_tag_contract])},
+    }
+    contract, provenance = resolve_input_contract(model_info, "instance-segmentation")
+    assert provenance == "declared"
+    assert contract.parameters[0].label == "Updated Tag Threshold"
+    assert contract.parameters[0].default_value == 0.85
 
 
 def test_resolve_input_contract_declared_dict():

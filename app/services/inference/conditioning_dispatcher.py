@@ -103,48 +103,58 @@ def resolve_reference_images(
                 f"{model_id!r}; embed it first.",
             )
 
-    # Retrieve candidate matches
-    raw_matches = retrieve_exemplars(
-        session,
-        strategy,
-        RetrievalQuery(
-            dataset_id=dataset_id,
-            target_image_id=target_image_id,
-            concept_label_id=concept_label_id,
-            query_vector=query_vector,
-            top_k=32,  # Fetch sufficient candidate pool to find eligible reference images
-        ),
-        model_id=model_id,
-    )
-    if not raw_matches:
-        return [], []
-
-    # Filter out target image and group by image_id
-    matches_by_image: dict[int, list[ExemplarMatch]] = OrderedDict()
-    for match in raw_matches:
-        if match.image_id == target_image_id:
-            continue
-        if match.image_id not in matches_by_image:
-            matches_by_image[match.image_id] = []
-        matches_by_image[match.image_id].append(match)
-
-    # Filter images by complete-annotation requirement if specified
+    # Retrieve candidate matches with progressive search to avoid small hard caps
+    # when filtering candidates by complete annotation. Search until candidate source is exhausted.
     eligible_image_ids: list[int] = []
-    for image_id in matches_by_image.keys():
-        if requires_complete_annotation:
-            if not is_image_fully_annotated(session, image_id):
-                continue
-        eligible_image_ids.append(image_id)
-        if len(eligible_image_ids) >= max_images:
+    matches_by_image: dict[int, list[ExemplarMatch]] = OrderedDict()
+    batch_top_k = 64
+
+    while len(eligible_image_ids) < max_images:
+        raw_matches = retrieve_exemplars(
+            session,
+            strategy,
+            RetrievalQuery(
+                dataset_id=dataset_id,
+                target_image_id=target_image_id,
+                concept_label_id=concept_label_id,
+                query_vector=query_vector,
+                top_k=batch_top_k,
+            ),
+            model_id=model_id,
+        )
+        if not raw_matches:
             break
+
+        matches_by_image.clear()
+        for match in raw_matches:
+            if match.image_id == target_image_id:
+                continue
+            if match.image_id not in matches_by_image:
+                matches_by_image[match.image_id] = []
+            matches_by_image[match.image_id].append(match)
+
+        eligible_image_ids = []
+        for image_id in matches_by_image.keys():
+            if requires_complete_annotation:
+                if not is_image_fully_annotated(session, image_id):
+                    continue
+            eligible_image_ids.append(image_id)
+            if len(eligible_image_ids) >= max_images:
+                break
+
+        if len(eligible_image_ids) >= max_images or len(raw_matches) < batch_top_k:
+            break
+        batch_top_k *= 2
 
     if not eligible_image_ids:
         return [], []
 
-    # Collect selected matches from chosen reference images
+    # Collect selected matches from chosen reference images.
+    # Take the highest-ranked exemplar from each chosen image.
     selected_matches: list[ExemplarMatch] = []
     for img_id in eligible_image_ids:
-        selected_matches.extend(matches_by_image[img_id])
+        img_matches = matches_by_image[img_id]
+        selected_matches.extend(img_matches[:1])
 
     contour_ids = [m.contour_id for m in selected_matches]
     rows = (
@@ -168,7 +178,7 @@ def resolve_reference_images(
             y=contour.y,
             confidence=contour.confidence_score,
         ).to_binary_mask_model(image.height, image.width)
-        exemplars.append(CrossImageExemplar(image_url=image.file_path, mask=mask))
+        exemplars.append(CrossImageExemplar(image_url=str(image.file_path), mask=mask))
 
     return exemplars, selected_matches
 
@@ -180,10 +190,13 @@ def resolve_instance_conditioning(
     concept_label_id: int | None,
     max_instances: int = 5,
     target_image_id: int | None = None,
-) -> list[int]:
-    """Resolve ranked exemplar contour IDs for instance-level conditioning."""
+) -> tuple[list[int], list[Any], list["CrossImageExemplar"]]:
+    """Resolve ranked exemplar contour IDs, materialized BinaryMasks, and source-aware CrossImageExemplars."""
+    from iquana_toolbox.schemas.database.contours import Contour
+    from iquana_toolbox.schemas.networking.http.services import CrossImageExemplar
+
     q = (
-        session.query(Contours.id)
+        session.query(Contours, Images)
         .join(Masks, Masks.id == Contours.mask_id)
         .join(Images, Images.id == Masks.image_id)
         .filter(
@@ -199,7 +212,22 @@ def resolve_instance_conditioning(
     q = q.order_by(Contours.reviewed_by.any().desc(), Contours.created_at.desc())
     if max_instances:
         q = q.limit(max_instances)
-    return [row[0] for row in q.all()]
+
+    rows = q.all()
+    contour_ids: list[int] = []
+    positive_exemplars: list[Any] = []
+    cross_image_exemplars: list[CrossImageExemplar] = []
+    for contour, image in rows:
+        contour_ids.append(contour.id)
+        bm = Contour(
+            x=contour.x,
+            y=contour.y,
+            confidence=contour.confidence_score,
+        ).to_binary_mask_model(image.height, image.width)
+        positive_exemplars.append(bm)
+        cross_image_exemplars.append(CrossImageExemplar(image_url=str(image.file_path), mask=bm))
+
+    return contour_ids, positive_exemplars, cross_image_exemplars
 
 
 CONTOUR_SCOPED_EMBEDDING_KINDS = {REGION_MEAN}
@@ -396,23 +424,97 @@ def dispatch_conditioning(
             "kind": "reference_images",
             "exemplars": exemplars,
             "matches": matches,
+            "contour_ids": [m.contour_id for m in matches],
+            "positive_exemplars": [ex.mask.model_dump(mode="json") if hasattr(ex.mask, "model_dump") else ex.mask for ex in exemplars],
             "concept": concept,
         }
 
     if kind == "instances":
+        strategy = cond_inputs.get("strategy")
+        query_contour_id = cond_inputs.get("query_contour_id")
         count = cond_inputs.get("count") or 5
         if cond_spec.max_units is not None:
             count = min(count, cond_spec.max_units)
         if cond_spec.min_units is not None:
             count = max(count, cond_spec.min_units)
 
-        contour_ids = resolve_instance_conditioning(
-            session,
-            dataset_id=target_image.dataset_id,
-            concept_label_id=step.label_id,
-            max_instances=count,
-            target_image_id=target_image.id,
-        )
+        from iquana_toolbox.schemas.database.labels import Label
+        label_row = session.get(Labels, step.label_id)
+        concept = Label.from_db(label_row) if label_row is not None else None
+
+        if strategy:
+            query_vector = None
+            if query_contour_id is not None and is_region_based_strategy(strategy):
+                contour_row = (
+                    session.query(Contours.id)
+                    .join(Masks, Masks.id == Contours.mask_id)
+                    .join(Images, Images.id == Masks.image_id)
+                    .filter(Contours.id == query_contour_id, Images.dataset_id == target_image.dataset_id)
+                    .first()
+                )
+                if contour_row is None:
+                    raise HTTPException(
+                        status.HTTP_404_NOT_FOUND,
+                        f"Query contour {query_contour_id} not found in dataset {target_image.dataset_id}.",
+                    )
+                query_vector = get_embedding_vector(
+                    session, contour_id=query_contour_id, kind=REGION_MEAN, model_id=EMBEDDING_MODEL_ID
+                )
+                if query_vector is None:
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        f"Query contour {query_contour_id} has no '{REGION_MEAN}' embedding for model "
+                        f"{EMBEDDING_MODEL_ID!r}; embed it first.",
+                    )
+
+            raw_matches = retrieve_exemplars(
+                session,
+                strategy,
+                RetrievalQuery(
+                    dataset_id=target_image.dataset_id,
+                    target_image_id=target_image.id,
+                    concept_label_id=step.label_id,
+                    query_vector=query_vector,
+                    top_k=count,
+                ),
+                model_id=EMBEDDING_MODEL_ID,
+            )
+            matches = [m for m in raw_matches if m.image_id != target_image.id][:count]
+            contour_ids = [m.contour_id for m in matches]
+            rows = (
+                session.query(Contours, Images)
+                .join(Masks, Masks.id == Contours.mask_id)
+                .join(Images, Images.id == Masks.image_id)
+                .filter(Contours.id.in_(contour_ids))
+                .all()
+            )
+            by_id = {contour.id: (contour, image) for contour, image in rows}
+            exemplars: list[CrossImageExemplar] = []
+            positive_exemplars: list[Any] = []
+            for match in matches:
+                pair = by_id.get(match.contour_id)
+                if pair is None:
+                    continue
+                contour, image = pair
+                from iquana_toolbox.schemas.database.contours import Contour
+                from iquana_toolbox.schemas.networking.http.services import CrossImageExemplar
+                bm = Contour(
+                    x=contour.x,
+                    y=contour.y,
+                    confidence=contour.confidence_score,
+                ).to_binary_mask_model(image.height, image.width)
+                positive_exemplars.append(bm)
+                exemplars.append(CrossImageExemplar(image_url=str(image.file_path), mask=bm))
+        else:
+            matches = []
+            contour_ids, positive_exemplars, exemplars = resolve_instance_conditioning(
+                session,
+                dataset_id=target_image.dataset_id,
+                concept_label_id=step.label_id,
+                max_instances=count,
+                target_image_id=target_image.id,
+            )
+
         if cond_spec.min_units > 0 and len(contour_ids) < cond_spec.min_units:
             raise ValueError(
                 f"Resolved {len(contour_ids)} instance exemplar(s) for label {step.label_id} "
@@ -422,6 +524,10 @@ def dispatch_conditioning(
         return {
             "kind": "instances",
             "contour_ids": contour_ids,
+            "positive_exemplars": [bm.model_dump(mode="json") if hasattr(bm, "model_dump") else bm for bm in positive_exemplars],
+            "exemplars": exemplars,
+            "matches": matches,
+            "concept": concept,
         }
 
     if kind == "embeddings":

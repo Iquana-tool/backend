@@ -298,7 +298,8 @@ def resolve_steps(
                     raw_cond["count"] = cond.max_units or cond.min_units or 1
 
             raw_params: dict[str, Any] = {}
-            if step.min_confidence is not None and step.min_confidence > 0.0:
+            declared_param_keys = {p.key for p in option.input_contract.parameters}
+            if "threshold" in declared_param_keys and step.min_confidence is not None and step.min_confidence > 0.0:
                 raw_params["threshold"] = step.min_confidence
             raw_inputs = {"conditioning": raw_cond, "parameters": raw_params}
 

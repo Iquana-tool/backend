@@ -149,17 +149,7 @@ class ResolvedStep(InferenceStepRequest):
         default_factory=lambda: InputContract(
             task="instance-segmentation",
             conditioning=ConditioningSpec(kind="none", user_selectable_count=False),
-            parameters=[
-                HyperParameter(
-                    key="threshold",
-                    label="Confidence Threshold",
-                    type="float",
-                    default_value=0.5,
-                    min_value=0.0,
-                    max_value=1.0,
-                    step=0.05,
-                )
-            ],
+            parameters=[],
         ),
         description="Snapshot of the effective InputContract resolved for this step.",
     )
@@ -211,7 +201,7 @@ class ResolvedStep(InferenceStepRequest):
 
                 raw_params: dict[str, Any] = {}
                 min_conf = data.get("min_confidence")
-                if min_conf is not None and min_conf > 0.0:
+                if "threshold" in {p.key for p in contract.parameters} and min_conf is not None and min_conf > 0.0:
                     raw_params["threshold"] = min_conf
 
                 normalized = validate_and_normalize_inputs(

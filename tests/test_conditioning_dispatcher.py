@@ -145,10 +145,11 @@ def test_resolve_reference_images_enforces_completeness_and_max_units(world):
         model_id=MODEL,
     )
     # Only `near` image is selected (since mid is incomplete, and far is second choice)
-    assert len(exemplars) == 2  # c_near1 and c_near2
-    assert all(ex.image_url == "/data/near.png" for ex in exemplars)
-    assert len(matches) == 2
-    assert {m.contour_id for m in matches} == {c_near1.id, c_near2.id}
+    # With max_images=1, only the top exemplar from the selected reference image is materialized
+    assert len(exemplars) == 1
+    assert exemplars[0].image_url == "/data/near.png"
+    assert len(matches) == 1
+    assert matches[0].contour_id in {c_near1.id, c_near2.id}
 
     # 2. With complete annotation NOT required:
     exemplars_any, matches_any = resolve_reference_images(
@@ -171,14 +172,18 @@ def test_resolve_instances(world):
     c1 = _contour(s, world["near_mask"].id, label_id=world["label"].id)
     c2 = _contour(s, world["far_mask"].id, label_id=world["label"].id)
 
-    cids = resolve_instance_conditioning(
+    cids, positive_exemplars, cross_image_exemplars = resolve_instance_conditioning(
         s,
         dataset_id=world["ds"].id,
         concept_label_id=world["label"].id,
         max_instances=1,
     )
     assert len(cids) == 1
+    assert len(positive_exemplars) == 1
+    assert len(cross_image_exemplars) == 1
     assert cids[0] in {c1.id, c2.id}
+    assert cross_image_exemplars[0].image_url in {"/data/near.png", "/data/far.png"}
+    assert cross_image_exemplars[0].mask is not None
 
 
 def test_resolve_embeddings(world):
@@ -632,3 +637,103 @@ def test_predict_instance_segmentation_forwards_parameters_and_conditioning(worl
     assert req.parameters == {"threshold": 0.75, "min_target_frac": 0.2}
     assert req.contour_ids == [c.id]
     assert req.model_registry_key == "sam2"
+    assert len(req.positive_exemplars) == 1
+
+
+def test_resolve_reference_images_progressive_search_exhaustion(world, monkeypatch):
+    """Progressive search continues past 1024 candidates until retrieval is exhausted or enough images are found."""
+    from app.services.exemplar_retrieval import ExemplarMatch
+
+    s = world["session"]
+    calls = []
+
+    # Mock retrieve_exemplars to simulate candidate 1200 being the first fully annotated image
+    img_far = world["far"]
+    c_far = _contour(s, world["far_mask"].id, label_id=world["label"].id)
+
+    def mock_retrieve_exemplars(session, strategy, query, model_id=None):
+        calls.append(query.top_k)
+        # For small top_k, return non-fully-annotated candidate images
+        # When top_k reaches 2048, include the far image which is fully annotated
+        if query.top_k < 2048:
+            # 128 incomplete images
+            return [
+                ExemplarMatch(contour_id=c_far.id, image_id=world["mid"].id, score=0.9 - i * 0.001)
+                for i in range(min(query.top_k, 1500))
+            ]
+        else:
+            matches = [
+                ExemplarMatch(contour_id=c_far.id, image_id=world["mid"].id, score=0.9 - i * 0.001)
+                for i in range(1200)
+            ]
+            matches.append(ExemplarMatch(contour_id=c_far.id, image_id=img_far.id, score=0.1))
+            return matches
+
+    monkeypatch.setattr(
+        "app.services.inference.conditioning_dispatcher.retrieve_exemplars",
+        mock_retrieve_exemplars,
+    )
+
+    exemplars, matches = resolve_reference_images(
+        s,
+        target_image_id=world["target"].id,
+        dataset_id=world["ds"].id,
+        strategy="global_scene",
+        concept_label_id=world["label"].id,
+        max_images=1,
+        requires_complete_annotation=True,
+        model_id=MODEL,
+    )
+    assert len(exemplars) == 1
+    assert exemplars[0].image_url == "/data/far.png"
+    # Verify search expanded past 1024
+    assert any(k > 1024 for k in calls)
+
+
+def test_predict_cross_image_forwards_source_aware_exemplars_and_positive_exemplars(world, monkeypatch):
+    """_predict_cross_image forwards exemplars, positive_exemplars, and contour_ids."""
+    from app.services.inference.execution import _predict_cross_image
+
+    captured_requests = []
+
+    class MockCrossImageService:
+        async def inference(self, request):
+            captured_requests.append(request)
+            return {"result": []}
+
+    monkeypatch.setattr(
+        "app.services.ai_services.cross_image.CrossImageService",
+        lambda: MockCrossImageService(),
+    )
+
+    s = world["session"]
+    c = _contour(s, world["near_mask"].id, label_id=world["label"].id)
+
+    step = ResolvedStep(
+        label_id=world["label"].id,
+        model_registry_key="cross_model",
+        task="cross-image-suggestion",
+        level=0,
+        label_name="coral",
+        model_name="CrossModel",
+        inputs={
+            "conditioning": {"count": 1, "strategy": "global_scene", "concept_text": None},
+            "parameters": {},
+        },
+        input_contract=InputContract(
+            task="cross-image-suggestion",
+            conditioning=ConditioningSpec(
+                kind="instances", unit="instance", min_units=1, max_units=5, user_selectable_count=True
+            ),
+            parameters=[],
+        ),
+    )
+    res = _predict_cross_image(s, step, world["target"], "u")
+    assert res == []
+    assert len(captured_requests) == 1
+    req = captured_requests[-1]
+    assert len(req.exemplars) == 1
+    assert req.exemplars[0].image_url == "/data/near.png"
+    assert req.exemplars[0].mask is not None
+    assert len(req.positive_exemplars) == 1
+    assert req.contour_ids == [c.id]

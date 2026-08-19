@@ -18,58 +18,19 @@ LEGACY_TASK_DEFAULTS: dict[str, InputContract] = {
     "instance-segmentation": InputContract(
         task="instance-segmentation",
         conditioning=ConditioningSpec(kind="none", user_selectable_count=False),
-        parameters=[
-            HyperParameter(
-                key="threshold",
-                label="Confidence Threshold",
-                type="float",
-                default_value=0.5,
-                min_value=0.0,
-                max_value=1.0,
-                step=0.05,
-            )
-        ],
+        parameters=[],
         notes="Legacy default contract for autonomous instance segmentation.",
     ),
     "cross-image-suggestion": InputContract(
         task="cross-image-suggestion",
         conditioning=ConditioningSpec(
-            kind="reference_images",
-            unit="image",
+            kind="instances",
+            unit="instance",
             min_units=1,
-            max_units=1,
-            requires_complete_annotation=True,
-            user_selectable_count=False,
+            max_units=32,
+            user_selectable_count=True,
         ),
-        parameters=[
-            HyperParameter(
-                key="threshold",
-                label="Confidence Threshold",
-                type="float",
-                default_value=0.3,
-                min_value=0.0,
-                max_value=1.0,
-                step=0.05,
-            ),
-            HyperParameter(
-                key="mask_threshold",
-                label="Mask Threshold",
-                type="float",
-                default_value=0.5,
-                min_value=0.0,
-                max_value=1.0,
-                step=0.05,
-            ),
-            HyperParameter(
-                key="min_target_frac",
-                label="Min Target Fraction",
-                type="float",
-                default_value=0.5,
-                min_value=0.0,
-                max_value=1.0,
-                step=0.05,
-            ),
-        ],
+        parameters=[],
         notes="Legacy default contract for cross-image exemplar transfer.",
     ),
     "instance-suggestion": InputContract(
@@ -78,29 +39,10 @@ LEGACY_TASK_DEFAULTS: dict[str, InputContract] = {
             kind="instances",
             unit="instance",
             min_units=1,
-            max_units=None,
+            max_units=32,
             user_selectable_count=True,
         ),
-        parameters=[
-            HyperParameter(
-                key="threshold",
-                label="Confidence Threshold",
-                type="float",
-                default_value=0.3,
-                min_value=0.0,
-                max_value=1.0,
-                step=0.05,
-            ),
-            HyperParameter(
-                key="mask_threshold",
-                label="Mask Threshold",
-                type="float",
-                default_value=0.5,
-                min_value=0.0,
-                max_value=1.0,
-                step=0.05,
-            ),
-        ],
+        parameters=[],
         notes="Legacy default contract for interactive instance suggestion.",
     ),
     "prompted-segmentation": InputContract(
@@ -127,21 +69,8 @@ def _extract_raw_contracts(model_info: dict[str, Any] | ModelInfo | None) -> lis
     if not isinstance(model_info, dict):
         raise ValueError(f"model_info must be a ModelInfo, dict, or None, got {type(model_info).__name__}")
 
-    if "input_contracts" in model_info:
-        raw = model_info["input_contracts"]
-        if raw is None:
-            raise ValueError("Malformed declared input_contracts: expected list, got None")
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except Exception as exc:
-                raise ValueError(f"Malformed declared input_contracts JSON: {exc}") from exc
-        if not isinstance(raw, list):
-            raise ValueError(
-                f"Malformed declared input_contracts: expected list, got {type(raw).__name__ if raw is not None else 'None'}"
-            )
-        return raw
-
+    # Registered model tags take precedence over artifact-level metadata so synchronized
+    # updates are visible without re-logging artifacts.
     tags = model_info.get("tags")
     if isinstance(tags, dict) and "input_contracts" in tags:
         tag_val = tags["input_contracts"]
@@ -173,6 +102,21 @@ def _extract_raw_contracts(model_info: dict[str, Any] | ModelInfo | None) -> lis
                         f"Malformed declared input_contracts in tag value: expected list, got {type(val).__name__ if val is not None else 'None'}"
                     )
                 return val
+
+    if "input_contracts" in model_info:
+        raw = model_info["input_contracts"]
+        if raw is None:
+            raise ValueError("Malformed declared input_contracts: expected list, got None")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception as exc:
+                raise ValueError(f"Malformed declared input_contracts JSON: {exc}") from exc
+        if not isinstance(raw, list):
+            raise ValueError(
+                f"Malformed declared input_contracts: expected list, got {type(raw).__name__ if raw is not None else 'None'}"
+            )
+        return raw
 
     return None
 

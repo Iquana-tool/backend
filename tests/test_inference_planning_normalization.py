@@ -261,8 +261,8 @@ def test_resolved_step_migrates_persisted_legacy_plan_step():
     step = ResolvedStep.model_validate(legacy_persisted_cross_image_step)
     assert step.task == "cross-image-suggestion"
     assert step.input_contract.task == "cross-image-suggestion"
-    assert step.input_contract.conditioning.kind == "reference_images"
+    assert step.input_contract.conditioning.kind == "instances"
     assert step.inputs["conditioning"]["strategy"] == "global_scene"
-    assert step.inputs["conditioning"]["count"] == 1
-    assert step.inputs["parameters"]["threshold"] == 0.3
+    assert step.inputs["conditioning"]["count"] == 5
+    assert step.inputs["parameters"] == {}
     assert step.provenance == "legacy_default"
