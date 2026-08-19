@@ -97,16 +97,16 @@ class InferenceStepRequest(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _ignore_legacy_fields_when_inputs_present(cls, data: Any) -> Any:
-        """Treat canonical inputs as authoritative over mirrored legacy fields.
+    def _ignore_mirrored_legacy_fields_when_inputs_present(cls, data: Any) -> Any:
+        """Treat canonical inputs as authoritative over mirrored retrieval fields.
 
-        Older clients may retain stale compatibility values in the same step object. They are
-        irrelevant once ``inputs`` is present, and validating them would allow an obsolete value
-        such as ``min_confidence=50`` to reject an otherwise valid canonical request.
+        ``retrieval_strategy`` and ``top_k`` are mirrored inside ``inputs.conditioning`` and are
+        therefore discarded when canonical inputs are present. ``min_confidence`` is different:
+        it remains a platform-owned post-filter and must survive alongside canonical model inputs.
         """
         if isinstance(data, dict) and data.get("inputs") is not None:
             data = dict(data)
-            for key in ("min_confidence", "retrieval_strategy", "top_k"):
+            for key in ("retrieval_strategy", "top_k"):
                 data.pop(key, None)
         return data
 

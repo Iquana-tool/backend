@@ -311,6 +311,59 @@ def test_dispatch_conditioning_all_kinds(world):
     assert res_emb["vector"] is not None
 
 
+def test_dispatch_strategy_count_skips_multiple_target_matches(world):
+    """A count-one region strategy widens past multiple target contours to find an external match."""
+    s = world["session"]
+    target_contour_1 = _contour(s, world["target_mask"].id, label_id=world["label"].id)
+    target_contour_2 = _contour(s, world["target_mask"].id, label_id=world["label"].id)
+    external_contour = _contour(s, world["near_mask"].id, label_id=world["label"].id)
+    query_vector = _axis((0, 1.0))
+    upsert_embedding(
+        s, contour_id=target_contour_1.id, kind="region_mean", model_id=MODEL, vector=query_vector
+    )
+    upsert_embedding(
+        s, contour_id=target_contour_2.id, kind="region_mean", model_id=MODEL, vector=query_vector
+    )
+    upsert_embedding(
+        s,
+        contour_id=external_contour.id,
+        kind="region_mean",
+        model_id=MODEL,
+        vector=_axis((0, 1.0), (1, 0.1)),
+    )
+
+    step = ResolvedStep(
+        label_id=world["label"].id,
+        model_registry_key="region-model",
+        task="instance-segmentation",
+        level=0,
+        label_name="coral",
+        model_name="Region model",
+        inputs={
+            "conditioning": {
+                "count": 1,
+                "strategy": "concept_region",
+                "query_contour_id": target_contour_1.id,
+            },
+            "parameters": {},
+        },
+        input_contract=InputContract(
+            task="instance-segmentation",
+            conditioning=ConditioningSpec(
+                kind="instances", unit="instance", min_units=1, max_units=5,
+                user_selectable_count=True,
+            ),
+            parameters=[],
+        ),
+    )
+
+    result = dispatch_conditioning(s, step, world["target"])
+
+    assert [match.contour_id for match in result["matches"]] == [external_contour.id]
+    assert result["contour_ids"] == [external_contour.id]
+    assert result["exemplars"][0].image_url == "/data/near.png"
+
+
 def test_dispatch_conditioning_unsupported_kind_raises(world):
     s = world["session"]
     step_bad = ResolvedStep(
@@ -542,6 +595,100 @@ def test_dispatch_conditioning_post_resolution_min_units_instances_raises(world)
         dispatch_conditioning(s, step_inst_min3, world["target"])
 
 
+def test_dispatch_conditioning_zero_count_is_empty_without_retrieval(world, monkeypatch):
+    """Optional conditioning count=0 must skip region query embedding and exemplar retrieval."""
+    s = world["session"]
+    _contour(s, world["near_mask"].id, label_id=world["label"].id)
+    query_contour = _contour(s, world["target_mask"].id, label_id=world["label"].id)
+
+    def unexpected_retrieval(*_args, **_kwargs):
+        pytest.fail("zero-count reference conditioning must not retrieve exemplars")
+
+    def unexpected_embedding(*_args, **_kwargs):
+        pytest.fail("zero-count reference conditioning must not resolve query embeddings")
+
+    monkeypatch.setattr(
+        "app.services.inference.conditioning_dispatcher.retrieve_exemplars",
+        unexpected_retrieval,
+    )
+    monkeypatch.setattr(
+        "app.services.inference.conditioning_dispatcher.get_embedding_vector",
+        unexpected_embedding,
+    )
+
+    reference_step = ResolvedStep(
+        label_id=world["label"].id,
+        model_registry_key="optional-reference-model",
+        task="cross-image-suggestion",
+        level=0,
+        label_name="coral",
+        model_name="Optional reference model",
+        inputs={
+            "conditioning": {
+                "count": 0,
+                "strategy": "concept_region",
+                "query_contour_id": query_contour.id,
+                "concept_text": None,
+            },
+            "parameters": {},
+        },
+        input_contract=InputContract(
+            task="cross-image-suggestion",
+            conditioning=ConditioningSpec(
+                kind="reference_images",
+                unit="image",
+                min_units=0,
+                max_units=5,
+                user_selectable_count=True,
+            ),
+            parameters=[],
+        ),
+    )
+    reference_result = dispatch_conditioning(s, reference_step, world["target"])
+    assert reference_result["kind"] == "reference_images"
+    assert reference_result["exemplars"] == []
+    assert reference_result["matches"] == []
+    assert reference_result["contour_ids"] == []
+    assert reference_result["positive_exemplars"] == []
+    assert reference_result["concept"].name == "coral"
+
+    instance_step = ResolvedStep(
+        label_id=world["label"].id,
+        model_registry_key="optional-instance-model",
+        task="instance-segmentation",
+        level=0,
+        label_name="coral",
+        model_name="Optional instance model",
+        inputs={
+            "conditioning": {"count": 0, "strategy": "global_scene", "concept_text": None},
+            "parameters": {},
+        },
+        input_contract=InputContract(
+            task="instance-segmentation",
+            conditioning=ConditioningSpec(
+                kind="instances",
+                unit="instance",
+                min_units=0,
+                max_units=5,
+                user_selectable_count=True,
+            ),
+            parameters=[],
+        ),
+    )
+    instance_result = dispatch_conditioning(s, instance_step, world["target"])
+    assert instance_result["contour_ids"] == []
+    assert instance_result["positive_exemplars"] == []
+    assert instance_result["exemplars"] == []
+
+    cids, positive_exemplars, source_aware_exemplars = resolve_instance_conditioning(
+        s,
+        dataset_id=world["ds"].id,
+        concept_label_id=world["label"].id,
+        max_instances=0,
+    )
+    assert (cids, positive_exemplars, source_aware_exemplars) == ([], [], [])
+
+
 def test_predict_cross_image_with_concept_text_and_parameters(world, monkeypatch):
     """Worker _predict_cross_image forwards concept_text, parameters, and conditioning to AI service."""
     from app.services.inference.execution import _predict_cross_image
@@ -606,6 +753,15 @@ def test_predict_instance_segmentation_forwards_parameters_and_conditioning(worl
         lambda: MockInstanceSegmentationService(),
     )
 
+    class CapturedRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    monkeypatch.setattr(
+        "app.services.inference.execution.InstanceSegmentationRequest",
+        CapturedRequest,
+    )
+
     s = world["session"]
     c = _contour(s, world["near_mask"].id, label_id=world["label"].id)
 
@@ -638,6 +794,7 @@ def test_predict_instance_segmentation_forwards_parameters_and_conditioning(worl
     assert req.contour_ids == [c.id]
     assert req.model_registry_key == "sam2"
     assert len(req.positive_exemplars) == 1
+    assert len(req.exemplars) == 1
 
 
 def test_resolve_reference_images_progressive_search_exhaustion(world, monkeypatch):
@@ -690,6 +847,43 @@ def test_resolve_reference_images_progressive_search_exhaustion(world, monkeypat
     assert any(k > 1024 for k in calls)
 
 
+def test_resolve_reference_images_global_scene_widens_past_sparse_concept_window(world):
+    """Global-scene retrieval keeps searching when early ranked images have no concept match."""
+    s = world["session"]
+
+    # Keep the only concept exemplar outside the initial 64-image scene window.
+    for index in range(70):
+        distractor, _ = _image(s, world["ds"].id, f"distractor-{index}")
+        upsert_embedding(
+            s,
+            image_id=distractor.id,
+            kind="image_cls",
+            model_id=MODEL,
+            vector=_axis((0, 1.0), (1, 0.01)),
+        )
+    late, late_mask = _image(
+        s, world["ds"].id, "late-concept", fully_annotated=True
+    )
+    late_contour = _contour(s, late_mask.id, label_id=world["label"].id)
+    upsert_embedding(
+        s, image_id=late.id, kind="image_cls", model_id=MODEL, vector=_axis((1, 1.0))
+    )
+
+    exemplars, matches = resolve_reference_images(
+        s,
+        target_image_id=world["target"].id,
+        dataset_id=world["ds"].id,
+        strategy="global_scene",
+        concept_label_id=world["label"].id,
+        max_images=1,
+        requires_complete_annotation=True,
+        model_id=MODEL,
+    )
+
+    assert [match.contour_id for match in matches] == [late_contour.id]
+    assert [exemplar.image_url for exemplar in exemplars] == ["/data/late-concept.png"]
+
+
 def test_predict_cross_image_forwards_source_aware_exemplars_and_positive_exemplars(world, monkeypatch):
     """_predict_cross_image forwards exemplars, positive_exemplars, and contour_ids."""
     from app.services.inference.execution import _predict_cross_image
@@ -737,3 +931,56 @@ def test_predict_cross_image_forwards_source_aware_exemplars_and_positive_exempl
     assert req.exemplars[0].mask is not None
     assert len(req.positive_exemplars) == 1
     assert req.contour_ids == [c.id]
+
+
+def test_predict_cross_image_runs_with_empty_optional_conditioning(world, monkeypatch):
+    """Cross-image models with min_units=0 still receive an empty exemplar list."""
+    from app.services.inference.execution import _predict_cross_image
+
+    captured_requests = []
+
+    class MockCrossImageService:
+        async def inference(self, request):
+            captured_requests.append(request)
+            return {"result": []}
+
+    class CapturedRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    monkeypatch.setattr(
+        "app.services.ai_services.cross_image.CrossImageService",
+        lambda: MockCrossImageService(),
+    )
+    monkeypatch.setattr(
+        "iquana_toolbox.schemas.networking.http.services.CrossImageSuggestionRequest",
+        CapturedRequest,
+    )
+
+    step = ResolvedStep(
+        label_id=world["label"].id,
+        model_registry_key="optional-cross-model",
+        task="cross-image-suggestion",
+        level=0,
+        label_name="coral",
+        model_name="Optional cross model",
+        inputs={
+            "conditioning": {"count": 0, "strategy": None, "concept_text": None},
+            "parameters": {},
+        },
+        input_contract=InputContract(
+            task="cross-image-suggestion",
+            conditioning=ConditioningSpec(
+                kind="instances",
+                unit="instance",
+                min_units=0,
+                max_units=5,
+                user_selectable_count=True,
+            ),
+            parameters=[],
+        ),
+    )
+
+    assert _predict_cross_image(world["session"], step, world["target"], "u") == []
+    assert len(captured_requests) == 1
+    assert captured_requests[0].exemplars == []

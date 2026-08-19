@@ -96,6 +96,7 @@ def _predict_instance_segmentation(
         parameters=parameters,
         contour_ids=cond_result.get("contour_ids", []),
         positive_exemplars=cond_result.get("positive_exemplars", []),
+        exemplars=cond_result.get("exemplars", []),
         embeddings=cond_result.get("vectors", {}),
     )
     response = asyncio.run(InstanceSegmentationService().inference(request))
@@ -114,7 +115,7 @@ def _predict_cross_image(
 
     if cond_kind in ("reference_images", "instances"):
         exemplars = cond_result.get("exemplars", [])
-        if not exemplars:
+        if not exemplars and step.input_contract.conditioning.min_units > 0:
             logger.info(
                 "No exemplars for label %s on image %s; nothing to predict.",
                 step.label_id,

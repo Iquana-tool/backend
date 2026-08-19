@@ -103,21 +103,32 @@ def test_resolve_steps_with_canonical_inputs(dataset, monkeypatch):
     assert step.provenance == "declared"
 
 
-def test_canonical_inputs_ignore_stale_legacy_fields():
+def test_canonical_inputs_keep_postfilter_and_ignore_mirrored_retrieval_fields():
     req = InferenceStepRequest(
         label_id=1,
         model_registry_key="m2f",
         task="instance-segmentation",
         inputs={"parameters": {"threshold": 0.75}},
-        min_confidence=50.0,
+        min_confidence=0.6,
         retrieval_strategy="obsolete",
         top_k=100,
     )
 
     assert req.inputs["parameters"]["threshold"] == 0.75
-    assert req.min_confidence == 0.0
+    assert req.min_confidence == 0.6
     assert req.retrieval_strategy is None
     assert req.top_k == 5
+
+
+def test_canonical_inputs_validate_postfilter_confidence():
+    with pytest.raises(ValueError, match="less than or equal to 1"):
+        InferenceStepRequest(
+            label_id=1,
+            model_registry_key="legacy-model",
+            task="instance-segmentation",
+            inputs={"parameters": {}},
+            min_confidence=50.0,
+        )
 
 
 def test_resolve_steps_with_legacy_fields_synthesizes_inputs(dataset, monkeypatch):

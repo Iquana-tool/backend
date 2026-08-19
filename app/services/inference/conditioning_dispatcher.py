@@ -104,10 +104,20 @@ def resolve_reference_images(
             )
 
     # Retrieve candidate matches with progressive search to avoid small hard caps
-    # when filtering candidates by complete annotation. Search until candidate source is exhausted.
+    # when filtering candidates by complete annotation. A global-scene strategy returns only
+    # concept-bearing contours, so its result count is not the number of ranked image candidates.
+    # Use the dataset's image population as the source bound for that strategy and keep widening
+    # even when the current image window has no matching concept contours.
     eligible_image_ids: list[int] = []
     matches_by_image: dict[int, list[ExemplarMatch]] = OrderedDict()
     batch_top_k = 64
+    global_scene_candidate_count: int | None = None
+    if strategy == "global_scene":
+        global_scene_candidate_count = (
+            session.query(Images.id)
+            .filter(Images.dataset_id == dataset_id, Images.id != target_image_id)
+            .count()
+        )
 
     while len(eligible_image_ids) < max_images:
         raw_matches = retrieve_exemplars(
@@ -122,9 +132,6 @@ def resolve_reference_images(
             ),
             model_id=model_id,
         )
-        if not raw_matches:
-            break
-
         matches_by_image.clear()
         for match in raw_matches:
             if match.image_id == target_image_id:
@@ -142,7 +149,22 @@ def resolve_reference_images(
             if len(eligible_image_ids) >= max_images:
                 break
 
-        if len(eligible_image_ids) >= max_images or len(raw_matches) < batch_top_k:
+        if len(eligible_image_ids) >= max_images:
+            break
+
+        if strategy == "global_scene":
+            # ``raw_matches`` may be empty/sparse while search_similar still has more images
+            # to inspect. Once the requested window covers every other dataset image, a sparse
+            # result is a real exhaustion signal for this strategy.
+            if (
+                global_scene_candidate_count == 0
+                or (
+                    len(raw_matches) < batch_top_k
+                    and batch_top_k >= (global_scene_candidate_count or 0)
+                )
+            ):
+                break
+        elif len(raw_matches) < batch_top_k:
             break
         batch_top_k *= 2
 
@@ -195,6 +217,9 @@ def resolve_instance_conditioning(
     from iquana_toolbox.schemas.database.contours import Contour
     from iquana_toolbox.schemas.networking.http.services import CrossImageExemplar
 
+    if max_instances is not None and max_instances <= 0:
+        return [], [], []
+
     q = (
         session.query(Contours, Images)
         .join(Masks, Masks.id == Contours.mask_id)
@@ -210,7 +235,7 @@ def resolve_instance_conditioning(
         q = q.filter(Images.id != target_image_id)
 
     q = q.order_by(Contours.reviewed_by.any().desc(), Contours.created_at.desc())
-    if max_instances:
+    if max_instances is not None:
         q = q.limit(max_instances)
 
     rows = q.all()
@@ -390,12 +415,26 @@ def dispatch_conditioning(
         strategy = cond_inputs.get("strategy") or "global_scene"
         query_contour_id = cond_inputs.get("query_contour_id")
         count = cond_inputs.get("count")
-        if count is None or count < 1:
+        if count is None or (count < 1 and cond_spec.min_units > 0):
             count = cond_spec.max_units or 1
         if cond_spec.max_units is not None:
             count = min(count, cond_spec.max_units)
         if cond_spec.min_units is not None:
             count = max(count, cond_spec.min_units)
+
+        from iquana_toolbox.schemas.database.labels import Label
+        label_row = session.get(Labels, step.label_id)
+        concept = Label.from_db(label_row) if label_row is not None else None
+
+        if count == 0:
+            return {
+                "kind": "reference_images",
+                "exemplars": [],
+                "matches": [],
+                "contour_ids": [],
+                "positive_exemplars": [],
+                "concept": concept,
+            }
 
         exemplars, matches = resolve_reference_images(
             session,
@@ -416,10 +455,6 @@ def dispatch_conditioning(
                 f"{cond_spec.min_units} min_units."
             )
 
-        from iquana_toolbox.schemas.database.labels import Label
-        label_row = session.get(Labels, step.label_id)
-        concept = Label.from_db(label_row) if label_row is not None else None
-
         return {
             "kind": "reference_images",
             "exemplars": exemplars,
@@ -432,7 +467,9 @@ def dispatch_conditioning(
     if kind == "instances":
         strategy = cond_inputs.get("strategy")
         query_contour_id = cond_inputs.get("query_contour_id")
-        count = cond_inputs.get("count") or 5
+        count = cond_inputs.get("count")
+        if count is None or (count == 0 and cond_spec.min_units > 0):
+            count = 5
         if cond_spec.max_units is not None:
             count = min(count, cond_spec.max_units)
         if cond_spec.min_units is not None:
@@ -442,7 +479,12 @@ def dispatch_conditioning(
         label_row = session.get(Labels, step.label_id)
         concept = Label.from_db(label_row) if label_row is not None else None
 
-        if strategy:
+        if count == 0:
+            matches = []
+            contour_ids = []
+            positive_exemplars = []
+            exemplars = []
+        elif strategy:
             query_vector = None
             if query_contour_id is not None and is_region_based_strategy(strategy):
                 contour_row = (
@@ -467,19 +509,53 @@ def dispatch_conditioning(
                         f"{EMBEDDING_MODEL_ID!r}; embed it first.",
                     )
 
-            raw_matches = retrieve_exemplars(
-                session,
-                strategy,
-                RetrievalQuery(
-                    dataset_id=target_image.dataset_id,
-                    target_image_id=target_image.id,
-                    concept_label_id=step.label_id,
-                    query_vector=query_vector,
-                    top_k=count,
-                ),
-                model_id=EMBEDDING_MODEL_ID,
-            )
-            matches = [m for m in raw_matches if m.image_id != target_image.id][:count]
+            # Retrieval strategies rank before this branch removes target-image matches. Widen
+            # the ranked window until enough external matches survive, or the strategy's source
+            # is exhausted. global_scene needs the dataset image bound because it returns only
+            # concept-bearing contours, not every ranked image candidate.
+            retrieval_top_k = count
+            global_scene_candidate_count: int | None = None
+            if strategy == "global_scene":
+                global_scene_candidate_count = (
+                    session.query(Images.id)
+                    .filter(
+                        Images.dataset_id == target_image.dataset_id,
+                        Images.id != target_image.id,
+                    )
+                    .count()
+                )
+
+            while True:
+                raw_matches = retrieve_exemplars(
+                    session,
+                    strategy,
+                    RetrievalQuery(
+                        dataset_id=target_image.dataset_id,
+                        target_image_id=target_image.id,
+                        concept_label_id=step.label_id,
+                        query_vector=query_vector,
+                        top_k=retrieval_top_k,
+                    ),
+                    model_id=EMBEDDING_MODEL_ID,
+                )
+                matches = [m for m in raw_matches if m.image_id != target_image.id]
+                if len(matches) >= count:
+                    matches = matches[:count]
+                    break
+
+                if strategy == "global_scene":
+                    if (
+                        global_scene_candidate_count == 0
+                        or (
+                            len(raw_matches) < retrieval_top_k
+                            and retrieval_top_k >= (global_scene_candidate_count or 0)
+                        )
+                    ):
+                        break
+                elif len(raw_matches) < retrieval_top_k:
+                    break
+                retrieval_top_k *= 2
+
             contour_ids = [m.contour_id for m in matches]
             rows = (
                 session.query(Contours, Images)

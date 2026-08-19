@@ -187,12 +187,23 @@ def _full_model_info(registry_key: str) -> dict:
                 metadata["description"] = reg_model.description
             if reg_model.tags:
                 if "input_contracts" in reg_model.tags:
+                    registered_contracts_tag = reg_model.tags["input_contracts"]
+                    # Keep the registered-model tag authoritative even when it is malformed.
+                    # The contract resolver handles the error per model; retaining the raw tag
+                    # prevents stale artifact metadata from silently becoming effective.
+                    _set_model_tag(metadata, "input_contracts", registered_contracts_tag)
                     try:
-                        parsed_contracts = json.loads(reg_model.tags["input_contracts"])
+                        parsed_contracts = (
+                            json.loads(registered_contracts_tag)
+                            if isinstance(registered_contracts_tag, str)
+                            else registered_contracts_tag
+                        )
                         if parsed_contracts is not None:
                             metadata["input_contracts"] = parsed_contracts
+                        else:
+                            metadata.pop("input_contracts", None)
                     except Exception:
-                        pass
+                        metadata.pop("input_contracts", None)
                 if not metadata.get("name"):
                     metadata["name"] = reg_model.name
                 if not metadata.get("registry_key"):
