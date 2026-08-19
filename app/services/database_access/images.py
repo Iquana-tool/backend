@@ -53,7 +53,7 @@ async def save_image_to_disk(
 
     # Build the preview on a copy so `img`'s native dimensions are preserved.
     thumbnail = img.copy()
-    thumbnail.thumbnail((200, 200))
+    thumbnail.thumbnail((500, 500))
     thumbnail.save(thumbnail_path)
 
     logger.info(f"Saved image to disk at {file_path} and thumbnail at {thumbnail_path}.")
