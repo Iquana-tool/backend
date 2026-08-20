@@ -278,31 +278,7 @@ def resolve_steps(
                 f"Model {option.name!r} does not predict label {label.name!r}; it predicts "
                 f"label ids {sorted(option.label_ids)}.",
             )
-        # Extract inputs or synthesize from legacy request fields
-        raw_inputs = step.inputs
-        if raw_inputs is None:
-            raw_cond: dict[str, Any] = {}
-            if step.task == "cross-image-suggestion":
-                if step.retrieval_strategy is not None:
-                    raw_cond["strategy"] = step.retrieval_strategy
-                cond = option.input_contract.conditioning
-                top_k = step.top_k if step.top_k is not None else 5
-                if cond.user_selectable_count:
-                    count = top_k
-                    if cond.max_units is not None:
-                        count = min(count, cond.max_units)
-                    if cond.min_units is not None:
-                        count = max(count, cond.min_units)
-                    raw_cond["count"] = count
-                elif cond.kind in ("reference_images", "instances", "embeddings"):
-                    raw_cond["count"] = cond.max_units or cond.min_units or 1
-
-            raw_params: dict[str, Any] = {}
-            declared_param_keys = {p.key for p in option.input_contract.parameters}
-            if "threshold" in declared_param_keys and step.min_confidence is not None and step.min_confidence > 0.0:
-                raw_params["threshold"] = step.min_confidence
-            raw_inputs = {"conditioning": raw_cond, "parameters": raw_params}
-
+        raw_inputs = step.inputs if step.inputs is not None else {"conditioning": {}, "parameters": {}}
         try:
             normalized_inputs = validate_and_normalize_inputs(option.input_contract, raw_inputs)
         except ValueError as exc:
@@ -324,8 +300,6 @@ def resolve_steps(
             input_contract=option.input_contract,
             provenance=option.provenance,
             min_confidence=step.min_confidence,
-            retrieval_strategy=step.retrieval_strategy,
-            top_k=step.top_k,
         ))
 
     resolved.sort(key=lambda step: (step.level, step.label_name.lower()))

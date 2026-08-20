@@ -81,40 +81,10 @@ class InferenceStepRequest(BaseModel):
         default=None,
         description="Generic inference inputs containing 'conditioning' and 'parameters'.",
     )
-    # --- legacy compatibility fields (synthesized into inputs during plan resolution) ---
     min_confidence: Optional[float] = Field(
         default=0.0, ge=0.0, le=1.0,
-        description="Predictions below this confidence are discarded before merging (legacy).",
+        description="Predictions below this confidence are discarded before merging.",
     )
-    retrieval_strategy: Optional[str] = Field(
-        default=None,
-        description="Exemplar-retrieval strategy; required for cross-image steps (legacy).",
-    )
-    top_k: Optional[int] = Field(
-        default=5, ge=1, le=32,
-        description="How many exemplars a cross-image step retrieves per image (legacy).",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _ignore_mirrored_legacy_fields_when_inputs_present(cls, data: Any) -> Any:
-        """Treat canonical inputs as authoritative over mirrored retrieval fields.
-
-        ``retrieval_strategy`` and ``top_k`` are mirrored inside ``inputs.conditioning`` and are
-        therefore discarded when canonical inputs are present. ``min_confidence`` is different:
-        it remains a platform-owned post-filter and must survive alongside canonical model inputs.
-        """
-        if isinstance(data, dict) and data.get("inputs") is not None:
-            data = dict(data)
-            for key in ("retrieval_strategy", "top_k"):
-                data.pop(key, None)
-        return data
-
-    @model_validator(mode="after")
-    def _require_strategy_for_cross_image(self) -> "InferenceStepRequest":
-        if self.inputs is None and self.task == "cross-image-suggestion" and not self.retrieval_strategy:
-            raise ValueError("A cross-image step needs a retrieval_strategy.")
-        return self
 
 
 from iquana_toolbox.schemas.input_contract import ConditioningSpec, InputContract

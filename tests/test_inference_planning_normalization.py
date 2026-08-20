@@ -103,21 +103,17 @@ def test_resolve_steps_with_canonical_inputs(dataset, monkeypatch):
     assert step.provenance == "declared"
 
 
-def test_canonical_inputs_keep_postfilter_and_ignore_mirrored_retrieval_fields():
+def test_canonical_inputs_keep_postfilter_confidence():
     req = InferenceStepRequest(
         label_id=1,
         model_registry_key="m2f",
         task="instance-segmentation",
         inputs={"parameters": {"threshold": 0.75}},
         min_confidence=0.6,
-        retrieval_strategy="obsolete",
-        top_k=100,
     )
 
     assert req.inputs["parameters"]["threshold"] == 0.75
     assert req.min_confidence == 0.6
-    assert req.retrieval_strategy is None
-    assert req.top_k == 5
 
 
 def test_canonical_inputs_validate_postfilter_confidence():
@@ -131,7 +127,7 @@ def test_canonical_inputs_validate_postfilter_confidence():
         )
 
 
-def test_resolve_steps_with_legacy_fields_synthesizes_inputs(dataset, monkeypatch):
+def test_resolve_steps_with_empty_inputs_synthesizes_contract_defaults(dataset, monkeypatch):
     s = dataset["session"]
     contract = InputContract(
         task="cross-image-suggestion",
@@ -157,23 +153,21 @@ def test_resolve_steps_with_legacy_fields_synthesizes_inputs(dataset, monkeypatc
     )
     _mock_catalog(monkeypatch, [option])
 
-    # Legacy request without `inputs`
+    # Request without explicit `inputs`
     req = InferenceStepRequest(
         label_id=dataset["cell"].id,
         model_registry_key="sam3",
         task="cross-image-suggestion",
-        retrieval_strategy="global_scene",
-        top_k=1,
         min_confidence=0.4,
     )
     resolved = resolve_steps(s, dataset["ds"].id, [req])
     assert len(resolved) == 1
     step = resolved[0]
-    assert step.inputs["parameters"]["threshold"] == 0.4
+    assert step.inputs["parameters"]["threshold"] == 0.3
     assert step.inputs["parameters"]["mask_threshold"] == 0.5
     assert step.inputs["parameters"]["min_target_frac"] == 0.5
-    assert step.inputs["conditioning"]["strategy"] == "global_scene"
     assert step.inputs["conditioning"]["count"] == 1
+    assert step.min_confidence == 0.4
 
 
 def test_resolve_steps_invalid_inputs_raises_400(dataset, monkeypatch):
@@ -208,49 +202,6 @@ def test_resolve_steps_invalid_inputs_raises_400(dataset, monkeypatch):
         resolve_steps(s, dataset["ds"].id, [req])
     assert exc.value.status_code == 400
     assert "greater than max_value" in exc.value.detail
-
-
-def test_resolve_steps_legacy_top_k_default_sam3(dataset, monkeypatch):
-    """Legacy cross-image request with default top_k=5 maps safely to SAM 3 single-image contract."""
-    s = dataset["session"]
-    contract = InputContract(
-        task="cross-image-suggestion",
-        conditioning=ConditioningSpec(
-            kind="reference_images", unit="image", min_units=1, max_units=1,
-            requires_complete_annotation=True, user_selectable_count=False,
-        ),
-        parameters=[
-            HyperParameter(key="threshold", label="T", type="float", default_value=0.3, min_value=0.0, max_value=1.0),
-            HyperParameter(key="mask_threshold", label="M", type="float", default_value=0.5),
-            HyperParameter(key="min_target_frac", label="F", type="float", default_value=0.5),
-        ],
-    )
-    option = ModelOption(
-        registry_key="sam3",
-        task="cross-image-suggestion",
-        name="SAM 3",
-        version="1",
-        label_ids=[],
-        is_default=True,
-        input_contract=contract,
-        provenance="declared",
-    )
-    _mock_catalog(monkeypatch, [option])
-
-    # Default top_k=5 should not raise ValueError when user_selectable_count is False / max_units=1
-    req = InferenceStepRequest(
-        label_id=dataset["cell"].id,
-        model_registry_key="sam3",
-        task="cross-image-suggestion",
-        retrieval_strategy="global_scene",
-        top_k=5,
-        min_confidence=0.3,
-    )
-    resolved = resolve_steps(s, dataset["ds"].id, [req])
-    assert len(resolved) == 1
-    step = resolved[0]
-    assert step.inputs["conditioning"]["count"] == 1
-    assert step.inputs["parameters"]["threshold"] == 0.3
 
 
 def test_resolved_step_migrates_persisted_legacy_plan_step():

@@ -172,11 +172,29 @@ def resolve_reference_images(
         return [], []
 
     # Collect selected matches from chosen reference images.
-    # Take the highest-ranked exemplar from each chosen image.
+    # Include all matching concept exemplars from each chosen reference image so that
+    # all objects of the concept on the reference image are prompted.
     selected_matches: list[ExemplarMatch] = []
     for img_id in eligible_image_ids:
-        img_matches = matches_by_image[img_id]
-        selected_matches.extend(img_matches[:1])
+        img_matches = matches_by_image.get(img_id, [])
+        known_contour_ids = {m.contour_id for m in img_matches}
+        selected_matches.extend(img_matches)
+        if concept_label_id is not None:
+            extra_contours = (
+                session.query(Contours.id)
+                .join(Masks, Masks.id == Contours.mask_id)
+                .filter(
+                    Masks.image_id == img_id,
+                    Contours.temporary.is_(False),
+                    Contours.label_id == concept_label_id,
+                    Contours.id.notin_(known_contour_ids) if known_contour_ids else True,
+                )
+                .order_by(Contours.reviewed_by.any().desc(), Contours.created_at.desc(), Contours.id.desc())
+                .all()
+            )
+            fallback_score = img_matches[0].score if img_matches else 1.0
+            for row in extra_contours:
+                selected_matches.append(ExemplarMatch(contour_id=row[0], image_id=img_id, score=fallback_score))
 
     contour_ids = [m.contour_id for m in selected_matches]
     rows = (
@@ -340,6 +358,145 @@ def resolve_embedding_conditioning(
                 if vec is not None:
                     vectors[k] = vec
     return vectors
+
+
+def resolve_in_context_embedding_conditioning(
+    session: Session,
+    *,
+    dataset_id: int,
+    concept_label_id: int | None,
+    count: int = 1,
+    strategy: str | None = None,
+    target_image_id: int | None = None,
+    query_contour_id: int | None = None,
+    kinds: Sequence[str] | None = None,
+    model_id: str = EMBEDDING_MODEL_ID,
+) -> tuple[dict[str, list[list[float]]], list[int], list[ExemplarMatch]]:
+    """Resolve in-context concept exemplar embedding vectors from other dataset images.
+
+    Retrieves up to ``count`` concept exemplars from images other than ``target_image_id``,
+    and extracts their precomputed embeddings for the requested ``kinds``.
+    """
+    if count <= 0:
+        return {}, [], []
+
+    requested_kinds = kinds if kinds is not None else (REGION_MEAN,)
+    query_vector = None
+    if query_contour_id is not None and strategy and is_region_based_strategy(strategy):
+        query_vector = get_embedding_vector(
+            session, contour_id=query_contour_id, kind=REGION_MEAN, model_id=model_id
+        )
+
+    resolved_cids: list[int] = []
+    resolved_matches: list[ExemplarMatch] = []
+    vectors_by_kind: dict[str, list[list[float]]] = {k: [] for k in requested_kinds}
+
+    if strategy:
+        retrieval_top_k = max(count * 2, 64)
+        global_scene_candidate_count: int | None = None
+        if strategy == "global_scene":
+            global_scene_candidate_count = (
+                session.query(Images.id)
+                .filter(Images.dataset_id == dataset_id, Images.id != target_image_id)
+                .count()
+            )
+
+        while len(resolved_cids) < count:
+            raw_matches = retrieve_exemplars(
+                session,
+                strategy,
+                RetrievalQuery(
+                    dataset_id=dataset_id,
+                    target_image_id=target_image_id,
+                    concept_label_id=concept_label_id,
+                    query_vector=query_vector,
+                    top_k=retrieval_top_k,
+                ),
+                model_id=model_id,
+            )
+            filtered_matches = [m for m in raw_matches if target_image_id is None or m.image_id != target_image_id]
+            for match in filtered_matches:
+                if match.contour_id in resolved_cids:
+                    continue
+                match_vectors: dict[str, list[float]] = {}
+                has_all_kinds = True
+                for k in requested_kinds:
+                    if k in CONTOUR_SCOPED_EMBEDDING_KINDS:
+                        v = get_embedding_vector(
+                            session, image_id=None, contour_id=match.contour_id, kind=k, model_id=model_id
+                        )
+                    else:
+                        v = get_embedding_vector(
+                            session, image_id=match.image_id, contour_id=None, kind=k, model_id=model_id
+                        )
+                    if v is None:
+                        has_all_kinds = False
+                        break
+                    match_vectors[k] = v
+
+                if has_all_kinds:
+                    resolved_cids.append(match.contour_id)
+                    resolved_matches.append(match)
+                    for k, vec in match_vectors.items():
+                        vectors_by_kind[k].append(vec)
+                    if len(resolved_cids) >= count:
+                        break
+
+            if strategy == "global_scene":
+                if (
+                    global_scene_candidate_count == 0
+                    or (
+                        len(raw_matches) < retrieval_top_k
+                        and retrieval_top_k >= (global_scene_candidate_count or 0)
+                    )
+                ):
+                    break
+            elif len(raw_matches) < retrieval_top_k or len(resolved_cids) >= count:
+                break
+            retrieval_top_k *= 2
+    else:
+        q = (
+            session.query(Contours.id, Images.id)
+            .join(Masks, Masks.id == Contours.mask_id)
+            .join(Images, Images.id == Masks.image_id)
+            .filter(
+                Images.dataset_id == dataset_id,
+                Contours.temporary.is_(False),
+            )
+        )
+        if concept_label_id is not None:
+            q = q.filter(Contours.label_id == concept_label_id)
+        if target_image_id is not None:
+            q = q.filter(Images.id != target_image_id)
+        q = q.order_by(Contours.reviewed_by.any().desc(), Contours.created_at.desc(), Contours.id.desc())
+        candidates = q.all()
+
+        for cid, img_id in candidates:
+            match_vectors = {}
+            has_all_kinds = True
+            for k in requested_kinds:
+                if k in CONTOUR_SCOPED_EMBEDDING_KINDS:
+                    v = get_embedding_vector(
+                        session, image_id=None, contour_id=cid, kind=k, model_id=model_id
+                    )
+                else:
+                    v = get_embedding_vector(
+                        session, image_id=img_id, contour_id=None, kind=k, model_id=model_id
+                    )
+                if v is None:
+                    has_all_kinds = False
+                    break
+                match_vectors[k] = v
+
+            if has_all_kinds:
+                resolved_cids.append(cid)
+                resolved_matches.append(ExemplarMatch(contour_id=cid, image_id=img_id, score=1.0))
+                for k, vec in match_vectors.items():
+                    vectors_by_kind[k].append(vec)
+                if len(resolved_cids) >= count:
+                    break
+
+    return vectors_by_kind, resolved_cids, resolved_matches
 
 
 def resolve_concept_text(
@@ -609,29 +766,95 @@ def dispatch_conditioning(
     if kind == "embeddings":
         kinds = cond_spec.embedding_kinds or [IMAGE_CLS]
         query_contour_id = cond_inputs.get("query_contour_id")
-        vectors = resolve_embedding_conditioning(
-            session,
-            target_image_id=target_image.id,
-            dataset_id=target_image.dataset_id,
-            contour_id=query_contour_id,
-            kinds=kinds,
-            model_id=EMBEDDING_MODEL_ID,
+        strategy = cond_inputs.get("strategy")
+        count = cond_inputs.get("count")
+
+        from iquana_toolbox.schemas.database.labels import Label
+        label_row = session.get(Labels, step.label_id) if step.label_id else None
+        concept = Label.from_db(label_row) if label_row is not None else None
+
+        is_in_context = (
+            step.label_id is not None
+            and (
+                (count is not None and count > 0)
+                or cond_spec.min_units > 0
+                or cond_spec.user_selectable_count
+            )
         )
-        missing = [k for k in kinds if k not in vectors]
-        if missing:
-            raise ValueError(
-                f"Image {target_image.id} is missing required embedding(s) {missing} "
-                f"for model {EMBEDDING_MODEL_ID!r}; run the embedding backfill first."
+
+        if is_in_context:
+            target_count = count if count is not None and count > 0 else (cond_spec.max_units or cond_spec.min_units or 1)
+            if cond_spec.max_units is not None:
+                target_count = min(target_count, cond_spec.max_units)
+            if cond_spec.min_units is not None:
+                target_count = max(target_count, cond_spec.min_units)
+
+            vectors_by_kind, contour_ids, matches = resolve_in_context_embedding_conditioning(
+                session,
+                dataset_id=target_image.dataset_id,
+                concept_label_id=step.label_id,
+                count=target_count,
+                strategy=strategy,
+                target_image_id=target_image.id,
+                query_contour_id=query_contour_id,
+                kinds=kinds,
+                model_id=EMBEDDING_MODEL_ID,
             )
-        if cond_spec.min_units > 0 and len(vectors) < cond_spec.min_units:
-            raise ValueError(
-                f"Resolved {len(vectors)} embedding vector(s) for image {target_image.id}, "
-                f"but model contract requires at least {cond_spec.min_units} min_units."
+
+            resolved_vector_count = max((len(v_list) for v_list in vectors_by_kind.values()), default=0)
+            if cond_spec.min_units > 0 and resolved_vector_count < cond_spec.min_units:
+                raise ValueError(
+                    f"Resolved {resolved_vector_count} exemplar vector(s) for label {step.label_id} "
+                    f"on image {target_image.id}, but model contract for '{step.task}' requires at least "
+                    f"{cond_spec.min_units} min_units."
+                )
+
+            vectors_payload: dict[str, Any] = {}
+            for k in kinds:
+                vecs = vectors_by_kind.get(k, [])
+                if len(vecs) == 1 and not cond_spec.user_selectable_count and cond_spec.max_units == 1:
+                    vectors_payload[k] = vecs[0]
+                else:
+                    vectors_payload[k] = vecs
+
+            primary_kind = kinds[0]
+            first_vector = vectors_by_kind.get(primary_kind, [None])[0] if vectors_by_kind.get(primary_kind) else None
+
+            return {
+                "kind": "embeddings",
+                "vectors": vectors_payload,
+                "vectors_by_kind": vectors_by_kind,
+                "vector": first_vector,
+                "exemplar_vectors": vectors_by_kind.get(primary_kind, []),
+                "contour_ids": contour_ids,
+                "matches": matches,
+                "concept": concept,
+            }
+        else:
+            vectors = resolve_embedding_conditioning(
+                session,
+                target_image_id=target_image.id,
+                dataset_id=target_image.dataset_id,
+                contour_id=query_contour_id,
+                kinds=kinds,
+                model_id=EMBEDDING_MODEL_ID,
             )
-        return {
-            "kind": "embeddings",
-            "vectors": vectors,
-            "vector": vectors.get(kinds[0]) if len(kinds) == 1 else None,
-        }
+            missing = [k for k in kinds if k not in vectors]
+            if missing:
+                raise ValueError(
+                    f"Image {target_image.id} is missing required embedding(s) {missing} "
+                    f"for model {EMBEDDING_MODEL_ID!r}; run the embedding backfill first."
+                )
+            if cond_spec.min_units > 0 and len(vectors) < cond_spec.min_units:
+                raise ValueError(
+                    f"Resolved {len(vectors)} embedding vector(s) for image {target_image.id}, "
+                    f"but model contract requires at least {cond_spec.min_units} min_units."
+                )
+            return {
+                "kind": "embeddings",
+                "vectors": vectors,
+                "vector": vectors.get(kinds[0]) if len(kinds) == 1 else None,
+                "concept": concept,
+            }
 
     raise ValueError(f"Unsupported conditioning kind '{kind}' for task '{step.task}'")

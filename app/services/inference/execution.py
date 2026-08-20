@@ -127,6 +127,9 @@ def _predict_cross_image(
 
     parameters = step.inputs.get("parameters", {})
 
+    vectors_by_kind = cond_result.get("vectors_by_kind", {})
+    embeddings = cond_result.get("vectors", {}) if not vectors_by_kind else {}
+
     request = CrossImageSuggestionRequest(
         image_url=str(image.file_path),
         user_id=username,
@@ -136,7 +139,8 @@ def _predict_cross_image(
         parameters=parameters,
         contour_ids=cond_result.get("contour_ids", []),
         positive_exemplars=cond_result.get("positive_exemplars", []),
-        embeddings=cond_result.get("vectors", {}),
+        embeddings=embeddings,
+        exemplar_embeddings=vectors_by_kind,
     )
     logger.debug(
         "Image %s: %d exemplars retrieved for label %s (conditioning kind: %s).",
@@ -263,8 +267,7 @@ def run_unit(
     except Exception as exc:  # network, model load, bad response -- all report the same way
         raise InferenceUnitError(_prediction_error(exc, step)) from exc
 
-    threshold = step.inputs.get("parameters", {}).get("threshold", step.min_confidence or 0.0)
-    candidates = filter_for_step(raw, step, min_confidence=threshold)
+    candidates = filter_for_step(raw, step, min_confidence=step.min_confidence or 0.0)
     if not candidates:
         return UnitResult()
 

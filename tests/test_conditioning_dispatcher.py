@@ -145,11 +145,11 @@ def test_resolve_reference_images_enforces_completeness_and_max_units(world):
         model_id=MODEL,
     )
     # Only `near` image is selected (since mid is incomplete, and far is second choice)
-    # With max_images=1, only the top exemplar from the selected reference image is materialized
-    assert len(exemplars) == 1
-    assert exemplars[0].image_url == "/data/near.png"
-    assert len(matches) == 1
-    assert matches[0].contour_id in {c_near1.id, c_near2.id}
+    # Both concept exemplars from the selected reference image are materialized so all objects are prompted
+    assert len(exemplars) == 2
+    assert {ex.image_url for ex in exemplars} == {"/data/near.png"}
+    assert len(matches) == 2
+    assert {m.contour_id for m in matches} == {c_near1.id, c_near2.id}
 
     # 2. With complete annotation NOT required:
     exemplars_any, matches_any = resolve_reference_images(
@@ -162,7 +162,8 @@ def test_resolve_reference_images_enforces_completeness_and_max_units(world):
         requires_complete_annotation=False,
         model_id=MODEL,
     )
-    # Both near and mid selected
+    # Both near (2 contours) and mid (1 contour) selected -> 3 exemplars across 2 images
+    assert len(exemplars_any) == 3
     urls = {ex.image_url for ex in exemplars_any}
     assert urls == {"/data/near.png", "/data/mid.png"}
 
@@ -517,6 +518,80 @@ def test_dispatch_conditioning_region_mean_deterministic_ordering_fallback(world
     res = dispatch_conditioning(s, step, world["target"])
     # Deterministic order by id / created_at selects c_newer
     assert res["vectors"]["region_mean"] == v_newer
+
+
+def test_dispatch_conditioning_in_context_exemplar_vectors(world):
+    """In-context embedding conditioning retrieves count exemplar vectors from other images."""
+    s = world["session"]
+    c_near = _contour(s, world["near_mask"].id, label_id=world["label"].id)
+    c_far = _contour(s, world["far_mask"].id, label_id=world["label"].id)
+    v_near = _axis((0, 0.4), (1, 0.4))
+    v_far = _axis((0, 0.9), (1, 0.1))
+    upsert_embedding(s, contour_id=c_near.id, kind="region_mean", model_id=MODEL, vector=v_near)
+    upsert_embedding(s, contour_id=c_far.id, kind="region_mean", model_id=MODEL, vector=v_far)
+
+    # In-context embedding model with user-selectable count = 2
+    step_incontext_emb = ResolvedStep(
+        label_id=world["label"].id,
+        model_registry_key="prototype_model",
+        task="cross-image-suggestion",
+        level=0,
+        label_name="coral",
+        model_name="PrototypeModel",
+        inputs={"conditioning": {"count": 2, "strategy": "concept_annotations"}, "parameters": {}},
+        input_contract=InputContract(
+            task="cross-image-suggestion",
+            conditioning=ConditioningSpec(
+                kind="embeddings",
+                unit="vector",
+                embedding_kinds=["region_mean"],
+                min_units=1,
+                max_units=5,
+                user_selectable_count=True,
+            ),
+            parameters=[],
+        ),
+    )
+    res = dispatch_conditioning(s, step_incontext_emb, world["target"])
+    assert res["kind"] == "embeddings"
+    assert len(res["exemplar_vectors"]) == 2
+    assert len(res["contour_ids"]) == 2
+    assert set(res["contour_ids"]) == {c_near.id, c_far.id}
+    assert res["concept"] is not None
+    assert res["concept"].name == "coral"
+    assert len(res["vectors"]["region_mean"]) == 2
+
+
+def test_dispatch_conditioning_in_context_min_units_enforced(world):
+    """In-context embedding conditioning raises when fewer than min_units exemplar vectors exist."""
+    s = world["session"]
+    c_near = _contour(s, world["near_mask"].id, label_id=world["label"].id)
+    upsert_embedding(s, contour_id=c_near.id, kind="region_mean", model_id=MODEL, vector=_axis((0, 0.5)))
+
+    # Contract requires min_units=2, but only 1 contour has an embedding
+    step_incontext_emb_min2 = ResolvedStep(
+        label_id=world["label"].id,
+        model_registry_key="prototype_model",
+        task="cross-image-suggestion",
+        level=0,
+        label_name="coral",
+        model_name="PrototypeModel",
+        inputs={"conditioning": {"count": 2}, "parameters": {}},
+        input_contract=InputContract(
+            task="cross-image-suggestion",
+            conditioning=ConditioningSpec(
+                kind="embeddings",
+                unit="vector",
+                embedding_kinds=["region_mean"],
+                min_units=2,
+                max_units=5,
+                user_selectable_count=True,
+            ),
+            parameters=[],
+        ),
+    )
+    with pytest.raises(ValueError, match="Resolved 1 exemplar vector.*requires at least 2 min_units"):
+        dispatch_conditioning(s, step_incontext_emb_min2, world["target"])
 
 
 def test_dispatch_conditioning_missing_embedding_raises(world):
@@ -984,3 +1059,61 @@ def test_predict_cross_image_runs_with_empty_optional_conditioning(world, monkey
     assert _predict_cross_image(world["session"], step, world["target"], "u") == []
     assert len(captured_requests) == 1
     assert captured_requests[0].exemplars == []
+
+
+def test_predict_cross_image_in_context_embeddings_real_request(world, monkeypatch):
+    """Real CrossImageSuggestionRequest validates and serializes in-context exemplar embeddings."""
+    from app.services.inference.execution import _predict_cross_image
+    from iquana_toolbox.schemas.networking.http.services import CrossImageSuggestionRequest
+
+    s = world["session"]
+    c_near = _contour(s, world["near_mask"].id, label_id=world["label"].id)
+    c_far = _contour(s, world["far_mask"].id, label_id=world["label"].id)
+    v_near = _axis((0, 0.4), (1, 0.4))
+    v_far = _axis((0, 0.9), (1, 0.1))
+    upsert_embedding(s, contour_id=c_near.id, kind="region_mean", model_id=MODEL, vector=v_near)
+    upsert_embedding(s, contour_id=c_far.id, kind="region_mean", model_id=MODEL, vector=v_far)
+
+    captured_requests = []
+
+    class MockCrossImageService:
+        async def inference(self, request):
+            assert isinstance(request, CrossImageSuggestionRequest)
+            captured_requests.append(request)
+            return []
+
+    monkeypatch.setattr(
+        "app.services.ai_services.cross_image.CrossImageService",
+        lambda: MockCrossImageService(),
+    )
+
+    step = ResolvedStep(
+        label_id=world["label"].id,
+        model_registry_key="emb-incontext-model",
+        task="cross-image-suggestion",
+        level=0,
+        label_name="coral",
+        model_name="Embedding in-context model",
+        inputs={
+            "conditioning": {"count": 2, "strategy": "concept_annotations"},
+            "parameters": {},
+        },
+        input_contract=InputContract(
+            task="cross-image-suggestion",
+            conditioning=ConditioningSpec(
+                kind="embeddings",
+                unit="vector",
+                embedding_kinds=["region_mean"],
+                min_units=1,
+                max_units=5,
+                user_selectable_count=True,
+            ),
+            parameters=[],
+        ),
+    )
+
+    result = _predict_cross_image(s, step, world["target"], "alice")
+    assert result == []
+    assert len(captured_requests) == 1
+    req = captured_requests[0]
+    assert req.exemplar_embeddings["region_mean"] == [v_far, v_near]
