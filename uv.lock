@@ -705,7 +705,7 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.68.0" },
     { name = "httpx", specifier = ">=0.24.0" },
     { name = "instructor", specifier = ">=1.3.0" },
-    { name = "iquana-toolbox", git = "https://github.com/Iquana-tool/iquana-toolbox.git" },
+    { name = "iquana-toolbox", git = "https://github.com/shivamtawari/iquana-toolbox.git?rev=ffe891d7a2e9260400654d777f34e44ba4b745bf" },
     { name = "litellm", specifier = ">=1.40.0" },
     { name = "numpy", specifier = ">=1.21.0" },
     { name = "opencv-python", specifier = ">=4.11.0.86" },
@@ -1546,7 +1546,7 @@ wheels = [
 [[package]]
 name = "iquana-toolbox"
 version = "0.1.0"
-source = { git = "https://github.com/Iquana-tool/iquana-toolbox.git#b5fbd064342d31b34cea079d0e0900fc431057c2" }
+source = { git = "https://github.com/shivamtawari/iquana-toolbox.git?rev=ffe891d7a2e9260400654d777f34e44ba4b745bf#ffe891d7a2e9260400654d777f34e44ba4b745bf" }
 dependencies = [
     { name = "cachetools" },
     { name = "mlflow" },
