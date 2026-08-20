@@ -7,6 +7,7 @@ from logging import getLogger
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_session
@@ -14,8 +15,9 @@ from app.database.dataset_members import DatasetMembers
 from app.database.users import Users
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import GlobalRole, Permission
-from app.schemas.review import GlobalRoleUpdate
-from app.services.permissions import require_global
+from app.schemas.review import AdminUserCreate, GlobalRoleUpdate
+from app.services.auth import get_password_hash
+from app.services.permissions import ensure_global_permission, require_global
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 logger = getLogger(__name__)
@@ -46,6 +48,56 @@ async def list_users(
             }
             for account in users
         ],
+    }
+
+
+@router.post("/users", status_code=status.HTTP_201_CREATED)
+async def create_user(
+        body: AdminUserCreate,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require_global(Permission.USER_MANAGE)),
+):
+    """Create an account outright, without an invite or self-registration.
+
+    An instance is closed by default (`INSTANCE_ALLOW_REGISTRATION`), and an
+    invite only ever grants access to a single dataset -- so until now there was
+    no way to hand somebody an account at all. This is that way.
+
+    The password is chosen by the admin and passed on out of band; the account
+    holder should change it afterwards.
+    """
+    if body.global_role is not GlobalRole.MEMBER:
+        # Handing out a non-default role at creation is the same act as changing
+        # one afterwards, so it answers to the same permission.
+        ensure_global_permission(user, Permission.USER_SET_GLOBAL_ROLE)
+
+    account = Users(
+        username=body.username,
+        hashed_password=get_password_hash(body.password),
+        global_role=body.global_role.value,
+        is_active=body.is_active,
+    )
+    db.add(account)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Checked by letting the unique constraint answer rather than by a prior
+        # SELECT, which two concurrent creates could both pass.
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Username already exists.")
+
+    logger.info("Account %r created by %r as a platform %s.",
+                account.username, user.username, account.global_role)
+    return {
+        "success": True,
+        "message": f"Account {account.username} created.",
+        "user": {
+            "username": account.username,
+            "global_role": account.global_role,
+            "is_active": bool(account.is_active),
+            "dataset_count": 0,
+        },
     }
 
 

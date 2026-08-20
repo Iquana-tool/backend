@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.permissions import DatasetRole, GlobalRole, Permission
 
@@ -425,3 +425,22 @@ class GlobalRoleUpdate(BaseModel):
     """Request body for changing an account's platform-level role."""
 
     global_role: GlobalRole
+
+
+class AdminUserCreate(BaseModel):
+    """Request body for creating an account from the admin surface.
+
+    The admin picks the initial password and hands it over out of band: iquana
+    sends no mail, so there is nowhere to deliver an activation or reset link to.
+    """
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=8, max_length=128)
+    global_role: GlobalRole = GlobalRole.MEMBER
+    is_active: bool = True
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def _strip_username(cls, value):
+        """Trim surrounding whitespace so a pasted name still matches at login."""
+        return value.strip() if isinstance(value, str) else value
