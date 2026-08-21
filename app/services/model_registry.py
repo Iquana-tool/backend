@@ -154,17 +154,17 @@ def _models_for_task(task: str):
 
 
 def _full_model_info(registry_key: str) -> dict:
-    """Return a model's complete ``model_info`` from its artifact metadata.
+    """Return a model's complete ``model_info`` from its artifact metadata and registered-model tags.
 
     ``register_model`` stores the full ``ModelInfo.model_dump()`` as the logged
-    model's ``metadata`` (recorded in the MLmodel file, not the weights), so
-    reading it back is lossless and cheap -- ~50ms regardless of model size, and
-    independent of toolbox version. This is preferable to rebuilding the info
-    from the registered-model tags, which only carry the filterable subset
-    (task/status/...) and drop free-text fields like description and usage_tip.
+    model's ``metadata`` (recorded in the MLmodel file, not the weights), and
+    synchronizes ``input_contracts`` and ``description`` into registered-model tags.
+    Merging registered-model tags ensures newly added/updated contracts are
+    discovered immediately without requiring artifact re-logging.
 
     Falls back to a minimal stub if an older artifact carries no metadata.
     """
+    metadata: dict = {}
     try:
         info = mlflow.models.get_model_info(f"models:/{registry_key}/latest")
         if info.metadata:
@@ -176,10 +176,45 @@ def _full_model_info(registry_key: str) -> dict:
                     dict(tag) if isinstance(tag, dict) else tag
                     for tag in metadata["tags"]
                 ]
-            return _enrich_model_provenance(metadata)
-        logger.warning("Model '%s' has no artifact metadata; returning stub.", registry_key)
     except Exception:
-        logger.exception("Failed to read artifact metadata for model '%s'.", registry_key)
+        logger.debug("Failed to read artifact metadata for model '%s'.", registry_key)
+
+    # Merge registered model tags so synchronized contracts and descriptions are always seen
+    try:
+        reg_model = MODEL_REGISTRY.client.get_registered_model(registry_key)
+        if reg_model:
+            if reg_model.description:
+                metadata["description"] = reg_model.description
+            if reg_model.tags:
+                if "input_contracts" in reg_model.tags:
+                    registered_contracts_tag = reg_model.tags["input_contracts"]
+                    # Keep the registered-model tag authoritative even when it is malformed.
+                    # The contract resolver handles the error per model; retaining the raw tag
+                    # prevents stale artifact metadata from silently becoming effective.
+                    _set_model_tag(metadata, "input_contracts", registered_contracts_tag)
+                    try:
+                        parsed_contracts = (
+                            json.loads(registered_contracts_tag)
+                            if isinstance(registered_contracts_tag, str)
+                            else registered_contracts_tag
+                        )
+                        if parsed_contracts is not None:
+                            metadata["input_contracts"] = parsed_contracts
+                        else:
+                            metadata.pop("input_contracts", None)
+                    except Exception:
+                        metadata.pop("input_contracts", None)
+                if not metadata.get("name"):
+                    metadata["name"] = reg_model.name
+                if not metadata.get("registry_key"):
+                    metadata["registry_key"] = reg_model.name
+    except Exception:
+        logger.debug("Failed to read registered model tags for '%s'.", registry_key)
+
+    if metadata:
+        return _enrich_model_provenance(metadata)
+
+    logger.warning("Model '%s' has no artifact metadata; returning stub.", registry_key)
     return {"registry_key": registry_key, "name": registry_key}
 
 

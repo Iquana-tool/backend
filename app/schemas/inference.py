@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -77,25 +77,18 @@ class InferenceStepRequest(BaseModel):
         default="instance-segmentation",
         description="Which AI-service surface the model is called on.",
     )
-    min_confidence: float = Field(
+    inputs: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Generic inference inputs containing 'conditioning' and 'parameters'.",
+    )
+    min_confidence: Optional[float] = Field(
         default=0.0, ge=0.0, le=1.0,
         description="Predictions below this confidence are discarded before merging.",
     )
-    # --- cross-image-suggestion only -------------------------------------------------
-    retrieval_strategy: Optional[str] = Field(
-        default=None,
-        description="Exemplar-retrieval strategy; required for cross-image steps.",
-    )
-    top_k: int = Field(
-        default=5, ge=1, le=32,
-        description="How many exemplars a cross-image step retrieves per image.",
-    )
 
-    @model_validator(mode="after")
-    def _require_strategy_for_cross_image(self) -> "InferenceStepRequest":
-        if self.task == "cross-image-suggestion" and not self.retrieval_strategy:
-            raise ValueError("A cross-image step needs a retrieval_strategy.")
-        return self
+
+from iquana_toolbox.schemas.input_contract import ConditioningSpec, InputContract
+from iquana_toolbox.schemas.training import HyperParameter
 
 
 class ResolvedStep(InferenceStepRequest):
@@ -118,6 +111,74 @@ class ResolvedStep(InferenceStepRequest):
                     "down to this step's label; empty means the model is class-agnostic and "
                     "its output is labelled with this step's label.",
     )
+    inputs: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Normalized inference inputs snapshot containing conditioning and parameters.",
+    )
+    input_contract: InputContract = Field(
+        default_factory=lambda: InputContract(
+            task="instance-segmentation",
+            conditioning=ConditioningSpec(kind="none", user_selectable_count=False),
+            parameters=[],
+        ),
+        description="Snapshot of the effective InputContract resolved for this step.",
+    )
+    provenance: Literal["declared", "legacy_default"] = Field(
+        default="legacy_default",
+        description="Whether the contract was declared by the model or resolved from legacy defaults.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_persisted_step(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            task = data.get("task", "instance-segmentation")
+            # If input_contract is missing, resolve task's legacy default contract
+            if "input_contract" not in data or data["input_contract"] is None:
+                from app.services.inference.contract_resolver import LEGACY_TASK_DEFAULTS
+                contract = LEGACY_TASK_DEFAULTS.get(task)
+                if contract is not None:
+                    data["input_contract"] = contract.model_dump()
+                    data["provenance"] = "legacy_default"
+
+            # If inputs is missing, synthesize from step legacy fields
+            if "inputs" not in data or data["inputs"] is None or not data["inputs"]:
+                from app.services.inference.contract_resolver import resolve_input_contract
+                from app.services.inference.input_validator import validate_and_normalize_inputs
+
+                contract_data = data.get("input_contract")
+                contract = (
+                    InputContract.model_validate(contract_data)
+                    if contract_data
+                    else resolve_input_contract(None, task)[0]
+                )
+
+                raw_cond: dict[str, Any] = {}
+                if task == "cross-image-suggestion":
+                    if data.get("retrieval_strategy") is not None:
+                        raw_cond["strategy"] = data.get("retrieval_strategy")
+                    cond = contract.conditioning
+                    top_k = data.get("top_k", 5)
+                    if cond.user_selectable_count:
+                        count = top_k
+                        if cond.max_units is not None:
+                            count = min(count, cond.max_units)
+                        if cond.min_units is not None:
+                            count = max(count, cond.min_units)
+                        raw_cond["count"] = count
+                    elif cond.kind in ("reference_images", "instances", "embeddings"):
+                        raw_cond["count"] = cond.max_units or cond.min_units or 1
+
+                raw_params: dict[str, Any] = {}
+                min_conf = data.get("min_confidence")
+                if "threshold" in {p.key for p in contract.parameters} and min_conf is not None and min_conf > 0.0:
+                    raw_params["threshold"] = min_conf
+
+                normalized = validate_and_normalize_inputs(
+                    contract, {"conditioning": raw_cond, "parameters": raw_params}
+                )
+                data["inputs"] = normalized
+        return data
 
 
 class InferenceOptions(BaseModel):
@@ -295,6 +356,9 @@ class ReplacePreview(BaseModel):
     )
 
 
+from iquana_toolbox.schemas.input_contract import InputContract
+
+
 class ModelOption(BaseModel):
     """One selectable model in the per-label picker."""
 
@@ -314,6 +378,14 @@ class ModelOption(BaseModel):
         default=False,
         description="Whether the model was trained on the dataset being annotated. Models that "
                     "were are sorted first in the picker.",
+    )
+    input_contract: InputContract = Field(
+        ...,
+        description="Effective inference input contract for this model and task.",
+    )
+    provenance: Literal["declared", "legacy_default"] = Field(
+        default="declared",
+        description="Whether the contract was explicitly declared by the model or resolved from legacy task defaults.",
     )
 
 

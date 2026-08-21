@@ -362,3 +362,16 @@ def retrieve_exemplars(
             detail=f"The {strategy_key!r} retrieval strategy is not available yet.",
         )
     return strategy.retrieve(session, query, model_id)
+
+
+def is_region_based_strategy(strategy_key: str) -> bool:
+    """Return True if strategy requires region-level embeddings (e.g. REGION_MEAN)."""
+    strat = RETRIEVAL_STRATEGIES.get(strategy_key)
+    if strat is not None:
+        return REGION_MEAN in strat.required_kinds
+    return False
+
+
+def get_region_based_strategies() -> set[str]:
+    """Return set of registered strategy keys that require region-level embeddings."""
+    return {k for k, v in RETRIEVAL_STRATEGIES.items() if REGION_MEAN in v.required_kinds}

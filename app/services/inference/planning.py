@@ -43,6 +43,8 @@ from app.schemas.inference import (
     WriteMode,
 )
 from app.services.exemplar_retrieval import strategy_options
+from app.services.inference.contract_resolver import resolve_input_contract
+from app.services.inference.input_validator import validate_and_normalize_inputs
 from app.services.model_registry import list_available_models
 
 logger = getLogger(__name__)
@@ -94,8 +96,9 @@ def model_catalog(db: Session, dataset_id: int) -> ModelCatalog:
     which means class-agnostic: it may be bound to any label, and whatever it returns is
     labelled with that step's label.
 
-    Cross-image models are only offered when at least one retrieval strategy is actually
-    available -- without a populated embedding store they would fail on every image.
+    Cross-image models requiring exemplar retrieval are only offered when at least one retrieval
+    strategy is actually available. Models with self-contained or concept-text conditioning remain
+    available even without embeddings.
     """
     dataset_labels = _dataset_label_ids(db, dataset_id)
     # Scoped to this dataset: a strategy that ranks by visual similarity is only listed
@@ -106,14 +109,32 @@ def model_catalog(db: Session, dataset_id: int) -> ModelCatalog:
 
     options: list[ModelOption] = []
     for task in BATCH_TASKS:
-        if task == "cross-image-suggestion" and not cross_image_usable:
-            continue
         try:
             listing = list_available_models(task)
         except Exception:
             logger.exception("Could not list %s models; the picker will omit them.", task)
             continue
         for info in listing.get("result", []):
+            try:
+                contract, provenance = resolve_input_contract(info, task)
+            except Exception:
+                logger.exception(
+                    "Failed to resolve input contract for model '%s', task '%s'; omitting model.",
+                    info.get("name") or info.get("registry_key"),
+                    task,
+                )
+                continue
+
+            # If conditioning requires external exemplar retrieval (reference_images/embeddings/instances)
+            # and no retrieval strategies are usable, skip offering this option.
+            # Models with 'none' or 'concept_text' conditioning are always included regardless of embeddings.
+            if (
+                task == "cross-image-suggestion"
+                and not cross_image_usable
+                and contract.conditioning.kind in {"reference_images", "embeddings", "instances"}
+            ):
+                continue
+
             label_ids = [int(lid) for lid in info.get("label_ids") or []]
             options.append(ModelOption(
                 registry_key=info.get("registry_key") or info.get("name"),
@@ -126,6 +147,8 @@ def model_catalog(db: Session, dataset_id: int) -> ModelCatalog:
                 label_ids=label_ids,
                 # A model whose classes are labels of this dataset was fine-tuned on it.
                 trained_on_dataset=bool(label_ids) and bool(set(label_ids) & dataset_labels),
+                input_contract=contract,
+                provenance=provenance,
             ))
 
     options.sort(key=lambda option: (not option.trained_on_dataset, option.name.lower()))
@@ -255,13 +278,28 @@ def resolve_steps(
                 f"Model {option.name!r} does not predict label {label.name!r}; it predicts "
                 f"label ids {sorted(option.label_ids)}.",
             )
+        raw_inputs = step.inputs if step.inputs is not None else {"conditioning": {}, "parameters": {}}
+        try:
+            normalized_inputs = validate_and_normalize_inputs(option.input_contract, raw_inputs)
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Invalid inference inputs for model {option.name!r} (task '{step.task}'): {exc}",
+            ) from exc
+
         resolved.append(ResolvedStep(
-            **step.model_dump(),
+            label_id=step.label_id,
+            model_registry_key=step.model_registry_key,
+            task=step.task,
             level=levels[step.label_id],
             parent_label_id=label.parent_id,
             label_name=label.name,
             model_name=option.name,
             model_label_ids=list(option.label_ids),
+            inputs=normalized_inputs,
+            input_contract=option.input_contract,
+            provenance=option.provenance,
+            min_confidence=step.min_confidence,
         ))
 
     resolved.sort(key=lambda step: (step.level, step.label_name.lower()))
