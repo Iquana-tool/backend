@@ -31,8 +31,9 @@ verified / sent back) is a separate axis that this module does not model.
 from logging import getLogger
 from typing import Iterable, Sequence
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
+from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
 from app.services.calibration import calibrated_counts
@@ -138,6 +139,10 @@ def status_for_images(
         masks_by_image = {}
         for mask in (
                 db.query(Masks)
+                .options(
+                    selectinload(Masks.contours).selectinload(Contours.reviewed_by),
+                    selectinload(Masks.rejections),
+                )
                 .filter(Masks.image_id.in_([image.id for image in images]))
                 .all()
         ):
