@@ -7,6 +7,7 @@ service modules (for persistence), and sends a ``ServerMessage`` back to the cli
 """
 
 from logging import getLogger
+from uuid import uuid4
 
 from fastapi.websockets import WebSocket
 from iquana_toolbox.inference import nms
@@ -589,20 +590,45 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
         label_hierarchy = await labels_db.get_label_hierarchy(state.image_db.dataset_id, db)
     suggested = assign_hierarchy_parents(suggested, hierarchy, label_hierarchy, label_id)
 
-    # Report how many new instances were found so the client can tell the user
-    # when a model returned nothing (objects themselves follow as OBJECT_ADDED).
+    # One suggestion run is one thing the user did, so it is one undo step however
+    # many instances came back.
+    group_id = history_db.new_group_id()
+    persisted_contours = []
+    with get_context_session() as db:
+        for contour in suggested:
+            persisted = await masks_db.add_contour_to_mask(
+                mask_id=state.mask_id,
+                contour_to_add=contour,
+                db=db,
+                author_username=state.user_id,
+            )
+            if persisted is not None:
+                history_db.record_create(db, state.mask_id, state.user_id, persisted.id, group_id=group_id)
+                persisted_contours.append((contour, persisted))
+            else:
+                logger.info(
+                    "Skipped contour on mask %s because hierarchy fitting removed all pixels.",
+                    state.mask_id,
+                )
+
+    # 1. Send SUCCESS acknowledgment first so the client's pending request resolves with accurate added_count
     await send_msg(websocket, ServerMessage(
         success=result.success,
         id=client_msg.id,
         type=ServerMessageType.SUCCESS,
         message=result.message,
-        data={"added_count": len(suggested)},
+        data={"added_count": len(persisted_contours)},
     ))
-    # One suggestion run is one thing the user did, so it is one undo step however
-    # many instances came back.
-    group_id = history_db.new_group_id()
-    for contour in suggested:
-        await add_object(contour, websocket, client_msg, state, group_id=group_id)
+
+    # 2. Emit OBJECT_ADDED events for all persisted contours
+    for original_contour, persisted in persisted_contours:
+        await send_msg(websocket, ServerMessage(
+            id=str(uuid4()),
+            type=ServerMessageType.OBJECT_ADDED,
+            success=True,
+            message=f"Successfully added object with confidence score {original_contour.confidence:.1%}",
+            data=persisted,
+        ))
 
 
 async def handle_instance_select_model(websocket: WebSocket, client_msg: ClientMessage,
@@ -735,8 +761,23 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
             db=db,
             author_username=state.user_id,
         )
-        history_db.record_create(db, state.mask_id, state.user_id, response.id,
-                                 group_id=group_id)
+        if response is None:
+            logger.info(
+                "Skipped contour on mask %s because hierarchy fitting removed all pixels.",
+                state.mask_id,
+            )
+        else:
+            history_db.record_create(db, state.mask_id, state.user_id, response.id,
+                                     group_id=group_id)
+    if response is None:
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.SUCCESS,
+            success=True,
+            message="Object was skipped because it does not add any new pixels.",
+            data={"skipped": True},
+        ))
+        return None
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_ADDED,

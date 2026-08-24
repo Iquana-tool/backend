@@ -168,6 +168,29 @@ def test_adding_a_contour_invalidates(session):
     assert len(second["root_contours"]) == 3
 
 
+def test_fully_overlapping_contour_is_skipped_without_crashing(session):
+    mask, _ = _seed(session)
+    existing = session.query(Contours).filter_by(mask_id=mask.id).first()
+    duplicate = Contour(
+        x=existing.x,
+        y=existing.y,
+        added_by="model",
+        confidence=1.0,
+        label_id=existing.label_id,
+    )
+
+    result = asyncio.run(masks_db.add_contour_to_mask(
+        mask.id,
+        duplicate,
+        session,
+        check_hierarchy=True,
+        author_username="u",
+    ))
+
+    assert result is None
+    assert session.query(Contours).filter_by(mask_id=mask.id).count() == 2
+
+
 def test_deleting_a_contour_invalidates(session):
     mask, _ = _seed(session)
     _read(mask.id, session)

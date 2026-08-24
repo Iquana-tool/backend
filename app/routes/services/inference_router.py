@@ -12,27 +12,33 @@ set explicitly, so no default-valued field can ever trigger one.
 import asyncio
 from logging import getLogger
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from starlette import status as http_status
 
 from app.database import get_session
-from app.database.inference_jobs import InferenceJobs, TERMINAL_JOB_STATUSES
+from app.database.inference_jobs import InferenceJobItems, InferenceJobs, TERMINAL_JOB_STATUSES
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.inference import (
+    DatasetModelRoutingRead,
+    DatasetModelRoutingWrite,
     InferenceJobCreate,
     InferenceJobItemRead,
     InferenceJobSnapshot,
     ModelCatalog,
+    ModelRoutingSuggestRequest,
+    ModelRoutingSuggestResult,
     ReplacePreview,
     ScopeCounts,
     WriteMode,
 )
 from app.schemas.permissions import Permission
 from app.services.auth import get_current_user
-from app.services.celery_app import celery_app
-from app.services.inference import planning, progress, tasks
+from app.services.celery_app import BACKEND_QUEUE, celery_app
+from app.services.inference import configuration, planning, progress, tasks
 from app.services.permissions import ensure_permission, require
 
 logger = getLogger(__name__)
@@ -59,9 +65,17 @@ def _load_job(job_id: int, db: Session, user: AuthenticatedUser) -> InferenceJob
 async def get_model_catalog(
     dataset_id: int,
     db: Session = Depends(get_session),
-    user: AuthenticatedUser = Depends(require(Permission.AI_BATCH_INFER)),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Models a label in this dataset may be bound to, and the retrieval strategies."""
+    if not (
+        user.has_permission(dataset_id, Permission.AI_BATCH_INFER)
+        or user.has_permission(dataset_id, Permission.AI_INTERACTIVE)
+    ):
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail=f"Missing permission to view model catalog on dataset {dataset_id}.",
+        )
     return await asyncio.to_thread(planning.model_catalog, db, dataset_id)
 
 
@@ -117,7 +131,7 @@ async def create_job(
     from app.services.inference.tasks import run_job
 
     try:
-        task = run_job.apply_async((job.id,))
+        task = run_job.apply_async((job.id,), queue=BACKEND_QUEUE)
     except Exception as exc:
         logger.exception("Could not enqueue inference job %s.", job.id)
         job.status = "failed"
@@ -238,7 +252,20 @@ async def cancel_job(
         except Exception:
             logger.warning("Could not revoke task %s for job %s.", job.celery_task_id, job_id)
 
-    unreachable = job.started_at is None or job.status == "cancelling"
+    # ``run_job`` sets started_at before it publishes ``run_next``. If that follow-up
+    # task is lost, a job can look started while every work item is still pending and
+    # no worker will ever come back to finalize it. Treat that state like an unreachable
+    # worker so the first cancel is enough to release the dataset.
+    has_started_item = (
+        db.query(InferenceJobItems.id)
+        .filter(
+            InferenceJobItems.job_id == job.id,
+            InferenceJobItems.status.in_(("running", "done", "failed")),
+        )
+        .first()
+        is not None
+    )
+    unreachable = job.started_at is None or job.status == "cancelling" or not has_started_item
     if unreachable:
         tasks.abandon_pending(db, job.id)
         tasks.finish(db, job, "cancelled")
@@ -269,3 +296,82 @@ async def delete_job(
     db.delete(job)
     db.commit()
     return {"success": True, "message": f"Deleted inference job {job_id}."}
+
+
+# --------------------------------------------------------------------------- #
+# Dataset Model Routing Policy
+# --------------------------------------------------------------------------- #
+@router.get("/config", response_model=Optional[DatasetModelRoutingRead])
+def get_dataset_model_routing(
+    dataset_id: int,
+    response: Response = None,
+    db: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Retrieve the single model routing policy for a dataset.
+
+    Returns 204 No Content when no policy is configured.
+    """
+    if not (
+        user.has_permission(dataset_id, Permission.AI_BATCH_INFER)
+        or user.has_permission(dataset_id, Permission.AI_INTERACTIVE)
+    ):
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail=f"Missing permission to view inference routing policy on dataset {dataset_id}.",
+        )
+
+    policy = configuration.get_routing_policy(db, dataset_id)
+    if policy is None:
+        if response is not None:
+            response.status_code = http_status.HTTP_204_NO_CONTENT
+        return None
+    return policy
+
+
+@router.put("/config", response_model=DatasetModelRoutingRead)
+def update_dataset_model_routing(
+    body: DatasetModelRoutingWrite,
+    db: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Save or replace the model routing policy for a dataset."""
+    ensure_permission(user, body.dataset_id, Permission.AI_BATCH_INFER)
+    return configuration.upsert_routing_policy(db, body.dataset_id, user.username, body)
+
+
+@router.delete("/config")
+def delete_dataset_model_routing(
+    dataset_id: int,
+    db: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Explicitly delete the model routing policy for a dataset."""
+    ensure_permission(user, dataset_id, Permission.AI_BATCH_INFER)
+    deleted = configuration.clear_routing_policy(db, dataset_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"No inference routing policy found for dataset {dataset_id}.",
+        )
+    return {"success": True, "message": f"Deleted inference routing policy for dataset {dataset_id}."}
+
+
+@router.post("/config/suggest", response_model=ModelRoutingSuggestResult)
+def suggest_model_routing_step(
+    body: ModelRoutingSuggestRequest,
+    db: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Execute one routed model step for a single image with patch semantics."""
+    ensure_permission(user, body.dataset_id, Permission.AI_INTERACTIVE)
+    ensure_permission(user, body.dataset_id, Permission.ANNOTATION_CREATE)
+    return configuration.execute_suggest_step(
+        db=db,
+        dataset_id=body.dataset_id,
+        image_id=body.image_id,
+        label_id=body.label_id,
+        username=user.username,
+        task=body.task,
+        mask_id=body.mask_id,
+    )

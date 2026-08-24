@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from iquana_toolbox.schemas.database.contours import Contour
 from sqlalchemy.orm import Session
 
@@ -192,6 +192,11 @@ async def add_contour(
     """
     added_contour = await masks_db.add_contour_to_mask(mask_id, contour_to_add, check_hierarchy=check_hierarchy,
                                                        db=db, author_username=user.username)
+    if added_contour is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Contour has no drawable pixels after hierarchy fitting.",
+        )
     return {
         "success": True,
         "message": "Contour added successfully.",
@@ -223,7 +228,9 @@ async def add_contours(
     for contour_to_add in contours_to_add:
         logger.info(f"Added {len(added)} / {len(contours_to_add)} contours.")
         # 1. Add to the hierarchy, ensuring it fits and respects hierarchies
-        fitted_contour, changed = hierarchy.add_contour(contour_to_add)
+        fitted_contour = masks_db.add_contour_to_hierarchy(hierarchy, contour_to_add)
+        if fitted_contour is None:
+            continue
 
         # 2. Add the (fitted) contour to the db; don't need to check the hierarchy here
         await masks_db.add_contour_to_mask(mask_id, fitted_contour, check_hierarchy=False, db=db,

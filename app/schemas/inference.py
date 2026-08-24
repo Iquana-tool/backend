@@ -18,11 +18,12 @@ gateway-internal -- the AI service never sees a plan, only one image-sized reque
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class WriteMode(StrEnum):
@@ -204,6 +205,137 @@ class InferenceOptions(BaseModel):
     )
 
 
+def validate_unique_step_labels(steps: list[InferenceStepRequest]) -> None:
+    """Reject multiple steps targeting the same label.
+
+    Running two models at one label makes the outcome depend on arbitrary execution order.
+    Refusing it keeps the plan deterministic and well-defined.
+    """
+    seen: set[int] = set()
+    duplicates: set[int] = set()
+    for step in steps:
+        if step.label_id in seen:
+            duplicates.add(step.label_id)
+        seen.add(step.label_id)
+    if duplicates:
+        raise ValueError(f"Each label may appear at most once in a plan; got {sorted(duplicates)}.")
+
+
+class ModelRoutingTask(StrEnum):
+    """The four canonical task capabilities supported for dataset model routing."""
+
+    PROMPTED_SEGMENTATION = "prompted-segmentation"
+    INSTANCE_SUGGESTION = "instance-suggestion"
+    INSTANCE_SEGMENTATION = "instance-segmentation"
+    CROSS_IMAGE_SUGGESTION = "cross-image-suggestion"
+
+
+MODEL_ROUTING_TASKS: tuple[str, ...] = (
+    "prompted-segmentation",
+    "instance-suggestion",
+    "instance-segmentation",
+    "cross-image-suggestion",
+)
+
+
+class ModelRoutingBinding(BaseModel):
+    """A model assignment for a task and optional label in a dataset routing policy."""
+
+    task: ModelRoutingTask = Field(
+        ...,
+        description="Inference capability/task this binding routes.",
+    )
+    label_id: Optional[int] = Field(
+        default=None,
+        description="Dataset label ID for a label-specific override, or null for the task default.",
+    )
+    model_registry_key: str = Field(
+        ...,
+        min_length=1,
+        description="Key of the registered model serving this route.",
+    )
+    inputs: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Model-owned inputs when supported by the task/model contract.",
+    )
+
+
+class DatasetModelRoutingWrite(BaseModel):
+    """Request body for saving or replacing a dataset model routing policy."""
+
+    dataset_id: int = Field(..., description="ID of the dataset this policy applies to.")
+    bindings: list[ModelRoutingBinding] = Field(
+        default_factory=list,
+        description="List of task defaults and label-specific overrides.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_unique_selectors(self) -> "DatasetModelRoutingWrite":
+        seen: set[tuple[str, Optional[int]]] = set()
+        duplicates: set[tuple[str, Optional[int]]] = set()
+        for b in self.bindings:
+            task_val = b.task.value if isinstance(b.task, ModelRoutingTask) else str(b.task)
+            key = (task_val, b.label_id)
+            if key in seen:
+                duplicates.add(key)
+            seen.add(key)
+        if duplicates:
+            formatted = [f"(task='{t}', label_id={l})" for t, l in sorted(duplicates)]
+            raise ValueError(
+                f"Each (task, label_id) pair may appear at most once; duplicate selectors: {', '.join(formatted)}."
+            )
+        return self
+
+
+class DatasetModelRoutingRead(BaseModel):
+    """The saved model routing policy for a dataset."""
+
+    dataset_id: int
+    bindings: list[ModelRoutingBinding] = Field(default_factory=list)
+    updated_by: Optional[str] = Field(
+        default=None,
+        description="Username of the last user who updated the policy.",
+    )
+    created_at: datetime
+    updated_at: datetime
+
+
+class ModelRoutingSuggestRequest(BaseModel):
+    """Request to run one routed orchestration step on a single image."""
+
+    dataset_id: int = Field(..., description="Target dataset ID.")
+    image_id: int = Field(..., description="Target image ID to annotate.")
+    label_id: int = Field(..., description="Label whose routed model should be executed.")
+    task: ModelRoutingTask = Field(
+        default=ModelRoutingTask.CROSS_IMAGE_SUGGESTION,
+        description="Inference capability to execute.",
+    )
+    mask_id: Optional[int] = Field(
+        default=None,
+        description="Optional mask ID to write suggested contours to. Required if image has multiple masks.",
+    )
+
+
+class ModelRoutingSuggestResult(BaseModel):
+    """Outcome of a single-image suggestion run."""
+
+    dataset_id: int
+    image_id: int
+    label_id: int
+    task: str = "cross-image-suggestion"
+    contours_created: int = 0
+    contours_suppressed: int = 0
+    contours_unparented: int = 0
+    contour_ids: list[int] = Field(default_factory=list)
+
+
+# Transitional aliases for backwards compatibility with existing route imports
+InferenceConfigWrite = DatasetModelRoutingWrite
+InferenceConfigRead = DatasetModelRoutingRead
+InferenceConfigSuggestRequest = ModelRoutingSuggestRequest
+InferenceConfigSuggestResult = ModelRoutingSuggestResult
+
+
 class InferenceJobCreate(BaseModel):
     """Request body for starting a run."""
 
@@ -226,20 +358,7 @@ class InferenceJobCreate(BaseModel):
 
     @model_validator(mode="after")
     def _one_model_per_label(self) -> "InferenceJobCreate":
-        """Reject two steps targeting the same label.
-
-        Running two models at one label is expressible -- but it makes the run's outcome
-        depend on which model happened to go first, since the second one's output is NMS'd
-        against the first one's. Refusing it keeps the plan a function, not a race.
-        """
-        seen: set[int] = set()
-        duplicates: set[int] = set()
-        for step in self.steps:
-            if step.label_id in seen:
-                duplicates.add(step.label_id)
-            seen.add(step.label_id)
-        if duplicates:
-            raise ValueError(f"Each label may appear at most once in a plan; got {sorted(duplicates)}.")
+        validate_unique_step_labels(self.steps)
         return self
 
     @model_validator(mode="after")
@@ -364,7 +483,7 @@ class ModelOption(BaseModel):
 
     registry_key: str
     name: str
-    task: InferenceTask
+    task: str = Field(..., description="Task capability the model serves.")
     description: Optional[str] = None
     usage_tip: Optional[str] = None
     badges: list[str] = Field(default_factory=list)

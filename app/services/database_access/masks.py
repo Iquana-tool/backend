@@ -18,6 +18,34 @@ from app.services.database_access import labels as labels_db
 logger = getLogger(__name__)
 
 
+def add_contour_to_hierarchy(
+        hierarchy: ContourHierarchy,
+        contour: Contour,
+) -> Contour | None:
+    """Fit and index a contour without crashing when no pixels remain.
+
+    The pinned toolbox returns an empty list when ``fit_to_mask`` removes the
+    complete contour. Treat that valid overlap case as "nothing to add" at the
+    database boundary instead of passing the list back as a ``Contour``.
+    """
+    resolution_shape = (1000, 1000)
+    allowed_pixels = np.logical_and(
+        np.logical_not(hierarchy.get_children_mask(contour.parent_id, resolution_shape)),
+        hierarchy.get_parent_mask(contour.parent_id, resolution_shape),
+    )
+    fitted_contour, _changed = contour.fit_to_mask(allowed_pixels)
+    if not isinstance(fitted_contour, Contour):
+        return None
+
+    if fitted_contour.parent_id is None:
+        hierarchy.root_contours.append(fitted_contour)
+    else:
+        hierarchy.id_to_contour[fitted_contour.parent_id].add_child(fitted_contour)
+    hierarchy.id_to_contour[fitted_contour.id] = fitted_contour
+    hierarchy.label_id_to_contours.setdefault(fitted_contour.label_id, []).append(fitted_contour)
+    return fitted_contour
+
+
 async def get_mask(
         mask_id: int,
         db: Session
@@ -218,7 +246,9 @@ async def add_contour_to_mask(
     """
     if check_hierarchy:
         hierarchy = await get_contour_hierarchy_of_mask(mask_id, db)
-        contour_to_add, changed = hierarchy.add_contour(contour_to_add)
+        contour_to_add = add_contour_to_hierarchy(hierarchy, contour_to_add)
+        if contour_to_add is None:
+            return None
     # Add contour to the database
     entry = save_contour_tree(db, contour_to_add, mask_id, parent_id=contour_to_add.parent_id,
                               author_username=author_username)

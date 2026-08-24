@@ -255,10 +255,16 @@ def attach_parents(
 # The unit
 # --------------------------------------------------------------------------- #
 def run_unit(
-    db: Session, step: ResolvedStep, image: Images, options: InferenceOptions, username: str
+    db: Session,
+    step: ResolvedStep,
+    image: Images,
+    options: InferenceOptions,
+    username: str,
+    mask: Optional[Masks] = None,
 ) -> UnitResult:
     """Predict, merge and write one step's output for one image. Does not commit."""
-    mask = db.query(Masks).filter(Masks.image_id == image.id).first()
+    if mask is None:
+        mask = db.query(Masks).filter(Masks.image_id == image.id).first()
     if mask is None:
         raise InferenceUnitError(f"Image {image.id} has no mask to write to.")
 
