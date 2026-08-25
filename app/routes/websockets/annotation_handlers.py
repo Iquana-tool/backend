@@ -444,6 +444,12 @@ async def handle_prompted_segmentation(
     if state.focussed_contour_id is not None and state.contour_hierarchy is not None:
         focus_contour = state.contour_hierarchy.id_to_contour.get(state.focussed_contour_id)
 
+    client_data = client_msg.data or {}
+    inputs_data = client_data.get("inputs") or {}
+    parameters = inputs_data.get("parameters") if isinstance(inputs_data, dict) else None
+    if not parameters and isinstance(client_data.get("parameters"), dict):
+        parameters = client_data.get("parameters")
+
     result = await run_prompted_segmentation(
         service=state._running_backends[Backends.PROMPTED_SEGMENTATION.value],
         image_url=state.image_db.file_path,
@@ -455,6 +461,7 @@ async def handle_prompted_segmentation(
         previous_mask=previous_mask,
         parent_id=state.focussed_contour_id,
         focus_contour=focus_contour,
+        parameters=parameters,
     )
     contour_model = result.contour
 
@@ -553,9 +560,24 @@ async def handle_suggestion_disable(websocket: WebSocket, client_msg: ClientMess
 
 async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the suggestion of a suggestion model. """
-    seed_contour_ids = client_msg.data.get("seed_contour_ids")
+    client_data = client_msg.data or {}
+    seed_contour_ids = client_data.get("seed_contour_ids") or []
+    inputs_data = client_data.get("inputs") or {}
+    parameters = inputs_data.get("parameters") if isinstance(inputs_data, dict) else None
+    if not parameters and isinstance(client_data.get("parameters"), dict):
+        parameters = client_data.get("parameters")
+
+    # Respect user-configured exemplar count (conditioning.count) if present
+    conditioning = inputs_data.get("conditioning") if isinstance(inputs_data, dict) else {}
+    count = conditioning.get("count") if isinstance(conditioning, dict) else None
+    if count is not None and isinstance(count, int) and count > 0 and len(seed_contour_ids) > count:
+        seed_contour_ids = seed_contour_ids[:count]
+
     with get_context_session() as db:
         contours = await contours_db.get_contours(seed_contour_ids, db)
+    if count is not None and isinstance(count, int) and count > 0 and len(contours) > count:
+        contours = contours[:count]
+
     height, width = state.image_db.height, state.image_db.width
     positive_exemplars = [contour.to_binary_mask_model(height, width) for contour in contours]
 
@@ -573,10 +595,11 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
     result = await run_suggestion_segmentation(
         service=state._running_backends[Backends.SUGGESTION_SEGMENTATION.value],
         image_url=state.image_db.file_path,
-        model_key=client_msg.data.get('model_key'),
+        model_key=client_data.get('model_key'),
         user_id=state.user_id,
         positive_exemplars=positive_exemplars,
         concept=concept,
+        parameters=parameters,
     )
 
     # Instance suggestion may re-detect the seed exemplars themselves; drop those.
@@ -686,6 +709,11 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         return
 
     model_registry_key = message_data.get("model_registry_key")
+    inputs_data = message_data.get("inputs") or {}
+    parameters = inputs_data.get("parameters") if isinstance(inputs_data, dict) else None
+    if not parameters and isinstance(message_data.get("parameters"), dict):
+        parameters = message_data.get("parameters")
+
     result = await run_instance_segmentation(
         service=state._running_backends[Backends.INSTANCE_SEGMENTATION.value],
         image_url=state.image_db.file_path,
@@ -693,6 +721,7 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         image_height=state.image_db.height,
         model_registry_key=model_registry_key,
         user_id=state.user_id,
+        parameters=parameters,
     )
 
     contours_to_add = result.contours
