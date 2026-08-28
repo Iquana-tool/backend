@@ -124,9 +124,12 @@ async def create_dataset(name: str,
         owner_username=current_user.username,
         db=db
     )
+    if isinstance(dataset, dict):
+        return dataset
+
     return {"success": True,
             "message": "Dataset created successfully.",
-            "dataset_id": dataset
+            "dataset_id": dataset.id
             }
 
 
@@ -1124,4 +1127,3 @@ async def get_coco_dataset(
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
     )
-
