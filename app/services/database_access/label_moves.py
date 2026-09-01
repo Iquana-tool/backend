@@ -20,7 +20,7 @@ change, and contours nested inside the moved label's objects are equally untouch
 from dataclasses import dataclass
 from logging import getLogger
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, aliased
 
 from app.database.contours import Contours
@@ -90,6 +90,45 @@ def _descendant_ids(db: Session, label_id: int) -> set[int]:
         found |= next_level
         frontier = list(next_level)
     return found
+
+
+def nesting_summary(db: Session, label_id: int) -> dict:
+    """How the objects carrying this label are nested today.
+
+    Enough for a client to price EVERY candidate move of this label without asking
+    again: the objects stranded by moving it under ``P`` are the nested ones whose
+    container is not already labelled ``P``, i.e.
+    ``nested_total - by_container_label[P]`` (and all of them when moving to the top
+    level). This is what lets a drag show a live count as it passes over rows.
+
+    Objects inside an unlabelled container are counted in ``nested_total`` but appear
+    under no key, so they price as stranded by every destination -- which they are.
+
+    The client's arithmetic is an estimate, not a verdict: it can be stale by the time
+    the drop happens, so ``move_label`` re-derives the impact and remains the authority.
+
+    Args:
+        db: The database session.
+        label_id: The label to summarise.
+
+    Returns:
+        ``{"nested_total": int, "by_container_label": {label_id: count}}``.
+    """
+    container = aliased(Contours)
+    rows = (
+        db.query(container.label_id.label("container_label_id"), func.count(Contours.id).label("n"))
+        .join(container, Contours.parent_id == container.id)
+        .filter(Contours.label_id == label_id)
+        .group_by(container.label_id)
+        .all()
+    )
+
+    return {
+        "nested_total": sum(row.n for row in rows),
+        "by_container_label": {
+            row.container_label_id: row.n for row in rows if row.container_label_id is not None
+        },
+    }
 
 
 def _resolve_target(db: Session, label: Labels, new_parent_id: int | None) -> Labels | None:

@@ -133,6 +133,33 @@ async def modify_label(
     }
 
 
+@router.get("/{label_id}/nesting_summary")
+async def label_nesting_summary(
+        label_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_READ, "label_id")),
+):
+    """How the objects carrying this label are nested today.
+
+    Lets a client price every candidate move of this label up front -- the objects a
+    move under ``P`` would strand are the nested ones not already inside a ``P`` -- so
+    dragging a label can show a live count without a request per row. The estimate is
+    advisory; ``/labels/{id}/move`` re-derives it and remains the authority.
+
+    Args:
+        label_id (int): The label to summarise.
+        user (AuthenticatedUser): The current authenticated user.
+        db (Session): The database session.
+
+    Returns:
+        dict: Success status and the summary (nested total, and counts per container label).
+    """
+    return {
+        "success": True,
+        "summary": label_moves.nesting_summary(db, label_id),
+    }
+
+
 @router.post("/{label_id}/move")
 async def move_label(
         label_id: int,

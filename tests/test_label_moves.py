@@ -35,6 +35,7 @@ from app.services.database_access.label_moves import (
     LabelMoveBlocked,
     LabelMoveError,
     move_label,
+    nesting_summary,
     plan_move,
 )
 from app.services.quantification import compute_relational_metrics_for_dataset
@@ -232,3 +233,50 @@ def test_no_op_move_is_accepted_and_changes_nothing(session):
     assert impact.count == 0
     session.refresh(child)
     assert child.parent_id == parent.id
+
+
+def test_nesting_summary_prices_every_destination_like_plan_move(session):
+    ds, mask, cell, tissue, nucleus = _seed(session)
+    _annotate_nucleus_in_cell(session, mask, cell, nucleus)
+
+    summary = nesting_summary(session, nucleus.id)
+
+    assert summary["nested_total"] == 1
+    assert summary["by_container_label"] == {cell.id: 1}
+
+    # The client subtracts to price a destination; it must agree with the server's own
+    # count for every candidate, or a drag would promise something the drop refuses.
+    for destination in (None, cell.id, tissue.id):
+        already_inside = (
+            0 if destination is None else summary["by_container_label"].get(destination, 0)
+        )
+        predicted = summary["nested_total"] - already_inside
+        assert predicted == plan_move(session, nucleus.id, destination).count
+
+
+def test_nesting_summary_counts_unlabelled_containers_as_always_stranded(session):
+    ds, mask, cell, tissue, nucleus = _seed(session)
+    # An object may be drawn before it is labelled, and anything inside it is stranded
+    # by every destination, since no destination can match "no label".
+    px, py = _rect(500, 500, half=200)
+    unlabelled = save_contour_tree(
+        session, Contour(x=px, y=py, label_id=None, added_by="u", reviewed_by=["u"]), mask.id
+    )
+    cpx, cpy = _rect(500, 500)
+    save_contour_tree(
+        session, Contour(x=cpx, y=cpy, label_id=nucleus.id, added_by="u", reviewed_by=["u"]),
+        mask.id, parent_id=unlabelled.id,
+    )
+    session.commit()
+
+    summary = nesting_summary(session, nucleus.id)
+
+    assert summary["nested_total"] == 1
+    assert summary["by_container_label"] == {}
+    assert plan_move(session, nucleus.id, tissue.id).count == 1
+
+
+def test_nesting_summary_is_empty_for_an_unannotated_label(session):
+    ds, mask, cell, tissue, nucleus = _seed(session)
+
+    assert nesting_summary(session, nucleus.id) == {"nested_total": 0, "by_container_label": {}}
