@@ -16,25 +16,18 @@ without a rebuild.
 
 Every value is optional. With nothing configured the instance simply describes
 itself as IQUANA, which is what a single-group local install should say.
+
+Since the admin page landed these are read through :mod:`app.services.settings`,
+which resolves a stored override before the environment. The environment
+variables documented in ``env.example`` still supply the defaults, so a
+deployment that never opens the admin page is unaffected — but fixing a typo in
+the contact address no longer means editing ``.env`` and restarting.
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
-
-def _read(key: str) -> str | None:
-    """An environment value, treating blank and whitespace-only as unset.
-
-    The installer writes every key it knows about, leaving the ones the operator
-    skipped empty, so "present but empty" is the normal way to say "not set" here
-    rather than an anomaly worth distinguishing.
-    """
-    value = os.getenv(key)
-    if value is None:
-        return None
-    stripped = value.strip()
-    return stripped or None
+from app.services import settings as settings_service
 
 
 @dataclass(frozen=True)
@@ -54,18 +47,24 @@ class InstanceConfig:
 
 
 def get_instance_config() -> InstanceConfig:
-    """Read the instance configuration from the environment.
+    """Read the instance configuration: stored overrides first, environment second.
 
-    Read per call rather than cached at import: ``load_dotenv()`` runs inside
-    ``create_app``, so import-time capture would see the process environment
-    before the ``.env`` file had been applied.
+    Read per call rather than cached at import, for two reasons that both still
+    hold: ``load_dotenv()`` runs inside ``create_app``, so an import-time capture
+    would see the process environment before the ``.env`` file had been applied —
+    and an admin editing these values expects the sign-in page to change without
+    a restart.
     """
+    values = settings_service.get_many(
+        "instance_name", "instance_org", "instance_contact",
+        "instance_notice", "allow_registration",
+    )
     return InstanceConfig(
-        name=_read("INSTANCE_NAME"),
-        organisation=_read("INSTANCE_ORG"),
-        contact=_read("INSTANCE_CONTACT"),
-        notice=_read("INSTANCE_NOTICE"),
+        name=values["instance_name"],
+        organisation=values["instance_org"],
+        contact=values["instance_contact"],
+        notice=values["instance_notice"],
         # Opt-in rather than opt-out: an instance holding real research data
         # should not start accepting strangers because a variable was misspelled.
-        allow_registration=(os.getenv("INSTANCE_ALLOW_REGISTRATION", "").strip().lower() == "true"),
+        allow_registration=(values["allow_registration"] or "").strip().lower() == "true",
     )

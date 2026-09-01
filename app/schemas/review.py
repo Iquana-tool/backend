@@ -444,3 +444,18 @@ class AdminUserCreate(BaseModel):
     def _strip_username(cls, value):
         """Trim surrounding whitespace so a pasted name still matches at login."""
         return value.strip() if isinstance(value, str) else value
+
+
+class SettingsUpdate(BaseModel):
+    """Request body for changing the deployment's own configuration.
+
+    A sparse map of ``{setting key: new value}`` -- only the fields the operator
+    actually edited are sent, so two admins saving different tabs cannot clobber
+    each other's work. An unknown key is refused rather than ignored, so a typo
+    does not look like a saved setting.
+
+    Values arrive as strings (or ``null``) regardless of the setting's declared
+    kind; the settings service parses each one against its own spec.
+    """
+
+    values: dict[str, str | None] = Field(default_factory=dict)

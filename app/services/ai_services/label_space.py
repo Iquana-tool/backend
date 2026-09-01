@@ -6,7 +6,11 @@ selected by the ``LABEL_SPACE_LLM_MODEL`` prefix, e.g. ``anthropic/...``,
 the model output into a validated :class:`LabelSpaceDraft` and retries on
 schema-validation errors.
 
-Configuration (see ``config.py`` / ``.env``):
+Configuration is read through :mod:`app.services.settings` on every call, so an
+admin rotating the key from the admin page takes effect on the next generation
+rather than on the next restart. The environment variables below still supply the
+defaults (see ``config.py`` / ``.env``):
+
     LABEL_SPACE_LLM_MODEL     LiteLLM model id, default ``anthropic/claude-opus-4-8``.
     LABEL_SPACE_LLM_API_KEY   API key for the matching provider. Generation is
                               disabled until this is set.
@@ -19,11 +23,7 @@ from logging import getLogger
 from fastapi import HTTPException
 
 from app.schemas.label_space import DraftLabel, LabelSpaceDraft
-from config import (
-    LABEL_SPACE_LLM_API_BASE,
-    LABEL_SPACE_LLM_API_KEY,
-    LABEL_SPACE_LLM_MODEL,
-)
+from app.services import settings as settings_service
 
 logger = getLogger(__name__)
 
@@ -67,11 +67,11 @@ class LabelSpaceService:
 
     @staticmethod
     def is_enabled() -> bool:
-        return bool(LABEL_SPACE_LLM_API_KEY)
+        return bool(settings_service.get("llm_api_key"))
 
     @staticmethod
     def model() -> str:
-        return LABEL_SPACE_LLM_MODEL
+        return settings_service.get("llm_model") or ""
 
     def _client(self):
         # Imported lazily so the rest of the app runs without the optional deps installed.
@@ -89,19 +89,22 @@ class LabelSpaceService:
         if not self.is_enabled():
             raise HTTPException(
                 status_code=503,
-                detail="Label-space generation is not configured. Set LABEL_SPACE_LLM_API_KEY on the server.",
+                detail="Label-space generation is not configured. An admin can set the LLM API key under Admin -> Settings.",
             )
         client = self._client()
+        # One read for the whole call, so a rotation landing mid-request cannot
+        # pair a new key with the old model id.
+        config = settings_service.get_many("llm_model", "llm_api_key", "llm_api_base")
         kwargs = dict(
-            model=model or LABEL_SPACE_LLM_MODEL,
+            model=model or config["llm_model"],
             response_model=LabelSpaceDraft,
             messages=messages,
-            api_key=LABEL_SPACE_LLM_API_KEY,
+            api_key=config["llm_api_key"],
             max_retries=2,
             temperature=0.2,
         )
-        if LABEL_SPACE_LLM_API_BASE:
-            kwargs["api_base"] = LABEL_SPACE_LLM_API_BASE
+        if config["llm_api_base"]:
+            kwargs["api_base"] = config["llm_api_base"]
         try:
             draft: LabelSpaceDraft = client.chat.completions.create(**kwargs)
         except HTTPException:
