@@ -132,12 +132,39 @@ async def bulk_create_labels(
     return created_count
 
 
+#: Columns ``update_label`` will write. ``parent_id`` is excluded because moving a label
+#: can invalidate annotations and belongs to ``label_moves.move_label``; ``value`` is
+#: excluded because exported masks were encoded against it; ``dataset_id`` because a
+#: label cannot change owner.
+_PATCHABLE_FIELDS = {"name"}
+
+
 async def update_label(
         label_id: int,
         updates: dict,
         db: Session
 ):
+    """Update a label in place.
+
+    Args:
+        label_id: The label to update.
+        updates: Field/value pairs, restricted to ``_PATCHABLE_FIELDS``.
+        db: The database session.
+
+    Raises:
+        ValueError: If the label does not exist or a field outside the whitelist was
+            passed -- previously any column could be set from the request body.
+    """
     existing_class = db.query(Labels).filter_by(id=label_id).first()
+    if existing_class is None:
+        raise ValueError(f"Label with id {label_id} does not exist.")
+
+    rejected = set(updates) - _PATCHABLE_FIELDS
+    if rejected:
+        raise ValueError(
+            f"Fields not editable here: {', '.join(sorted(rejected))}."
+        )
+
     for k, v in updates.items():
         setattr(existing_class, k, v)
     db.commit()

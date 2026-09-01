@@ -27,17 +27,23 @@ from config import (
 
 logger = getLogger(__name__)
 
-_SYSTEM_PROMPT = """You are an expert in annotation taxonomies for image segmentation.
-Given a plain-language description of what a user wants to segment, design a clear,
-hierarchical label space.
+_SYSTEM_PROMPT = """You are an expert in annotation schemas for image segmentation.
+Given a plain-language description of what a user wants to segment, design a clear
+label space organised by physical containment.
 
 Rules:
-- Organise labels as a tree: broad categories at the top, specific subtypes nested underneath.
+- Nesting means PART OF, never "kind of". A child label must be a part or component of
+  its parent: "Nucleus" under "Cell" means a nucleus is part of a cell. If you cannot say
+  "an X is part of a Y", X must not be nested under Y.
+- Subtypes are NOT nested. "Acropora" is a kind of coral, not a part of one, so it belongs
+  at the top level alongside "Coral" rather than underneath it. The target system cannot
+  record "is a kind of" at all — never express one by nesting.
+- Whole objects go at the top level; their components go underneath them.
+- Sibling labels must be mutually exclusive: one object is one of them, never two.
 - Every label name MUST be unique across the ENTIRE hierarchy (not just among its siblings).
-  The target system requires dataset-wide unique names. If two groups would share a subtype
+  The target system requires dataset-wide unique names. If two parents would share a part
   name, qualify it (e.g. "Car Wheel" vs "Truck Wheel").
 - Use concise, Title Case names a domain expert would recognise.
-- Only nest a subtype when it is genuinely a kind-of its parent.
 - Do not exceed the requested maximum depth or total label count.
 - Do not invent a "Background" label unless the user explicitly asks for one.
 - Add a short `description` to each label explaining what it covers.

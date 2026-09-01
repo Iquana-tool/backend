@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.label_space import LabelSpaceDraft
+from app.schemas.labels import LabelMoveRequest, LabelUpdate
 from app.schemas.permissions import Permission
-from app.services.database_access import labels as labels_db
+from app.services.database_access import label_moves, labels as labels_db
+from app.services.database_access.label_moves import LabelMoveBlocked, LabelMoveError
 from app.services.permissions import require
 
 logger = logging.getLogger(__name__)
@@ -105,25 +107,81 @@ async def get_label(
 @router.patch("/{label_id}")
 async def modify_label(
         label_id: int,
-        updates: dict = None,
+        updates: LabelUpdate,
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require(Permission.LABEL_MANAGE, "label_id")),
 ):
-    """Update fields on a label.
+    """Rename a label.
+
+    Only the name is patchable: re-parenting goes through ``/labels/{id}/move`` because
+    it can invalidate existing annotations, and ``value`` is what mask encodings were
+    written against.
 
     Args:
         label_id (int): The ID of the label to update.
+        updates (LabelUpdate): The fields to change.
         user (AuthenticatedUser): The current authenticated user.
-        updates (dict): A dictionary containing the updated label data. Defaults to None.
+        db (Session): The database session.
 
     Returns:
         dict: A dictionary containing the success status and message.
     """
-    # Check if class already exists
-    await labels_db.update_label(label_id, updates, db)
+    await labels_db.update_label(label_id, updates.model_dump(exclude_unset=True), db)
     return {
         "success": True,
         "message": "Label updated successfully.",
+    }
+
+
+@router.post("/{label_id}/move")
+async def move_label(
+        label_id: int,
+        request: LabelMoveRequest,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_MANAGE, "label_id")),
+):
+    """Move a label under a different parent, or to the top level.
+
+    Nesting means part-of, and annotation enforces it: an object may only carry a label
+    that is a direct part of the label on the object containing it. A move that would
+    strand already-annotated objects is therefore refused with a 409 describing what it
+    would break; repeating it with ``detach_affected`` demotes those objects to root
+    level, keeping their label and dropping only the containment link.
+
+    Args:
+        label_id (int): The ID of the label to move.
+        request (LabelMoveRequest): The destination, and whether to accept detaching.
+        user (AuthenticatedUser): The current authenticated user.
+        db (Session): The database session.
+
+    Returns:
+        dict: Success status, message, and how many objects were detached.
+    """
+    try:
+        impact = await label_moves.move_label(
+            db, label_id, request.new_parent_id, request.detach_affected
+        )
+    except LabelMoveError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except LabelMoveBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(exc),
+                "affected_count": exc.impact.count,
+                # Capped: the dialog needs a sense of scale and a few examples to open,
+                # not every contour in a fully annotated dataset.
+                "affected_objects": [
+                    {"contour_id": affected.contour_id, "image_id": affected.image_id}
+                    for affected in exc.impact.affected[:20]
+                ],
+            },
+        )
+
+    return {
+        "success": True,
+        "message": "Label moved successfully.",
+        "detached_count": impact.count,
     }
 
 
