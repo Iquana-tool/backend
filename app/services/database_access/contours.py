@@ -38,35 +38,6 @@ _GEOMETRY_FIELDS = {"x", "y"}
 _CONTEXTUAL_FIELDS = {"x", "y", "parent_id", "label_id"}
 
 
-def mark_relational_stale_for_parent(
-        db: Session,
-        parent_id: int | None,
-) -> int:
-    """Mark the RELATIONAL-tier rows of ``parent_id`` stale (its child set changed).
-
-    ``n_children`` is PARENT-TARGETED: it changes only when a CHILD is added, removed or
-    re-parented under this contour, which affects exactly this one parent - never the
-    parent's siblings. This is the key difference from ``mark_contextual_stale_for_group``,
-    which fans out to a whole sibling group because every sibling is a potential neighbor of
-    every other; here only the single parent whose children changed is invalidated.
-
-    A ``None`` ``parent_id`` (the child was/became a root-level contour, so no parent gained
-    or lost it) is a no-op: root-level contours have no parent whose ``n_children`` count
-    could change.
-
-    Args:
-        db: The database session (caller controls commit).
-        parent_id: The id of the parent contour whose child count changed, or ``None`` for
-            root level (no-op).
-
-    Returns:
-        The number of ``contour_metrics`` rows marked stale.
-    """
-    if parent_id is None:
-        return 0
-    return mark_relational_stale(db, [parent_id])
-
-
 # --- Metric staleness invalidation -------------------------------------------------
 #
 # The geometry tier is recomputed synchronously on every write (see
@@ -116,11 +87,13 @@ def mark_contextual_stale_for_group(db: Session, mask_id: int, parent_id: int | 
 def mark_relational_stale_for_parent(db: Session, parent_ids) -> int:
     """Mark the relational rows (``n_children``) of the given PARENT contours stale.
 
-    Unlike contextual staleness this does not fan out to a group: ``n_children`` counts a
-    contour's own children, so it only changes for the parent whose child set changed -
-    never for that parent's siblings. Callers pass the old and/or new parent of a contour
-    that was created, deleted or re-parented. ``None`` entries (root-level contours have
-    no parent) are dropped.
+    ``n_children`` is PARENT-TARGETED: it changes only when a CHILD is added, removed or
+    re-parented under a contour, which affects exactly that one parent - never that
+    parent's siblings. Unlike ``mark_contextual_stale_for_group`` this therefore does not
+    fan out to a whole sibling group (where every sibling is a potential neighbor of every
+    other). Callers pass the old and/or new parent of a contour that was created, deleted
+    or re-parented. ``None`` entries are dropped: a root-level contour has no parent whose
+    ``n_children`` count could change.
 
     Args:
         db: The database session (caller controls commit).
