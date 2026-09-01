@@ -32,6 +32,7 @@ from app.database.inference_jobs import InferenceJobItems, InferenceJobs, TERMIN
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.schemas.inference import (
+    MODEL_ROUTING_TASKS,
     ImageSelection,
     InferenceJobCreate,
     InferenceStepRequest,
@@ -59,24 +60,19 @@ BATCH_TASKS: tuple[str, ...] = ("instance-segmentation", "cross-image-suggestion
 # The label hierarchy
 # --------------------------------------------------------------------------- #
 def label_levels(db: Session, dataset_id: int) -> dict[int, int]:
-    """Map every label id in a dataset to its depth (0 for root labels).
-
-    Walked breadth-first from the roots rather than by following ``parent_id`` upwards per
-    label, so a hierarchy of any depth costs one query and one pass. A label whose parent is
-    missing (a broken row) is unreachable from the roots and is simply absent from the
-    result, which surfaces as a 404 when a step targets it.
-    """
-    rows = db.query(Labels.id, Labels.parent_id).filter(Labels.dataset_id == dataset_id).all()
-    children: dict[int | None, list[int]] = {}
-    for label_id, parent_id in rows:
-        children.setdefault(parent_id, []).append(label_id)
+    """Depth of each label from the dataset's root labels (0 for roots, 1 for their children, ...)."""
+    labels = db.query(Labels).filter(Labels.dataset_id == dataset_id).all()
+    by_parent: dict[int | None, list[int]] = {}
+    for label in labels:
+        by_parent.setdefault(label.parent_id, []).append(label.id)
 
     levels: dict[int, int] = {}
-    queue: deque[tuple[int, int]] = deque((label_id, 0) for label_id in children.get(None, []))
+    queue: deque[tuple[int | None, int]] = deque([(None, -1)])
     while queue:
-        label_id, depth = queue.popleft()
-        levels[label_id] = depth
-        queue.extend((child_id, depth + 1) for child_id in children.get(label_id, []))
+        parent_id, depth = queue.popleft()
+        for child_id in by_parent.get(parent_id, []):
+            levels[child_id] = depth + 1
+            queue.append((child_id, depth + 1))
     return levels
 
 
@@ -87,11 +83,17 @@ def _dataset_label_ids(db: Session, dataset_id: int) -> set[int]:
     return {row[0] for row in db.query(Labels.id).filter(Labels.dataset_id == dataset_id).all()}
 
 
-def model_catalog(db: Session, dataset_id: int) -> ModelCatalog:
-    """Every model a step in this dataset may be bound to, plus the retrieval strategies.
+def model_catalog(
+    db: Session,
+    dataset_id: int,
+    tasks: tuple[str, ...] = MODEL_ROUTING_TASKS,
+) -> ModelCatalog:
+    """The models a dataset may bind to labels, annotated with dataset provenance.
 
-    A model's ``label_ids`` is what makes per-label orchestration work. A model fine-tuned on
-    this dataset carries the labels it was trained on, so the picker can offer it under
+    A model that was trained on *this* dataset sorts ahead of base models: a user fine-tuning
+    a model on their data almost certainly wants to use it for the next run.
+
+    A trained model carries the dataset label ids it predicts: it may only be bound to
     exactly those labels and the executor can filter its output. A base model carries none,
     which means class-agnostic: it may be bound to any label, and whatever it returns is
     labelled with that step's label.
@@ -108,7 +110,7 @@ def model_catalog(db: Session, dataset_id: int) -> ModelCatalog:
     cross_image_usable = any(option.get("available") for option in strategies)
 
     options: list[ModelOption] = []
-    for task in BATCH_TASKS:
+    for task in tasks:
         try:
             listing = list_available_models(task)
         except Exception:
@@ -254,10 +256,18 @@ def resolve_steps(
         label.id: label
         for label in db.query(Labels).filter(Labels.dataset_id == dataset_id).all()
     }
-    catalog = {(option.registry_key, option.task): option for option in model_catalog(db, dataset_id).models}
+    catalog = {
+        (option.registry_key, option.task): option
+        for option in model_catalog(db, dataset_id).models
+    }
 
     resolved: list[ResolvedStep] = []
     for step in steps:
+        if step.task not in BATCH_TASKS:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Task '{step.task}' is not a valid batch inference task. Batch tasks: {BATCH_TASKS}.",
+            )
         label = labels.get(step.label_id)
         if label is None or step.label_id not in levels:
             raise HTTPException(

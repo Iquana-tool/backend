@@ -190,6 +190,7 @@ async def run_prompted_segmentation(
         previous_mask=None,
         parent_id: int | None = None,
         focus_contour: Contour | None = None,
+        parameters: dict | None = None,
 ) -> PromptedSegmentationResult:
     """Run prompted segmentation and select the best resulting contour.
 
@@ -203,6 +204,7 @@ async def run_prompted_segmentation(
         model_registry_key=model_key,
         previous_mask=previous_mask,
         prompts=prompts,
+        parameters=parameters or {},
     )
     response = await service.inference(request)
 
@@ -260,6 +262,7 @@ async def run_instance_segmentation(
         image_height: int,
         model_registry_key: str,
         user_id: str,
+        parameters: dict | None = None,
 ) -> InstanceSegmentationResult:
     """Run instance segmentation and parse the detected instance contours.
 
@@ -271,6 +274,7 @@ async def run_instance_segmentation(
         model_registry_key=model_registry_key,
         image_url=image_url,
         user_id=user_id,
+        parameters=parameters or {},
     )
     response = await service.inference(request)
     contours = [Contour.model_validate(item) for item in (response["result"] or [])]
@@ -292,6 +296,7 @@ async def run_suggestion_segmentation(
         positive_exemplars: list,
         concept=None,
         negative_exemplars: list | None = None,
+        parameters: dict | None = None,
 ) -> SuggestionResult:
     """Run annotation suggestion and parse the discovered contours.
 
@@ -307,6 +312,7 @@ async def run_suggestion_segmentation(
         positive_exemplars=positive_exemplars,
         negative_exemplars=negative_exemplars,
         concept=concept,
+        parameters=parameters or {},
     )
     response = await service.inference(request)
     contours = [Contour.model_validate(contour_json) for contour_json in (response["result"] or [])]

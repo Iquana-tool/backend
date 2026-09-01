@@ -142,3 +142,43 @@ def test_model_catalog_includes_concept_text_and_none_cross_image_without_embedd
     assert len(catalog.models) == 1
     assert catalog.models[0].registry_key == "text-model"
     assert catalog.models[0].input_contract.conditioning.kind == "concept_text"
+
+
+def test_model_catalog_four_task_retrieval(monkeypatch, db_session):
+    """model_catalog retrieves ready models across all four canonical routing tasks."""
+    from app.schemas.inference import MODEL_ROUTING_TASKS
+
+    db = db_session["db"]
+    dataset_id = db_session["dataset"].id
+
+    models_by_task = {
+        "prompted-segmentation": [{"registry_key": "sam2", "name": "SAM2", "label_ids": []}],
+        "instance-suggestion": [{"registry_key": "sam3-intra", "name": "SAM3 Intra", "label_ids": []}],
+        "instance-segmentation": [{"registry_key": "m2f", "name": "Mask2Former", "label_ids": []}],
+        "cross-image-suggestion": [{
+            "registry_key": "text-cross",
+            "name": "Text Cross",
+            "label_ids": [],
+            "input_contracts": [
+                InputContract(
+                    task="cross-image-suggestion",
+                    conditioning=ConditioningSpec(kind="concept_text", user_selectable_count=False),
+                    parameters=[],
+                ).model_dump()
+            ],
+        }],
+    }
+
+    monkeypatch.setattr(planning, "list_available_models", lambda task: {"result": models_by_task.get(task, [])})
+    monkeypatch.setattr(planning, "strategy_options", lambda db, ds_id: [])
+
+    # Test default tasks parameter (MODEL_ROUTING_TASKS)
+    catalog = planning.model_catalog(db, dataset_id)
+    assert len(catalog.models) == 4
+    tasks_in_catalog = {m.task for m in catalog.models}
+    assert tasks_in_catalog == set(MODEL_ROUTING_TASKS)
+
+    # Test explicit tasks parameter
+    catalog_subset = planning.model_catalog(db, dataset_id, tasks=("prompted-segmentation", "instance-suggestion"))
+    assert len(catalog_subset.models) == 2
+    assert {m.task for m in catalog_subset.models} == {"prompted-segmentation", "instance-suggestion"}
