@@ -93,6 +93,10 @@ class Permission(StrEnum):
     USER_MANAGE = "user.manage"
     USER_SET_GLOBAL_ROLE = "user.set_global_role"
     SYSTEM_MANAGE_MODELS = "system.manage_models"
+    # Editing the deployment's own configuration -- credentials, branding,
+    # whether it hands out accounts. Separate from USER_MANAGE because
+    # administering people and administering the instance are different jobs.
+    SYSTEM_MANAGE_SETTINGS = "system.manage_settings"
 
 
 #: Permissions that are meaningless per dataset and are answered by the global role.
@@ -101,6 +105,7 @@ GLOBAL_PERMISSIONS: frozenset[Permission] = frozenset({
     Permission.USER_MANAGE,
     Permission.USER_SET_GLOBAL_ROLE,
     Permission.SYSTEM_MANAGE_MODELS,
+    Permission.SYSTEM_MANAGE_SETTINGS,
 })
 
 

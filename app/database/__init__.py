@@ -66,6 +66,7 @@ def _import_models():
         image_calibrations,
         image_metadata,
         images,
+        instance_settings,
         dataset_model_routing_configs,
         inference_jobs,
         labels,
