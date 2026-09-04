@@ -60,6 +60,29 @@ class ProfileBody(BaseModel):
                                             description="Ordered list of metric selections.")
 
 
+def _assert_image_in_dataset(db: Session, dataset_id: int, image_id: int | None) -> None:
+    """Refuse an ``image_id`` that is not part of ``dataset_id``.
+
+    The quantification reads scope by ``Images.dataset_id`` anyway, so a foreign id would
+    quietly aggregate nothing rather than fail - an empty per-image page that looks like an
+    image with no objects. Checked up front so the answer is a 404 instead.
+
+    :raises HTTPException: 404 if the image does not exist in this dataset.
+    """
+    if image_id is None:
+        return
+    exists = (
+        db.query(Images.id)
+        .filter(Images.id == image_id, Images.dataset_id == dataset_id)
+        .first()
+    )
+    if exists is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} is not part of dataset {dataset_id}.",
+        )
+
+
 def _resolve_profile_scoping(
         db: Session,
         dataset_id: int,
@@ -509,6 +532,7 @@ async def get_dataset_quantification_summary(
         include_distribution: bool = False,
         profile_id: int | None = None,
         group_by: str | None = None,
+        image_id: int | None = None,
         db: Session = Depends(get_session),
         user: User = Depends(get_current_user)
 ):
@@ -571,6 +595,14 @@ async def get_dataset_quantification_summary(
             Only *groupable* key types are accepted (category, yes/no); a number or a
             date is near-unique per image and would draw one band per image, so it is
             refused with a 422 rather than rendered. See ``GET /metadata/types``.
+        image_id (int | None): Narrow every aggregation to a single image of the dataset -
+            the per-image inspection view. The response keeps exactly the same shape, so
+            the client renders one image's numbers with the components it already has, and
+            gets the dataset baseline to compare against from a second, unscoped call.
+
+            Note ``scale_status`` then describes that one image: an image with a scale
+            reports physical units even inside a dataset whose images disagree, because
+            "every contributing image shares one unit" is trivially true of one image.
         db (Session): The database session.
         user (User): The current authenticated user.
 
@@ -591,6 +623,8 @@ async def get_dataset_quantification_summary(
     """
     if dataset_id not in user.available_datasets:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+
+    _assert_image_in_dataset(db, dataset_id, image_id)
 
     # A profile (if given) both restricts which metrics are aggregated and which tiers we
     # bother lazily computing, so a geometry-only profile skips the appearance/contextual/
@@ -617,7 +651,7 @@ async def get_dataset_quantification_summary(
 
     summary = await datasets_db.get_quantification_summary(
         dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db,
-        metric_scoping=metric_scoping, group_by_key=group_by_key,
+        metric_scoping=metric_scoping, group_by_key=group_by_key, image_id=image_id,
     )
     labels_hierarchy = await labels_db.get_label_hierarchy(dataset_id, db=db)
     response = {
@@ -636,7 +670,7 @@ async def get_dataset_quantification_summary(
     if include_distribution:
         response["distribution"] = await datasets_db.get_quantification_distribution(
             dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db,
-            metric_scoping=metric_scoping, group_by_key=group_by_key,
+            metric_scoping=metric_scoping, group_by_key=group_by_key, image_id=image_id,
         )
     return response
 
@@ -912,6 +946,7 @@ async def download_dataset_quantification(
         exclude_not_fully_annotated: bool = True,
         file_format: Literal["json", "csv"] = "json",
         profile_id: int | None = None,
+        image_id: int | None = None,
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require(Permission.EXPORT_QUANTIFICATION))
 ):
@@ -923,6 +958,10 @@ async def download_dataset_quantification(
         exclude_not_fully_annotated (bool): Whether to exclude not fully annotated masks.
         exclude_unreviewed (bool): Whether to exclude unreviewed contours.
         file_format (Literal["json", "csv"]): File format to export to.
+        image_id (int | None): Restrict the export to one image of the dataset - the same
+            columns, only that image's rows. This is what the per-image view both tabulates
+            and offers as "Export this image", so the table on screen and the file that
+            comes out of it are produced by one code path.
         db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
         user (AuthenticatedUser): The current authenticated user.
 
@@ -930,6 +969,8 @@ async def download_dataset_quantification(
         dict: ``{success: False, message}`` when the dataset has no rows, otherwise a
         ``Response`` carrying the whole document as JSON or CSV.
     """
+
+    _assert_image_in_dataset(db, dataset_id, image_id)
 
     # When a profile is given, the export emits one column per profile metric/component
     # from contour_metrics; otherwise it keeps the legacy four-geometry-column shape.
@@ -947,7 +988,7 @@ async def download_dataset_quantification(
     dataset_name = (await datasets_db.get_dataset(dataset_id, db=db, )).name
     df = await datasets_db.get_dataset_as_df(
         dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db,
-        metric_scoping=metric_scoping,
+        metric_scoping=metric_scoping, image_id=image_id,
     )
     if df.empty:
         return {
@@ -978,8 +1019,13 @@ async def download_dataset_quantification(
             case _:
                 raise ValueError(f"Invalid file format: {file_format}")
         response = Response(content=content, media_type=media_type)
+        stem = f"{dataset_name.replace(' ', '_')}_dataset"
+        if image_id is not None:
+            image_row = db.query(Images.file_name).filter(Images.id == image_id).first()
+            file_stem = os.path.splitext(image_row.file_name)[0] if image_row else str(image_id)
+            stem = f"{dataset_name.replace(' ', '_')}_{file_stem.replace(' ', '_')}"
         response.headers[
-            "Content-Disposition"] = f'attachment; filename="{dataset_name.replace(' ', '_')}_dataset.{file_format}"'
+            "Content-Disposition"] = f'attachment; filename="{stem}.{file_format}"'
         return response
 
 

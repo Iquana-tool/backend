@@ -242,6 +242,7 @@ async def get_dataset_as_df(
         exclude_unreviewed: bool,
         db: Session,
         metric_scoping: dict[str, list[int] | None] | None = None,
+        image_id: int | None = None,
 ):
     """Flat per-contour export dataframe.
 
@@ -255,7 +256,11 @@ async def get_dataset_as_df(
 
     Both paths also emit one ``meta_<key>`` column per image-metadata key used
     anywhere in the dataset (see :func:`_metadata_columns`), so the subgroup an
-    object came from travels with its measurements.
+    object came from travels with its measurements, and ``parent_id`` /
+    ``parent_label`` so the contour hierarchy survives the flattening.
+
+    ``image_id`` narrows the frame to one image of the dataset - the same columns, only
+    that image's rows - which is what the per-image view exports and tabulates.
     """
     query = (
         db.query(Contours, Images.file_name, Labels, Images.id)
@@ -264,6 +269,8 @@ async def get_dataset_as_df(
         .join(Labels, Labels.id == Contours.label_id)
         .filter(Images.dataset_id == dataset_id)
     )
+    if image_id is not None:
+        query = query.filter(Images.id == image_id)
     if exclude_not_fully_annotated:
         query = query.filter(Masks.fully_annotated == True)
     if exclude_unreviewed:
@@ -274,10 +281,11 @@ async def get_dataset_as_df(
     if metric_scoping is not None:
         return _dataset_df_from_profile(
             data, dataset_id, metric_scoping, db,
-            exclude_not_fully_annotated, exclude_unreviewed,
+            exclude_not_fully_annotated, exclude_unreviewed, image_id=image_id,
         )
 
     metadata_by_image, metadata_keys = _metadata_columns(db, dataset_id)
+    parent_labels = _parent_labels(db, dataset_id)
 
     df_data = {}
     for row in data:
@@ -294,6 +302,8 @@ async def get_dataset_as_df(
         df_data.setdefault("label", []).append(label_db.name)
         df_data.setdefault("label_id", []).append(contour.label_id)
         df_data.setdefault("contour_id", []).append(contour.id)
+        df_data.setdefault("parent_id", []).append(contour.parent_id)
+        df_data.setdefault("parent_label", []).append(parent_labels.get(contour.parent_id))
         df_data.setdefault("area", []).append(contour.area)
         df_data.setdefault("perimeter", []).append(contour.perimeter)
         df_data.setdefault("circularity", []).append(contour.circularity)
@@ -301,6 +311,29 @@ async def get_dataset_as_df(
         df_data.setdefault("coords_x", []).append(contour.x)
         df_data.setdefault("coords_y", []).append(contour.y)
     return pd.DataFrame(df_data)
+
+
+def _parent_labels(db: Session, dataset_id: int) -> dict[int, str]:
+    """``{contour_id: label_name}`` for every contour of a dataset, to name parents by.
+
+    Exports carry ``parent_id``, which is a foreign key and not something a person reading a
+    pivot can group by usefully - "17" says nothing about what 17 is. Pairing it with the
+    parent's label makes the grouping legible ("Colony" then "17"), which is what the
+    per-image pivot opens grouped on.
+
+    Deliberately built over the WHOLE dataset rather than over the exported rows: a parent
+    can be filtered out of the export (its mask still in progress, say) while its children
+    are in, and a child that then reported an unnamed parent would look parentless.
+    """
+    rows = (
+        db.query(Contours.id, Labels.name)
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .outerjoin(Labels, Labels.id == Contours.label_id)
+        .filter(Images.dataset_id == dataset_id)
+        .all()
+    )
+    return {row[0]: row[1] for row in rows if row[1] is not None}
 
 
 def _metadata_columns(db: Session, dataset_id: int) -> tuple[dict[int, dict[str, str]], list[str]]:
@@ -340,6 +373,7 @@ def _dataset_df_from_profile(
         db: Session,
         exclude_not_fully_annotated: bool,
         exclude_unreviewed: bool,
+        image_id: int | None = None,
 ) -> pd.DataFrame:
     """Build the flat export dataframe for a profile from the tall ``contour_metrics`` table.
 
@@ -354,8 +388,11 @@ def _dataset_df_from_profile(
     contour_ids = [row[0].id for row in rows]
     metric_keys = list(metric_scoping)
 
+    # ``image_id`` is passed on rather than derived from ``rows``: the unit decision has to
+    # be made over the same scope the summary made it over, or an exported number and the
+    # card above it could carry different units.
     scale_display = _resolve_scale_display(
-        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db, image_id=image_id
     )
     display_physical = scale_display["display_physical"]
 
@@ -399,6 +436,7 @@ def _dataset_df_from_profile(
         metric_components[key] = list(range(value_dim))
 
     metadata_by_image, metadata_keys = _metadata_columns(db, dataset_id)
+    parent_labels = _parent_labels(db, dataset_id)
 
     df_data: dict[str, list] = {}
     for row in rows:
@@ -415,6 +453,11 @@ def _dataset_df_from_profile(
         df_data.setdefault("label", []).append(label_db.name)
         df_data.setdefault("label_id", []).append(contour.label_id)
         df_data.setdefault("contour_id", []).append(contour.id)
+        # The object's place in the hierarchy. Exported so a pivot can group children under
+        # the parent they belong to, which is the structure the label tree shows and which
+        # a flat per-contour table otherwise loses entirely.
+        df_data.setdefault("parent_id", []).append(contour.parent_id)
+        df_data.setdefault("parent_label", []).append(parent_labels.get(contour.parent_id))
 
         for key in metric_keys:
             allowed_labels = metric_scoping.get(key)
@@ -432,6 +475,7 @@ def _scope_contour_query(
         dataset_id: int,
         exclude_not_fully_annotated: bool,
         exclude_unreviewed: bool,
+        image_id: int | None = None,
 ):
     """Join a ``Contours``-based query to its dataset and apply the two exclude filters.
 
@@ -445,6 +489,11 @@ def _scope_contour_query(
         dataset_id: The dataset to scope to.
         exclude_not_fully_annotated: Drop contours on masks not marked fully annotated.
         exclude_unreviewed: Drop contours nobody has reviewed.
+        image_id: Restrict to the contours of one image of that dataset. ``None`` (the
+            default) keeps the whole dataset. This is the per-image quantification view:
+            the same aggregation, one image wide, so an image's numbers are produced by
+            exactly the arithmetic that produced the dataset's and the two can be compared
+            side by side.
 
     Returns:
         The query with the dataset joins and filters applied.
@@ -454,6 +503,8 @@ def _scope_contour_query(
         .join(Images, Images.id == Masks.image_id)
         .filter(Images.dataset_id == dataset_id)
     )
+    if image_id is not None:
+        query = query.filter(Images.id == image_id)
     if exclude_not_fully_annotated:
         query = query.filter(Masks.fully_annotated == True)
     if exclude_unreviewed:
@@ -473,6 +524,7 @@ def _resolve_scale_display(
         exclude_not_fully_annotated: bool,
         exclude_unreviewed: bool,
         db: Session,
+        image_id: int | None = None,
 ) -> dict[str, Any]:
     """Decide which unit the aggregated numbers should be reported in for a dataset.
 
@@ -489,6 +541,9 @@ def _resolve_scale_display(
       * a MIX (some scaled, some not, or different physical units)         -> report pixels
         (``consistent=False``); the frontend shows a warning and the numbers stay in px.
 
+    With ``image_id`` the decision is made over that one image only (see the note at the
+    query below).
+
     Returns a dict describing the decision (also surfaced to the client as ``scale_status``):
         display_unit: The image length unit the numbers are in ("px" or e.g. "mm").
         display_physical: Whether a physical conversion should be applied on read.
@@ -503,6 +558,11 @@ def _resolve_scale_display(
         .join(Images, Images.id == Masks.image_id)
         .filter(Images.dataset_id == dataset_id)
     )
+    # Scoped to one image, the all-or-nothing rule below collapses to that image's own
+    # unit: a single image is trivially consistent with itself, so a per-image view reports
+    # physical units whenever THAT image is calibrated, even in a dataset that mixes.
+    if image_id is not None:
+        unit_rows = unit_rows.filter(Images.id == image_id)
     if exclude_not_fully_annotated:
         unit_rows = unit_rows.filter(Masks.fully_annotated == True)
     if exclude_unreviewed:
@@ -594,6 +654,7 @@ async def get_quantification_summary(
         db: Session,
         metric_scoping: dict[str, list[int] | None] | None = None,
         group_by_key: str | None = None,
+        image_id: int | None = None,
 ) -> dict[str, Any]:
     """Aggregate the tall ``contour_metrics`` rows of a dataset server-side.
 
@@ -612,6 +673,10 @@ async def get_quantification_summary(
             in this mapping are aggregated, and each key's value (a list of label ids, or
             ``None`` for all labels) restricts which labels that metric is reported for.
             ``None`` (the default) keeps the legacy behavior: every metric, every label.
+        image_id: Restrict every aggregation to one image of the dataset, for the per-image
+            quantification view. The object census and the child counts are scoped too, so
+            the whole payload describes that image and nothing else - the caller compares
+            it against a second, unscoped call for the dataset baseline.
 
     Returns:
         A dict with ``metrics`` (nested label_id -> metric_key -> {unit, components}),
@@ -626,40 +691,7 @@ async def get_quantification_summary(
     # Base join scoping to the dataset; the same for both aggregations below.
     def _apply_filters(query):
         return _scope_contour_query(query, dataset_id, exclude_not_fully_annotated,
-                                    exclude_unreviewed)
-
-    def _compute_object_counts() -> dict[str, dict[str, int]]:
-        # Per-label census of annotated objects: total / reviewed / unreviewed. A contour
-        # counts as reviewed iff at least one user has reviewed it (matching the semantics
-        # used elsewhere, e.g. Masks.review_status and Contours.reviewed_by.any()).
-        #
-        # NB: this deliberately ignores both exclude filters. Applying exclude_unreviewed
-        # would force "unreviewed" to always be 0, and applying exclude_not_fully_annotated
-        # would hide in-progress annotation work; the whole point of this breakdown is to
-        # show the full class census and how much of it still needs review.
-        reviewed_flag = case((Contours.reviewed_by.any(), 1), else_=0)
-        count_query = (
-            db.query(
-                Contours.label_id.label("label_id"),
-                func.count(Contours.id).label("total"),
-                func.sum(reviewed_flag).label("reviewed"),
-            )
-            .join(Masks, Masks.id == Contours.mask_id)
-            .join(Images, Images.id == Masks.image_id)
-            .filter(Images.dataset_id == dataset_id)
-            .group_by(Contours.label_id)
-        )
-
-        result: dict[str, dict[str, int]] = {}
-        for row in count_query.all():
-            total = int(row.total)
-            reviewed = int(row.reviewed or 0)
-            result[str(row.label_id)] = {
-                "total": total,
-                "reviewed": reviewed,
-                "unreviewed": total - reviewed,
-            }
-        return result
+                                    exclude_unreviewed, image_id=image_id)
 
     def _compute_child_counts() -> dict[str, dict[str, int]]:
         # Count, per parent label, how many child contours of each child label exist. This
@@ -701,6 +733,10 @@ async def get_quantification_summary(
             .filter(Images.dataset_id == dataset_id)
             .group_by(Contours.label_id)
         )
+        # The image scope is NOT one of the two exclude filters this census ignores on
+        # purpose - it is which objects we are counting at all, so it applies here too.
+        if image_id is not None:
+            count_query = count_query.filter(Images.id == image_id)
 
         result: dict[str, dict[str, int]] = {}
         for row in count_query.all():
@@ -718,7 +754,7 @@ async def get_quantification_summary(
     # physical unit on read (only when every contributing image shares one unit) or report
     # pixels (the default, and the fallback when a dataset mixes scaled/unscaled images).
     scale_display = _resolve_scale_display(
-        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db, image_id=image_id
     )
     display_unit = scale_display["display_unit"]
 
@@ -1029,6 +1065,7 @@ async def get_quantification_distribution(
         db: Session,
         metric_scoping: dict[str, list[int] | None] | None = None,
         group_by_key: str | None = None,
+        image_id: int | None = None,
 ) -> dict[str, Any]:
     """Compute per-label box/violin distributions for a dataset's metrics.
 
@@ -1052,6 +1089,9 @@ async def get_quantification_distribution(
         group_by_key: Optional image-metadata key to split the distributions by, so a
             box plot compares the same label across sites rather than only across labels.
             Adds one level to the returned mapping.
+        image_id: Restrict to one image of the dataset, matching the identically named
+            argument of :func:`get_quantification_summary` - a summary and a distribution
+            requested together have to describe the same contours.
 
     Returns:
         ``{label_id: {metric_key: {component: stats}}}`` with every key stringified for
@@ -1069,7 +1109,7 @@ async def get_quantification_distribution(
     # Same pixel-native -> physical decision as the summary, so a metric's box/violin plot
     # and its scalar card always agree on the unit (and thus the values).
     scale_display = _resolve_scale_display(
-        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db, image_id=image_id
     )
     display_unit = scale_display["display_unit"]
     display_physical = scale_display["display_physical"]
@@ -1089,7 +1129,7 @@ async def get_quantification_distribution(
 
     value_query = _scope_contour_query(
         db.query(*columns).join(ContourMetrics, ContourMetrics.contour_id == Contours.id),
-        dataset_id, exclude_not_fully_annotated, exclude_unreviewed,
+        dataset_id, exclude_not_fully_annotated, exclude_unreviewed, image_id=image_id,
     )
     if group_by_key:
         # Outer, so contours on images with no value for the key are still counted

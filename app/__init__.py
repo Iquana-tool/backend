@@ -56,7 +56,7 @@ def create_app():
 
     app = FastAPI(
         title="IQUANA API",
-        description="FastAPI backend for IQUANA — Intelligent QUANtification, Annotation and Analysis",
+        description="FastAPI backend for IQUANA — Intelligent QUantification, ANnotation and Analysis",
         version="0.1.0",
         # Keep empty for local runs; set FASTAPI_ROOT_PATH behind reverse proxy.
         root_path=root_path,
