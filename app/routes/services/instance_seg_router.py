@@ -270,6 +270,15 @@ async def start_training(
     if export.get("num_annotations", 0) == 0:
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST,
                             detail="Dataset has no reviewed annotations to train on.")
+    exported_category_ids = {
+        category["id"] for category in export["coco_payload"]["categories"]
+    }
+    missing_label_ids = [label.id for label in labels if label.id not in exported_category_ids]
+    if missing_label_ids:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"Selected labels have no exported annotations: {missing_label_ids}.",
+        )
 
     request = InstanceSegmentationTrainingRequest(
         dataset_id=body.dataset_id,

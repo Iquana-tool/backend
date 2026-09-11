@@ -365,6 +365,63 @@ def test_terminal_mlflow_status_overrides_stale_running_tag():
     assert _snapshot_from_run(None, run_finished)["state"] == "SUCCESS"
 
 
+def test_start_training_rejects_labels_missing_from_coco_export(monkeypatch):
+    dataset = SimpleNamespace(name="Cells dataset")
+    hierarchy = SimpleNamespace(
+        id_to_label_object={
+            1: SimpleNamespace(id=1),
+            2: SimpleNamespace(id=2),
+        }
+    )
+    db = MagicMock()
+    db.query.return_value.filter_by.return_value.first.return_value = SimpleNamespace(
+        file_path="/tmp/images/cell.png"
+    )
+    mock_start_training = AsyncMock()
+
+    monkeypatch.setattr(instance_seg_router, "ensure_permission", MagicMock())
+    monkeypatch.setattr(
+        instance_seg_router.datasets_db,
+        "get_dataset",
+        AsyncMock(return_value=dataset),
+    )
+    monkeypatch.setattr(
+        instance_seg_router.labels_db,
+        "get_label_hierarchy",
+        AsyncMock(return_value=hierarchy),
+    )
+    monkeypatch.setattr(
+        instance_seg_router,
+        "export_dataset_contours_to_coco",
+        AsyncMock(
+            return_value={
+                "success": True,
+                "num_annotations": 1,
+                "output_file_path": "/tmp/annotations.json",
+                "coco_payload": {"categories": [{"id": 1}]},
+            }
+        ),
+    )
+    monkeypatch.setattr(instance_seg_router.service, "start_training", mock_start_training)
+
+    with pytest.raises(instance_seg_router.HTTPException) as exc_info:
+        asyncio.run(
+            instance_seg_router.start_training(
+                body=instance_seg_router.StartTrainingBody(
+                    dataset_id=4,
+                    label_ids=[1, 2],
+                ),
+                db=db,
+                user=SimpleNamespace(username="trainer"),
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "no exported annotations" in exc_info.value.detail
+    assert "2" in exc_info.value.detail
+    mock_start_training.assert_not_awaited()
+
+
 def test_cancel_training_error_does_not_mark_run_cancelled_locally(monkeypatch):
     active_run = _mock_run(
         run_id="run-600",
