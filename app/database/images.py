@@ -11,7 +11,7 @@ class Images(database):
     __tablename__ = 'images'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False)  # Foreign key to the datasets table
+    dataset_id = Column(Integer, ForeignKey('datasets.id', ondelete='CASCADE'), nullable=False, index=True)  # Foreign key to the datasets table
 
     file_name = Column(String, nullable=False)  # Image file name
     file_path = Column(String, nullable=False)  # Full path to the image file on disk

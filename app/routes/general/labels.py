@@ -2,13 +2,16 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from iquana_toolbox.schemas.database.labels import Label
-from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
+from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.label_space import LabelSpaceDraft
-from app.services.auth import get_current_user
-from app.services.database_access import labels as labels_db
+from app.schemas.labels import LabelMoveRequest, LabelUpdate
+from app.schemas.permissions import Permission
+from app.services.database_access import label_moves, labels as labels_db
+from app.services.database_access.label_moves import LabelMoveBlocked, LabelMoveError
+from app.services.permissions import require
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/labels", tags=["labels"])
@@ -21,7 +24,7 @@ async def create_label(
         parent_label_id: int = None,
         label_value: int = None,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_MANAGE))
 ):
     """Create a new label for a dataset.
 
@@ -30,7 +33,7 @@ async def create_label(
         dataset_id (int): The ID of the dataset to which the label belongs.
         parent_label_id (int, optional): The ID of the parent label if this is a child label. Defaults to None.
         label_value (int, optional): The value of the label. If not provided, it will be set to the next available value.
-        user (User): The current authenticated user. Defaults to Depends(get_current_user).
+        user (AuthenticatedUser): The current authenticated user.
         db (Session): The database session.
 
     Returns:
@@ -49,7 +52,7 @@ async def bulk_create_labels(
         dataset_id: int,
         draft: LabelSpaceDraft,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user),
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_MANAGE)),
 ):
     """Persist an approved draft label hierarchy for a dataset in one transaction.
 
@@ -61,7 +64,7 @@ async def bulk_create_labels(
         dataset_id (int): The dataset the labels belong to.
         draft (LabelSpaceDraft): The nested label hierarchy to create.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: success status, message and the number of labels created.
@@ -81,17 +84,17 @@ async def bulk_create_labels(
 async def get_label(
         label_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user),
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_READ, "label_id")),
 ):
-    """Create a new label for a dataset.
+    """Get a single label.
 
     Args:
         label_id (int): The ID of the label to get.
-        user (User): The current authenticated user. Defaults to Depends(get_current_user).
+        user (AuthenticatedUser): The current authenticated user.
         db (Session): The database session.
 
     Returns:
-        dict: A dictionary containing the success status, message, and class ID if created successfully.
+        dict: A dictionary containing the success status, message, and the label.
     """
 
     return {
@@ -104,25 +107,108 @@ async def get_label(
 @router.patch("/{label_id}")
 async def modify_label(
         label_id: int,
-        updates: dict = None,
+        updates: LabelUpdate,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user),
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_MANAGE, "label_id")),
 ):
-    """Create a new label for a dataset.
+    """Rename a label.
+
+    Only the name is patchable: re-parenting goes through ``/labels/{id}/move`` because
+    it can invalidate existing annotations, and ``value`` is what mask encodings were
+    written against.
 
     Args:
-        label_id (int): The ID of the label to get.
-        user (User): The current authenticated user. Defaults to Depends(get_current_user).
-        updates (dict): A dictionary containing the updated label data. Defaults to None.
+        label_id (int): The ID of the label to update.
+        updates (LabelUpdate): The fields to change.
+        user (AuthenticatedUser): The current authenticated user.
+        db (Session): The database session.
 
     Returns:
-        dict: A dictionary containing the success status, message, and class ID if created successfully.
+        dict: A dictionary containing the success status and message.
     """
-    # Check if class already exists
-    await labels_db.update_label(label_id, updates, db)
+    await labels_db.update_label(label_id, updates.model_dump(exclude_unset=True), db)
     return {
         "success": True,
         "message": "Label updated successfully.",
+    }
+
+
+@router.get("/{label_id}/nesting_summary")
+async def label_nesting_summary(
+        label_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_READ, "label_id")),
+):
+    """How the objects carrying this label are nested today.
+
+    Lets a client price every candidate move of this label up front -- the objects a
+    move under ``P`` would strand are the nested ones not already inside a ``P`` -- so
+    dragging a label can show a live count without a request per row. The estimate is
+    advisory; ``/labels/{id}/move`` re-derives it and remains the authority.
+
+    Args:
+        label_id (int): The label to summarise.
+        user (AuthenticatedUser): The current authenticated user.
+        db (Session): The database session.
+
+    Returns:
+        dict: Success status and the summary (nested total, and counts per container label).
+    """
+    return {
+        "success": True,
+        "summary": label_moves.nesting_summary(db, label_id),
+    }
+
+
+@router.post("/{label_id}/move")
+async def move_label(
+        label_id: int,
+        request: LabelMoveRequest,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_MANAGE, "label_id")),
+):
+    """Move a label under a different parent, or to the top level.
+
+    Nesting means part-of, and annotation enforces it: an object may only carry a label
+    that is a direct part of the label on the object containing it. A move that would
+    strand already-annotated objects is therefore refused with a 409 describing what it
+    would break; repeating it with ``detach_affected`` demotes those objects to root
+    level, keeping their label and dropping only the containment link.
+
+    Args:
+        label_id (int): The ID of the label to move.
+        request (LabelMoveRequest): The destination, and whether to accept detaching.
+        user (AuthenticatedUser): The current authenticated user.
+        db (Session): The database session.
+
+    Returns:
+        dict: Success status, message, and how many objects were detached.
+    """
+    try:
+        impact = await label_moves.move_label(
+            db, label_id, request.new_parent_id, request.detach_affected
+        )
+    except LabelMoveError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except LabelMoveBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(exc),
+                "affected_count": exc.impact.count,
+                # Capped: the dialog needs a sense of scale and a few examples to open,
+                # not every contour in a fully annotated dataset.
+                "affected_objects": [
+                    {"contour_id": affected.contour_id, "image_id": affected.image_id}
+                    for affected in exc.impact.affected[:20]
+                ],
+            },
+        )
+
+    return {
+        "success": True,
+        "message": "Label moved successfully.",
+        "detached_count": impact.count,
     }
 
 
@@ -130,18 +216,18 @@ async def modify_label(
 async def replace_label(
         label_id: int,
         new_label: Label,
-        user: User = Depends(get_current_user),
-        db: Session = Depends(get_session)
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_MANAGE, "label_id"))
 ):
-    """Create a new label for a dataset.
+    """Replace a label wholesale.
 
     Args:
-        label_id (int): The ID of the label to get.
-        user (User): The current authenticated user. Defaults to Depends(get_current_user).
+        label_id (int): The ID of the label to replace.
+        user (AuthenticatedUser): The current authenticated user.
         db (Session): The database session.
 
     Returns:
-        dict: A dictionary containing the success status, message, and class ID if created successfully.
+        dict: A dictionary containing the success status and message.
     """
     await labels_db.replace_label(label_id, new_label, db)
     return {
@@ -154,14 +240,17 @@ async def replace_label(
 async def delete_label(
         label_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.LABEL_MANAGE, "label_id"))
 ):
     """
     Delete a label, its children and all associated contours.
 
+    Deleting a label cascades into every contour carrying it, which is why this
+    needs `label.manage` rather than ordinary annotation rights.
+
     Args:
         label_id (int): The ID of the label to delete.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
         db (Session): The database session.
 
     Returns:

@@ -12,14 +12,22 @@ from typing import Iterable
 
 import numpy as np
 from PIL import Image as PILImage
-from iquana_toolbox.quantification import QuantContext, get_metric
+from iquana_toolbox.quantification import QuantContext, get_metric, geometry_math as gm
 from iquana_toolbox.schemas.database.contours import Contour
+from iquana_toolbox.schemas.database.quantification import QuantificationModel
+from sqlalchemy import Select
 from sqlalchemy.orm import Session
 
 from app.database.contour_metrics import ContourMetrics
 from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
+# Safe at module scope in this direction only: the calibration service imports
+# `load_image_rgb` from here lazily, inside its functions, precisely so this
+# import can be eager. Eager matters — it is what registers the
+# ``image_calibrations`` model with the shared metadata before a caller runs
+# `create_all`.
+from app.services.calibration.service import load_calibrated_image_rgb
 
 logger = getLogger(__name__)
 
@@ -89,7 +97,13 @@ def load_image_rgb(image: "Images") -> np.ndarray | None:
 
 
 def build_quant_context(image, contours: list[Contour], image_loader=None) -> QuantContext:
-    """Build a :class:`QuantContext` for one image from an ``Images`` row and its contours.
+    """Build a physical-scale :class:`QuantContext` for one image and its contours.
+
+    Metrics computed from this context come out in the image's PHYSICAL unit (pixels
+    scaled by ``scale_x`` / ``scale_y``). This is used for the legacy ``contours`` geometry
+    columns (area / perimeter / ...) which back single-image surfaces (per-object display,
+    COCO export) where the image's own scale is unambiguous. The tall ``contour_metrics``
+    table is stored pixel-native instead — see :func:`build_pixel_quant_context`.
 
     Args:
         image: An ``Images`` ORM row (or any object exposing width/height/scale_x/
@@ -121,6 +135,87 @@ def build_quant_context(image, contours: list[Contour], image_loader=None) -> Qu
         scale_y=scale_y,
         unit=unit,
         image_loader=image_loader,
+    )
+
+
+def build_pixel_quant_context(image, contours: list[Contour], image_loader=None) -> QuantContext:
+    """Build a PIXEL-native :class:`QuantContext` (unit scale) for one image.
+
+    Identical to :func:`build_quant_context` except the physical scale is forced to 1 and
+    the unit to ``"px"``, so every metric comes out in raw pixels (lengths in ``px``, areas
+    in ``px²``). The image's width/height are still used to project the normalized [0, 1]
+    contour coordinates into pixel space.
+
+    This is the context the tall ``contour_metrics`` table is computed from. Storing metrics
+    pixel-native (scale-independent) is what lets the dataset-level aggregation stay correct
+    when a dataset mixes scaled and unscaled images: the per-image physical scale is applied
+    later, at read time, and only when the dataset's images share one unit (see
+    ``app.services.database_access.datasets.get_quantification_summary``). It also means a
+    scale change never has to rewrite a single stored metric value.
+
+    Args:
+        image: An ``Images`` ORM row (only width/height are read). ``None`` falls back to
+            a 1x1 px context.
+        contours: The :class:`Contour` schema objects to compute metrics for.
+        image_loader: Optional RGB image loader forwarded for appearance metrics.
+
+    Returns:
+        A pixel-scale :class:`QuantContext` scoped to the image.
+    """
+    if image is not None:
+        width = int(image.width)
+        height = int(image.height)
+    else:
+        logger.warning("build_pixel_quant_context called without an image; using 1x1 px.")
+        width = height = 1
+    return QuantContext(
+        contours=contours,
+        width=width,
+        height=height,
+        scale_x=1.0,
+        scale_y=1.0,
+        unit="px",
+        image_loader=image_loader,
+    )
+
+
+def quantify_contour_row(contour, image, pixel: bool = False) -> QuantificationModel:
+    """Recompute a stored contour's geometry in physical (or pixel) units.
+
+    The database keeps NORMALIZED ([0, 1]) coordinates, so they are projected back to
+    pixels with the image's dimensions before any geometry is computed - computing on the
+    normalized values directly would anisotropically distort shapes on non-square images.
+    Shared by the dual-write path in ``app.database.contours.save_contour_tree`` and
+    ``scripts/backfill_contour_metrics``.
+
+    Args:
+        contour: A ``Contours`` ORM row (normalized ``x`` / ``y`` coordinate lists).
+        image: The ``Images`` row the contour belongs to (dimensions + physical scale).
+        pixel: When True, ignore the image's physical scale and compute in raw pixels
+            (scale 1, unit ``"px"``) - used to fill the pixel-native tall ``contour_metrics``
+            table. When False (default), compute in the image's physical unit - used for the
+            legacy ``contours`` geometry columns.
+
+    Returns:
+        The recomputed :class:`QuantificationModel`, in pixels when ``pixel`` else in the
+        image's physical length unit.
+    """
+    x = contour.x if isinstance(contour.x, list) else list(contour.x or [])
+    y = contour.y if isinstance(contour.y, list) else list(contour.y or [])
+    if len(x) == 0:
+        points_px = np.empty((0, 2), dtype=np.float64)
+    else:
+        points_px = np.stack([
+            np.asarray(x, dtype=np.float64) * image.width,
+            np.asarray(y, dtype=np.float64) * image.height,
+        ], axis=-1)
+    if pixel:
+        return QuantificationModel.from_contour(points_px, scale_x=1.0, scale_y=1.0, unit="px")
+    return QuantificationModel.from_contour(
+        points_px,
+        scale_x=image.scale_x,
+        scale_y=image.scale_y,
+        unit=image.unit or "px",
     )
 
 
@@ -165,10 +260,14 @@ def compute_and_store_metrics(
 ) -> int:
     """Compute the given metrics for ``contours`` and upsert them into ``contour_metrics``.
 
-    Builds one :class:`QuantContext` for the image, runs each metric's ``compute_batch``,
-    and writes one row per (contour, metric, component) with the unit resolved from the
-    metric's unit kind and the image's length unit. Contours without an ``id`` are skipped
-    (they cannot be keyed). Does not commit — the caller controls the transaction.
+    Builds one PIXEL-native :class:`QuantContext` for the image (see
+    :func:`build_pixel_quant_context`), runs each metric's ``compute_batch``, and writes one
+    row per (contour, metric, component) in raw pixels (``px`` / ``px²`` / unitless). The
+    per-image physical scale is deliberately NOT applied here - it is applied at read time
+    by the aggregation layer, and only when a dataset's images share one unit, so that a
+    dataset mixing scaled and unscaled images still aggregates correctly. Contours without
+    an ``id`` are skipped (they cannot be keyed). Does not commit — the caller controls the
+    transaction.
 
     A metric's ``compute_batch`` may OMIT a contour from its returned dict when it has no
     meaningful value for it (e.g. an only-child contour has no nearest neighbor, see
@@ -193,7 +292,7 @@ def compute_and_store_metrics(
     if not contours or not metric_keys:
         return 0
 
-    ctx = build_quant_context(image, contours, image_loader=image_loader)
+    ctx = build_pixel_quant_context(image, contours, image_loader=image_loader)
     rows: list[dict] = []
     target_pairs: set[tuple[int, str]] = set()
     for metric_key in metric_keys:
@@ -236,7 +335,24 @@ def mark_appearance_stale(session: Session, contour_id: int) -> int:
     ).update({ContourMetrics.stale: True}, synchronize_session=False)
 
 
-def mark_contextual_stale(session: Session, contour_ids: Iterable[int]) -> int:
+def _id_filter(contour_ids: "Iterable[int] | Select"):
+    """Normalize a contour-id argument for use with ``IN``.
+
+    Accepts either a concrete collection of ids or a ``SELECT`` that yields them. The
+    subquery form matters on the bulk write path: resolving a sibling group in SQL keeps
+    the group from being materialized into python once per saved contour, which is what
+    turns a large mask import into quadratic work.
+
+    Returns:
+        A list of ids, a :class:`Select`, or ``None`` when there is nothing to match.
+    """
+    if isinstance(contour_ids, Select):
+        return contour_ids
+    ids = list(contour_ids)
+    return ids or None
+
+
+def mark_contextual_stale(session: Session, contour_ids: "Iterable[int] | Select") -> int:
     """Mark the CONTEXTUAL-tier metric rows of ``contour_ids`` as ``stale=True``.
 
     Low-level primitive shared by the group-invalidation helper in
@@ -246,16 +362,17 @@ def mark_contextual_stale(session: Session, contour_ids: Iterable[int]) -> int:
 
     Args:
         session: The database session (caller controls commit).
-        contour_ids: The contours whose contextual rows should be invalidated.
+        contour_ids: The contours whose contextual rows should be invalidated, either as
+            a collection of ids or as a ``SELECT`` yielding them (see :func:`_id_filter`).
 
     Returns:
         The number of rows marked stale.
     """
-    contour_ids = list(contour_ids)
-    if not contour_ids:
+    id_filter = _id_filter(contour_ids)
+    if id_filter is None:
         return 0
     return session.query(ContourMetrics).filter(
-        ContourMetrics.contour_id.in_(contour_ids),
+        ContourMetrics.contour_id.in_(id_filter),
         ContourMetrics.metric_key.in_(CONTEXTUAL_METRIC_KEYS),
     ).update({ContourMetrics.stale: True}, synchronize_session=False)
 
@@ -275,16 +392,17 @@ def mark_relational_stale(session: Session, contour_ids: Iterable[int]) -> int:
 
     Args:
         session: The database session (caller controls commit).
-        contour_ids: The contours (parents) whose relational rows should be invalidated.
+        contour_ids: The contours (parents) whose relational rows should be invalidated,
+            either as a collection of ids or as a ``SELECT`` yielding them.
 
     Returns:
         The number of rows marked stale.
     """
-    contour_ids = list(contour_ids)
-    if not contour_ids:
+    id_filter = _id_filter(contour_ids)
+    if id_filter is None:
         return 0
     return session.query(ContourMetrics).filter(
-        ContourMetrics.contour_id.in_(contour_ids),
+        ContourMetrics.contour_id.in_(id_filter),
         ContourMetrics.metric_key.in_(RELATIONAL_METRIC_KEYS),
     ).update({ContourMetrics.stale: True}, synchronize_session=False)
 
@@ -334,6 +452,75 @@ def _images_needing_appearance_compute(
     return query.order_by(Images.id).all()
 
 
+def compute_geometry_metrics_for_dataset(
+        db: Session,
+        dataset_id: int,
+        metric_keys: Iterable[str] = GEOMETRY_METRIC_KEYS,
+        only_stale: bool = True,
+        image_ids: Iterable[int] | None = None,
+) -> int:
+    """Compute geometry metrics and synchronize legacy contour columns for a dataset.
+
+    Args:
+        db: Database session.
+        dataset_id: Dataset to compute for.
+        metric_keys: Geometry metric keys to compute.
+        only_stale: Whether to skip contours with fresh requested metric rows.
+        image_ids: Optional image subset.
+
+    Returns:
+        The number of contour-metric rows written.
+    """
+    metric_keys = tuple(metric_keys)
+    if not metric_keys:
+        return 0
+
+    rows = _images_needing_appearance_compute(db, dataset_id, metric_keys, only_stale, image_ids)
+    if not rows:
+        return 0
+
+    contours_by_image: dict[int, list[Contour]] = {}
+    image_by_id: dict[int, Images] = {}
+    contour_db_by_id: dict[int, Contours] = {}
+    for contour_db, image_db in rows:
+        image_by_id[image_db.id] = image_db
+        contour_db_by_id[contour_db.id] = contour_db
+        contours_by_image.setdefault(image_db.id, []).append(Contour.from_db(contour_db))
+
+    total_rows = 0
+    images_since_commit = 0
+    for image_id, contour_schemas in contours_by_image.items():
+        image = image_by_id[image_id]
+        total_rows += compute_and_store_metrics(db, metric_keys, contour_schemas, image)
+
+        for contour_schema in contour_schemas:
+            contour_db = contour_db_by_id[contour_schema.id]
+            context = build_quant_context(image, [contour_schema])
+            points = context.points_physical(contour_schema)
+            area, perimeter = gm.area_and_perimeter(points)
+            contour_db.area = float(area)
+            contour_db.perimeter = float(perimeter)
+            contour_db.circularity = float(gm.circularity(area, perimeter))
+            contour_db.diameter = float(gm.max_diameter(points))
+
+        images_since_commit += 1
+        if images_since_commit >= _APPEARANCE_BATCH_SIZE:
+            db.commit()
+            images_since_commit = 0
+
+    if images_since_commit > 0:
+        db.commit()
+
+    logger.info(
+        "Computed geometry metrics for dataset %s: %d images, %d rows (only_stale=%s).",
+        dataset_id,
+        len(contours_by_image),
+        total_rows,
+        only_stale,
+    )
+    return total_rows
+
+
 def compute_appearance_metrics_for_dataset(
         db: Session,
         dataset_id: int,
@@ -348,9 +535,15 @@ def compute_appearance_metrics_for_dataset(
     entry point: it groups contours by image (one DB round trip via a join, then a
     dict grouping), and for each image builds exactly one
     :class:`~iquana_toolbox.quantification.context.QuantContext` (via
-    :func:`build_quant_context` with :func:`load_image_rgb` as the loader) and calls
+    :func:`build_quant_context` with the calibrated loader) and calls
     :func:`compute_and_store_metrics`, so the image is decoded at most once per image
     regardless of how many metrics or contours it has (see ``QuantContext.image``).
+
+    Pixels are read through
+    :func:`~app.services.calibration.service.load_calibrated_image_rgb`, not the raw
+    :func:`load_image_rgb`: an appearance metric is only comparable across images once
+    the radiometric calibrations (intensity, colour) have been applied. Images with no
+    such calibration are returned untouched, so this is a no-op until one is set.
 
     Commits are batched every :data:`_APPEARANCE_BATCH_SIZE` images so a large dataset
     does not hold one giant transaction open.
@@ -391,7 +584,7 @@ def compute_appearance_metrics_for_dataset(
         image = image_by_id[image_id]
         total_rows += compute_and_store_metrics(
             db, metric_keys, contour_schemas, image,
-            image_loader=lambda img=image: load_image_rgb(img),
+            image_loader=lambda img=image: load_calibrated_image_rgb(db, img),
         )
         images_since_commit += 1
         if images_since_commit >= _APPEARANCE_BATCH_SIZE:

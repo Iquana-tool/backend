@@ -1,13 +1,15 @@
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from iquana_toolbox.schemas.database.contours import Contour
-from iquana_toolbox.schemas.user import User
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.services.auth import get_current_user
+from app.schemas.auth_user import AuthenticatedUser
+from app.schemas.permissions import Permission
+from app.services import image_status
 from app.services.database_access import masks as masks_db
+from app.services.permissions import require
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/masks", tags=["masks"])
@@ -17,13 +19,13 @@ router = APIRouter(prefix="/masks", tags=["masks"])
 async def get_mask(
         mask_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ, "mask_id"))
 ):
     """ Get a mask by its ID.
 
     Args:
         mask_id (int): The ID of the mask.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and the mask.
@@ -39,21 +41,29 @@ async def get_mask(
 async def get_mask_annotation_status(
         mask_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ, "mask_id"))
 ):
-    """ Check the annotation status of a mask by its ID.
+    """ Check the workflow status of a mask's image by the mask ID.
+
+    Reports all three phases — ``calibrate``, ``annotate`` and ``review`` — each
+    one of ``not_started``, ``in_progress`` or ``finished``, plus the combined
+    ``status``, which is ``finished`` only when every phase is. A reviewer sending
+    work back (an open rejection) pulls annotate and review back to ``in_progress``.
 
     Args:
         mask_id (int): The ID of the mask.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
-        dict: A dictionary containing the annotation status.
+        dict: A dictionary containing the overall status and the per-phase breakdown.
     """
+    mask = await masks_db.get_mask(mask_id, db)
+    state = image_status.status_for_mask(db, mask)
     return {
         "success": True,
         "message": "Mask status retrieved successfully.",
-        "status": (await masks_db.get_mask(mask_id, db)).status
+        "status": state["status"],
+        "phases": state["phases"],
     }
 
 
@@ -61,13 +71,13 @@ async def get_mask_annotation_status(
 async def delete_mask(
         mask_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.MASK_DELETE, "mask_id"))
 ):
     """ Delete a mask and all its contours by its ID.
 
     Args:
         mask_id (int): The ID of the mask.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and message.
@@ -83,14 +93,14 @@ async def delete_mask(
 async def mark_as_fully_annotated(
         mask_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.MASK_SUBMIT, "mask_id"))
 ):
-    """ Mark a mask as finished, generate it as an image file and upload it to the AI external service.
+    """ Submit a mask for review: mark it as containing every object.
 
     Args:
         mask_id (int): The ID of the mask.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and mask ID.
@@ -106,15 +116,17 @@ async def mark_as_fully_annotated(
 async def unmark_as_fully_annotated(
         mask_id: int,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.MASK_REOPEN, "mask_id"))
 ):
-    """ Remove the finished status from a mask, allowing it to be edited again. This will also delete the mask image
-        file and remove it from the AI external service.
+    """ Reopen a submitted mask for editing.
+
+    Requires `mask.reopen` rather than `mask.submit`: once work is in the review
+    queue, pulling it back out is the reviewer's call, not the annotator's.
 
     Args:
         mask_id (int): The ID of the mask.
         db (Session): The database session.
-        user (User): The current authenticated user.
+        user (AuthenticatedUser): The current authenticated user.
 
     Returns:
         dict: A dictionary containing the success status and mask ID.
@@ -132,7 +144,7 @@ async def get_contours_of_mask(
         mask_id: int,
         flattened: bool = True,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ, "mask_id"))
 ):
     """ Export quantification data for the given mask_id and labels.
 
@@ -142,7 +154,7 @@ async def get_contours_of_mask(
             hierarchical structure will be preserved, i.e. children contours will be nested under their
             parent contour.
         db (Session, optional): The database session. Defaults to Depends(get_session). This is a fastapi dependency.
-        user (User): Authentication dependency.
+        user (AuthenticatedUser): Authentication dependency.
 
     Returns:
         dict: A dictionary containing the success status and message if error, or a hierarchical JSON structure of
@@ -162,7 +174,7 @@ async def add_contour(
         contour_to_add: Contour,
         check_hierarchy: bool = True,
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_CREATE, "mask_id"))
 ):
     """
     Add a contour to a mask in the database.
@@ -172,13 +184,19 @@ async def add_contour(
         contour_to_add (Contour): The contour data to add.
         check_hierarchy (bool): Whether to check the hierarchy of the contour. Defaults to True. If true, fits the contour
             into the existing hierarchy.
-        user (User): Authentication dependency.
+        user (AuthenticatedUser): Authentication dependency.
         db (Session): The database session.
 
     Returns:
         dict: A dictionary containing the success status, message, and the ID of the added contour.
     """
-    added_contour = await masks_db.add_contour_to_mask(mask_id, contour_to_add, check_hierarchy=check_hierarchy, db=db)
+    added_contour = await masks_db.add_contour_to_mask(mask_id, contour_to_add, check_hierarchy=check_hierarchy,
+                                                       db=db, author_username=user.username)
+    if added_contour is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Contour has no drawable pixels after hierarchy fitting.",
+        )
     return {
         "success": True,
         "message": "Contour added successfully.",
@@ -191,7 +209,7 @@ async def add_contours(
         mask_id: int,
         contours_to_add: list[Contour],
         db: Session = Depends(get_session),
-        user: User = Depends(get_current_user)
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_CREATE, "mask_id"))
 ):
     """
     Add multiple contours to a mask in the database. Internally calls `add_contour` for each contour.
@@ -199,8 +217,7 @@ async def add_contours(
     Args:
         mask_id (int): The ID of the mask to which the contours will be added.
         contours_to_add (list[Contour]): A list of contour data to add.
-        temporary_list (list[bool]): A list saying whether or not the contours should be temporary.
-        user (User): Authentication dependency.
+        user (AuthenticatedUser): Authentication dependency.
         db (Session): The database session.
 
     Returns:
@@ -211,10 +228,13 @@ async def add_contours(
     for contour_to_add in contours_to_add:
         logger.info(f"Added {len(added)} / {len(contours_to_add)} contours.")
         # 1. Add to the hierarchy, ensuring it fits and respects hierarchies
-        fitted_contour, changed = hierarchy.add_contour(contour_to_add)
+        fitted_contour = masks_db.add_contour_to_hierarchy(hierarchy, contour_to_add)
+        if fitted_contour is None:
+            continue
 
         # 2. Add the (fitted) contour to the db; don't need to check the hierarchy here
-        await masks_db.add_contour_to_mask(mask_id, fitted_contour, check_hierarchy=False, db=db)
+        await masks_db.add_contour_to_mask(mask_id, fitted_contour, check_hierarchy=False, db=db,
+                                           author_username=user.username)
 
         # 3. Add to a list for us to return
         added.append(fitted_contour)
@@ -238,10 +258,10 @@ async def add_contours(
 @router.delete("/{mask_id}/contours")
 async def delete_all_contours_of_mask(
         mask_id: int,
-        user: User = Depends(get_current_user),
-        db: Session = Depends(get_session)
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_EDIT_ANY, "mask_id"))
 ):
-    """ Deletes all contours of a mask. """
+    """ Deletes all contours of a mask. Wipes other people's work, so reviewer+. """
     await masks_db.delete_all_contours_of_mask(mask_id, db)
     return {
         "success": True,
@@ -250,10 +270,12 @@ async def delete_all_contours_of_mask(
 
 
 @router.delete("/{mask_id}/contours/unreviewed")
-async def delete_unreviewed_contours_of_mask(mask_id: int,
-                                             user: User = Depends(get_current_user),
-                                             db: Session = Depends(get_session)):
-    """ Deletes all temporary contours of a mask. """
+async def delete_unreviewed_contours_of_mask(
+        mask_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.REVIEW_PURGE_UNREVIEWED, "mask_id"))
+):
+    """ Deletes every not-yet-approved contour of a mask. """
     await masks_db.delete_all_contours_of_mask(mask_id, unreviewed_only=True, db=db)
     return {
         "success": True,

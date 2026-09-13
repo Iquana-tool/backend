@@ -7,8 +7,10 @@ service modules (for persistence), and sends a ``ServerMessage`` back to the cli
 """
 
 from logging import getLogger
+from uuid import uuid4
 
 from fastapi.websockets import WebSocket
+from iquana_toolbox.inference import nms
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.networking.websockets.annotation_session import (
     ServerMessageType,
@@ -31,8 +33,12 @@ from app.services.annotation_session.operations import (
     run_instance_segmentation,
     run_prompted_segmentation,
 )
+from app.schemas.permissions import Permission
+from app.services import image_status
 from app.services.annotation_session.state import AnnotationSessionState, Backends
-from app.services.auth import get_current_user
+from app.services.auth import load_user
+from app.services.permissions import dataset_id_for_image
+from app.services.database_access import annotation_history as history_db
 from app.services.database_access import contours as contours_db
 from app.services.database_access import labels as labels_db
 from app.services.database_access import masks as masks_db
@@ -40,18 +46,83 @@ from app.services.database_access import masks as masks_db
 logger = getLogger(__name__)
 
 
+def session_user(state: AnnotationSessionState, db):
+    """Reload the session's authenticated user, with their current permissions.
+
+    Permissions are re-read per message rather than cached on the session, so
+    revoking someone's access takes effect on their next action instead of only
+    when they next reconnect.
+    """
+    return load_user(state.user_id, db)
+
+
+async def _deny(websocket: WebSocket, client_msg: ClientMessage, permission: Permission):
+    """Refuse one action without tearing down the session."""
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.ERROR,
+        success=False,
+        message=f"You do not have permission to do this ({permission.value}).",
+        data=None,
+    ))
+
+
+def _mask_state(state: AnnotationSessionState) -> dict:
+    """The current image's mask id and workflow status, for the workspace status pill.
+
+    Returns nulls for a session that is not pointed at an image yet.
+    """
+    if state.mask_id is None:
+        return {"mask_id": None, "mask_status": None, "phase_status": None}
+    with get_context_session() as db:
+        mask_db = db.query(Masks).filter_by(id=state.mask_id).first()
+        # The workspace pill shows where the *image* stands, so this is the
+        # combined Calibrate/Annotate/Review status plus the breakdown behind it.
+        image_state = image_status.status_for_mask(db, mask_db) if mask_db else None
+    return {
+        "mask_id": state.mask_id,
+        "mask_status": image_state["status"] if image_state else None,
+        "phase_status": image_state["phases"] if image_state else None,
+    }
+
+
+async def send_objects(websocket: WebSocket, state: AnnotationSessionState, message_id: str):
+    """Send the current image's full contour hierarchy and remember it on the session.
+
+    The hierarchy comes from the read-through cache, and is therefore shared with any
+    other session showing the same mask. Handlers must treat ``state.contour_hierarchy``
+    as read-only; anything that changes contours goes through the database-access layer,
+    which invalidates the cache entry.
+    """
+    if state.mask_id is None:
+        return
+    with get_context_session() as db:
+        hierarchy, payload = await masks_db.get_cached_contour_hierarchy_of_mask(state.mask_id, db)
+    state.contour_hierarchy = hierarchy
+    await send_msg(
+        websocket,
+        ServerMessage(
+            id=message_id,
+            type=ServerMessageType.OBJECTS,
+            success=True,
+            message=f"Retrieved annotations",
+            data=payload,
+        )
+    )
+
+
 async def startup(websocket: WebSocket, state: AnnotationSessionState):
     """Function to be called at the start of an annotation session. Any initialization code can be placed here.
+
+    Runs once per socket, not once per image: the AI backends are health-checked here and
+    stay registered for as long as the connection lives, however many images the client
+    steps through (see :func:`handle_switch_image`).
     """
-    print(f"Annotation session initialized: {state.model_dump()}")
+    logger.info("Initializing annotation session for %s.", state.user_id)
     # Check for running backends
     await state.check_and_register_backend(PromptedSegmentationService(), Backends.PROMPTED_SEGMENTATION.value)
     await state.check_and_register_backend(SuggestionService(), Backends.SUGGESTION_SEGMENTATION.value)
     await state.check_and_register_backend(InstanceSegmentationService(), Backends.INSTANCE_SEGMENTATION.value)
-
-    with get_context_session() as db:
-        mask_db = db.query(Masks).filter_by(id=state.mask_id).first()
-        mask_status = mask_db.status if mask_db else None
 
     await send_msg(
         websocket,
@@ -65,26 +136,78 @@ async def startup(websocket: WebSocket, state: AnnotationSessionState):
             data={
                 "running": list(state._running_backends.keys()),
                 "failed": list(state._failed_backends.keys()),
-                "mask_id": state.mask_id,
-                "mask_status": mask_status,
+                **_mask_state(state),
             }
         )
     )
 
     logger.info("Annotation session initialized.")
+    # A socket opened with an image in its URL gets that image's objects straight away.
+    # One opened per user instead waits for the first switch_image.
+    await send_objects(websocket, state, message_id="1")
+
+
+async def handle_switch_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
+    """ Point the session at a different image.
+
+        This exists so that stepping through a dataset does not tear the socket down and
+        rebuild it: reconnecting re-ran authentication, three backend health checks and the
+        model preloading before the first contour could even be requested. Switching keeps
+        all of that and only swaps the per-image state.
+
+        Permissions are re-checked here rather than trusted from connection time, because
+        the new image may live in another dataset entirely.
+    """
+    # Coerced rather than trusted: JSON has no integer type distinct from a numeric
+    # string, and a string id would reach the database as one and fail there instead of
+    # here, where the message can say what was actually wrong.
+    try:
+        image_id = int(client_msg.data.get("image_id"))
+    except (TypeError, ValueError):
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.ERROR,
+            success=False,
+            message="switch_image requires a numeric image_id.",
+            data=None,
+        ))
+        return
+
     with get_context_session() as db:
-        hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
-    state.contour_hierarchy = hierarchy
-    await send_msg(
-        websocket,
-        ServerMessage(
-            id="1",
-            type=ServerMessageType.OBJECTS,
-            success=True,
-            message=f"Retrieved annotations",
-            data=hierarchy.model_dump()
-        )
-    )
+        dataset_id = dataset_id_for_image(image_id, db)
+        if dataset_id is None:
+            await send_msg(websocket, ServerMessage(
+                id=client_msg.id,
+                type=ServerMessageType.ERROR,
+                success=False,
+                message=f"Unknown image {image_id}.",
+                data=None,
+            ))
+            return
+        user = session_user(state, db)
+        if user is None or not user.has_permission(dataset_id, Permission.ANNOTATION_CREATE):
+            await _deny(websocket, client_msg, Permission.ANNOTATION_CREATE)
+            return
+
+    state.switch_to_image(image_id, dataset_id)
+
+    # The client blocks its canvas on this reply, so it is sent before the contours: the
+    # spinner it shows needs to know which mask it is waiting for.
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.IMAGE_SWITCHED,
+        success=True,
+        message=f"Switched to image {image_id}.",
+        data={
+            "image_id": image_id,
+            "running": list(state._running_backends.keys()),
+            "failed": list(state._failed_backends.keys()),
+            **_mask_state(state),
+        },
+    ))
+
+    # A distinct id: the client's pending request was already resolved by the reply above.
+    await send_objects(websocket, state, message_id=f"{client_msg.id}_objects")
 
 
 async def handle_focus_image(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -176,12 +299,23 @@ async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage
     """
     contour_id = client_msg.data.get("contour_id")
     with get_context_session() as db:
-        response = await contours_db.review_contour(contour_id, user=await get_current_user(), db=db)
+        # This used to call get_current_user() outside FastAPI's dependency
+        # injection, which handed it Depends() sentinels instead of a token and a
+        # session. Resolve the session's user directly instead.
+        user = session_user(state, db)
+        if user is None or not user.has_permission(state.dataset_id, Permission.REVIEW_APPROVE):
+            await _deny(websocket, client_msg, Permission.REVIEW_APPROVE)
+            return
+        try:
+            reviewed = await contours_db.review_contour(contour_id, user=user, db=db, strict=True)
+            message = "Object finalised." if reviewed else "Object could not be finalised."
+        except (PermissionError, KeyError) as exc:
+            reviewed, message = False, str(exc)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
-        type=ServerMessageType.OBJECT_MODIFIED if response["success"] else ServerMessageType.ERROR,
-        message=response["message"],
-        success=response["success"],
+        type=ServerMessageType.OBJECT_MODIFIED if reviewed else ServerMessageType.ERROR,
+        message=message,
+        success=reviewed,
         data={
             "contour_id": contour_id,
             "reviewed_by": state.user_id,
@@ -193,7 +327,11 @@ async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, 
     """ Handle removing an object from the mask. """
     contour_id = client_msg.data.get("contour_id")
     with get_context_session() as db:
-        response = await contours_db.delete_contour(contour_id, db)
+        # Snapshot first: the delete cascades to the descendants, so once it has
+        # run there is nothing left to describe what undo would have to bring back.
+        snapshot = history_db.snapshot_subtree(contour_id, db)
+        await contours_db.delete_contour(contour_id, db)
+        history_db.record_delete(db, state.mask_id, state.user_id, snapshot)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_REMOVED,
@@ -208,28 +346,46 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
         label_id changes are validated against the dataset's label hierarchy.
     """
     contour_id = client_msg.data.get("contour_id")
-    fields_to_be_updated = client_msg.data.get("fields_to_be_updated")
+    fields_to_be_updated = dict(client_msg.data.get("fields_to_be_updated") or {})
 
-    # Resolve "current_user" placeholder to the actual authenticated user ID
-    if "reviewed_by" in fields_to_be_updated and fields_to_be_updated["reviewed_by"]:
-        fields_to_be_updated["reviewed_by"] = [
-            state.user_id if username == "current_user" else username
-            for username in fields_to_be_updated["reviewed_by"]
-        ]
+    # `reviewed_by` is never taken from the client: accepting it let a client mark
+    # a contour as reviewed by arbitrary users. Approvals go through
+    # review_contour(), which enforces the dataset's review policy.
+    wants_review = bool(fields_to_be_updated.pop("reviewed_by", None))
+    fields_to_be_updated.pop("author_username", None)
+    assigns_label = "label_id" in fields_to_be_updated
 
-    # If assigning a label_id, also add the current user to reviewed_by automatically
-    if "label_id" in fields_to_be_updated:
-        with get_context_session() as db:
-            existing = db.query(Contours).filter_by(id=contour_id).first()
-            if existing:
-                current_reviewers = [u.username for u in existing.reviewed_by]
-                if state.user_id not in current_reviewers:
-                    current_reviewers.append(state.user_id)
-                fields_to_be_updated["reviewed_by"] = current_reviewers
+    with get_context_session() as db:
+        user = session_user(state, db)
+        if user is None or not user.has_permission(state.dataset_id, Permission.ANNOTATION_EDIT_OWN):
+            await _deny(websocket, client_msg, Permission.ANNOTATION_EDIT_OWN)
+            return
 
-    if fields_to_be_updated:
-        with get_context_session() as db:
+        existing = db.query(Contours).filter_by(id=contour_id).first()
+        authored_by_someone_else = (existing is not None
+                                    and existing.author_username not in (None, state.user_id))
+        if authored_by_someone_else and not user.has_permission(state.dataset_id,
+                                                                Permission.ANNOTATION_EDIT_ANY):
+            await _deny(websocket, client_msg, Permission.ANNOTATION_EDIT_ANY)
+            return
+
+        # Read the label before the update so the history knows what to go back to.
+        previous_label_id = existing.label_id if existing is not None else None
+
+        if fields_to_be_updated:
             await contours_db.modify_contour(contour_id, db=db, **fields_to_be_updated)
+            if assigns_label:
+                history_db.record_label_change(db, state.mask_id, state.user_id, contour_id,
+                                               previous_label_id,
+                                               fields_to_be_updated["label_id"])
+
+        # Assigning a label counts as a review only for callers entitled to give
+        # one; for everyone else the label change simply stands on its own.
+        if (wants_review or assigns_label) and user.has_permission(state.dataset_id,
+                                                                   Permission.REVIEW_APPROVE):
+            await contours_db.review_contour(contour_id, user=user, db=db, strict=False)
+
+    if fields_to_be_updated or wants_review:
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
             type=ServerMessageType.OBJECT_MODIFIED,
@@ -288,6 +444,12 @@ async def handle_prompted_segmentation(
     if state.focussed_contour_id is not None and state.contour_hierarchy is not None:
         focus_contour = state.contour_hierarchy.id_to_contour.get(state.focussed_contour_id)
 
+    client_data = client_msg.data or {}
+    inputs_data = client_data.get("inputs") or {}
+    parameters = inputs_data.get("parameters") if isinstance(inputs_data, dict) else None
+    if not parameters and isinstance(client_data.get("parameters"), dict):
+        parameters = client_data.get("parameters")
+
     result = await run_prompted_segmentation(
         service=state._running_backends[Backends.PROMPTED_SEGMENTATION.value],
         image_url=state.image_db.file_path,
@@ -299,6 +461,7 @@ async def handle_prompted_segmentation(
         previous_mask=previous_mask,
         parent_id=state.focussed_contour_id,
         focus_contour=focus_contour,
+        parameters=parameters,
     )
     contour_model = result.contour
 
@@ -319,10 +482,11 @@ async def handle_prompted_segmentation(
         if old_contour.label_id is not None:
             contour_model.label_id = old_contour.label_id
 
-        # Replace it in our session state
-        state.contour_hierarchy.id_to_contour[state.refinement_contour_id] = contour_model
-
-        # Replace in the db
+        # The session's hierarchy is not patched here. It came from the shared read-through
+        # cache, so writing into it would change what other readers of this mask see - and
+        # it patched only one of the hierarchy's three indexes anyway, leaving root_contours
+        # and the parent's children list pointing at the replaced contour. Replacing the
+        # contour invalidates the cache entry, so the next read rebuilds it in full.
         await replace_object(state.refinement_contour_id, contour_model, websocket, client_msg, state)
     else:
         await add_object(contour_model, websocket, client_msg, state)
@@ -396,9 +560,24 @@ async def handle_suggestion_disable(websocket: WebSocket, client_msg: ClientMess
 
 async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the suggestion of a suggestion model. """
-    seed_contour_ids = client_msg.data.get("seed_contour_ids")
+    client_data = client_msg.data or {}
+    seed_contour_ids = client_data.get("seed_contour_ids") or []
+    inputs_data = client_data.get("inputs") or {}
+    parameters = inputs_data.get("parameters") if isinstance(inputs_data, dict) else None
+    if not parameters and isinstance(client_data.get("parameters"), dict):
+        parameters = client_data.get("parameters")
+
+    # Respect user-configured exemplar count (conditioning.count) if present
+    conditioning = inputs_data.get("conditioning") if isinstance(inputs_data, dict) else {}
+    count = conditioning.get("count") if isinstance(conditioning, dict) else None
+    if count is not None and isinstance(count, int) and count > 0 and len(seed_contour_ids) > count:
+        seed_contour_ids = seed_contour_ids[:count]
+
     with get_context_session() as db:
         contours = await contours_db.get_contours(seed_contour_ids, db)
+    if count is not None and isinstance(count, int) and count > 0 and len(contours) > count:
+        contours = contours[:count]
+
     height, width = state.image_db.height, state.image_db.width
     positive_exemplars = [contour.to_binary_mask_model(height, width) for contour in contours]
 
@@ -416,10 +595,11 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
     result = await run_suggestion_segmentation(
         service=state._running_backends[Backends.SUGGESTION_SEGMENTATION.value],
         image_url=state.image_db.file_path,
-        model_key=client_msg.data.get('model_key'),
+        model_key=client_data.get('model_key'),
         user_id=state.user_id,
         positive_exemplars=positive_exemplars,
         concept=concept,
+        parameters=parameters,
     )
 
     # Instance suggestion may re-detect the seed exemplars themselves; drop those.
@@ -433,17 +613,45 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
         label_hierarchy = await labels_db.get_label_hierarchy(state.image_db.dataset_id, db)
     suggested = assign_hierarchy_parents(suggested, hierarchy, label_hierarchy, label_id)
 
-    # Report how many new instances were found so the client can tell the user
-    # when a model returned nothing (objects themselves follow as OBJECT_ADDED).
+    # One suggestion run is one thing the user did, so it is one undo step however
+    # many instances came back.
+    group_id = history_db.new_group_id()
+    persisted_contours = []
+    with get_context_session() as db:
+        for contour in suggested:
+            persisted = await masks_db.add_contour_to_mask(
+                mask_id=state.mask_id,
+                contour_to_add=contour,
+                db=db,
+                author_username=state.user_id,
+            )
+            if persisted is not None:
+                history_db.record_create(db, state.mask_id, state.user_id, persisted.id, group_id=group_id)
+                persisted_contours.append((contour, persisted))
+            else:
+                logger.info(
+                    "Skipped contour on mask %s because hierarchy fitting removed all pixels.",
+                    state.mask_id,
+                )
+
+    # 1. Send SUCCESS acknowledgment first so the client's pending request resolves with accurate added_count
     await send_msg(websocket, ServerMessage(
         success=result.success,
         id=client_msg.id,
         type=ServerMessageType.SUCCESS,
         message=result.message,
-        data={"added_count": len(suggested)},
+        data={"added_count": len(persisted_contours)},
     ))
-    for contour in suggested:
-        await add_object(contour, websocket, client_msg, state)
+
+    # 2. Emit OBJECT_ADDED events for all persisted contours
+    for original_contour, persisted in persisted_contours:
+        await send_msg(websocket, ServerMessage(
+            id=str(uuid4()),
+            type=ServerMessageType.OBJECT_ADDED,
+            success=True,
+            message=f"Successfully added object with confidence score {original_contour.confidence:.1%}",
+            data=persisted,
+        ))
 
 
 async def handle_instance_select_model(websocket: WebSocket, client_msg: ClientMessage,
@@ -474,10 +682,22 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
                                        state: AnnotationSessionState):
     """ Handle instance segmentation inference.
 
-        Instance segmentation re-segments the whole image, so the detected instances
-        replace every contour currently on the mask (the client warns the user about
-        this before requesting it).
+        ``override`` re-segments the whole image and replaces every contour currently on
+        the mask. ``patch`` keeps existing contours and adds only non-overlapping model
+        predictions. Omitted ``write_mode`` remains the destructive override behavior.
     """
+    message_data = client_msg.data or {}
+    write_mode = message_data.get("write_mode", "override")
+    if write_mode not in {"patch", "override"}:
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.ERROR,
+            success=False,
+            message="write_mode must be either 'patch' or 'override'.",
+            data=None,
+        ))
+        return
+
     if Backends.INSTANCE_SEGMENTATION.value not in state._running_backends:
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
@@ -488,7 +708,12 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         ))
         return
 
-    model_registry_key = client_msg.data.get("model_registry_key")
+    model_registry_key = message_data.get("model_registry_key")
+    inputs_data = message_data.get("inputs") or {}
+    parameters = inputs_data.get("parameters") if isinstance(inputs_data, dict) else None
+    if not parameters and isinstance(message_data.get("parameters"), dict):
+        parameters = message_data.get("parameters")
+
     result = await run_instance_segmentation(
         service=state._running_backends[Backends.INSTANCE_SEGMENTATION.value],
         image_url=state.image_db.file_path,
@@ -496,14 +721,34 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         image_height=state.image_db.height,
         model_registry_key=model_registry_key,
         user_id=state.user_id,
+        parameters=parameters,
     )
 
-    # Replace the existing contours with the freshly detected instances.
+    contours_to_add = result.contours
+    suppressed_count = 0
     with get_context_session() as db:
-        await masks_db.delete_all_contours_of_mask(state.mask_id, db=db)
-        for contour in result.contours:
-            await masks_db.add_contour_to_mask(state.mask_id, contour, db=db)
-        hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
+        if write_mode == "patch":
+            existing_hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
+            existing_contours = list(existing_hierarchy.id_to_contour.values())
+            nms_result = nms(result.contours, existing=existing_contours)
+            contours_to_add = [result.contours[index] for index in nms_result.kept]
+            suppressed_count = len(nms_result.suppressed)
+        else:
+            # Preserve the established destructive behavior for override and for
+            # clients that omit write_mode.
+            await masks_db.delete_all_contours_of_mask(state.mask_id, db=db)
+
+        for contour in contours_to_add:
+            await masks_db.add_contour_to_mask(
+                state.mask_id,
+                contour,
+                db=db,
+                # Instance models currently return a flat list. Patch writes must
+                # preserve that geometry and must not infer a hierarchy.
+                check_hierarchy=write_mode == "override",
+                author_username=state.user_id,
+            )
+        hierarchy, payload = await masks_db.get_cached_contour_hierarchy_of_mask(state.mask_id, db)
     state.contour_hierarchy = hierarchy
 
     # Send the full hierarchy so the client refreshes its object list in one go.
@@ -514,19 +759,54 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         id=client_msg.id,
         type=ServerMessageType.OBJECTS,
         success=result.success,
-        message=result.message or f"Instance segmentation detected {len(result.contours)} objects.",
-        data=hierarchy.model_dump(),
+        message=result.message or f"Instance segmentation detected {len(contours_to_add)} objects.",
+        data={
+            **payload,
+            "added_count": len(contours_to_add),
+            "suppressed_count": suppressed_count,
+        },
     ))
 
 
 async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage,
-                     state: AnnotationSessionState):
+                     state: AnnotationSessionState, group_id: str | None = None):
+    """Persist one new object and tell the client about it.
+
+    Every interactive add reaches the database through here -- manual drawing,
+    prompted segmentation and instance suggestion alike -- which makes it the one
+    place the undo history has to be told about a creation. Instance segmentation
+    is the exception, and deliberately so: it wipes and repopulates the mask
+    through ``masks_db`` directly, and a per-object undo of half a replace-all
+    would leave the mask in a state the user never saw.
+
+    Args:
+        group_id: Ties this creation to others made in the same operation, so a
+            suggestion run that adds thirty objects is undone in one step.
+    """
     with get_context_session() as db:
         response = await masks_db.add_contour_to_mask(
             mask_id=state.mask_id,
             contour_to_add=object_to_add,
             db=db,
+            author_username=state.user_id,
         )
+        if response is None:
+            logger.info(
+                "Skipped contour on mask %s because hierarchy fitting removed all pixels.",
+                state.mask_id,
+            )
+        else:
+            history_db.record_create(db, state.mask_id, state.user_id, response.id,
+                                     group_id=group_id)
+    if response is None:
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id,
+            type=ServerMessageType.SUCCESS,
+            success=True,
+            message="Object was skipped because it does not add any new pixels.",
+            data={"skipped": True},
+        ))
+        return None
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_ADDED,
@@ -540,7 +820,8 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
 async def replace_object(old_object_id, new_object: Contour, websocket: WebSocket, client_msg: ClientMessage,
                          state: AnnotationSessionState):
     with get_context_session() as db:
-        success = await contours_db.replace_contour(old_object_id, new_object, db)
+        success = await contours_db.replace_contour(old_object_id, new_object, db,
+                                                   author_username=state.user_id)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_MODIFIED if success else ServerMessageType.ERROR,
@@ -552,15 +833,22 @@ async def replace_object(old_object_id, new_object: Contour, websocket: WebSocke
 
 
 async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle marking a mask as finished. """
+    """ Handle submitting a mask for review, i.e. marking it fully annotated. """
     with get_context_session() as db:
-        response = await masks_db.mark_mask_as_complete(state.mask_id, db)
+        user = session_user(state, db)
+        if user is None or not user.has_permission(state.dataset_id, Permission.MASK_SUBMIT):
+            await _deny(websocket, client_msg, Permission.MASK_SUBMIT)
+            return
+        # mark_mask_as_complete returns None; the old code subscripted it as a dict
+        # and raised a TypeError on every finish.
+        await masks_db.mark_mask_as_complete(state.mask_id, db)
+        status = db.query(Masks).filter_by(id=state.mask_id).one().status
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
-        type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
-        success=response["success"],
-        message=response["message"],
-        data=None
+        type=ServerMessageType.SUCCESS,
+        success=True,
+        message="Mask submitted for review.",
+        data={"mask_id": state.mask_id, "status": status},
     ))
 
 

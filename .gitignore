@@ -26,6 +26,9 @@ pip-delete-this-directory.txt
 *.cfg
 
 # Data Files
+app.db
+mlflow.db
+mlruns/
 sam_vit_b_01ec64.pth
 data/*
 !data/.gitkeep
@@ -62,5 +65,6 @@ debug.log
 # SSH keys (for Docker build)
 build_key
 build_key*
+/mlartifacts/
 /mlartifacts/
 /mlflow.db

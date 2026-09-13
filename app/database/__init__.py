@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 import sqlite3
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -46,9 +46,77 @@ database.metadata.create_all(engine)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _import_models():
+    """Import every model module so `create_all` sees the full metadata.
+
+    Tables referenced only by string in relationships (e.g. ``dataset_members``)
+    are otherwise never imported, which leaves SQLAlchemy unable to resolve the
+    mapper and the table missing from a fresh database.
+    """
+    from app.database import (  # noqa: F401  (imported for their side effects)
+        annotation_actions,
+        annotation_queues,
+        contour_metrics,
+        contours,
+        dataset_calibration_defaults,
+        dataset_members,
+        dataset_metadata_keys,
+        datasets,
+        embeddings,
+        image_calibrations,
+        image_metadata,
+        images,
+        instance_settings,
+        dataset_model_routing_configs,
+        inference_jobs,
+        labels,
+        masks,
+        model_favorites,
+        quantification_profiles,
+        rejections,
+        scans,
+        users,
+    )
+
+
+#: Columns added to existing tables after their first release, as
+#: (table, column, DDL type). ``create_all`` creates missing *tables* but never
+#: ALTERs an existing one, so a nullable column added to a shipped model has to be
+#: patched in here for databases that predate it. Each entry is idempotent — it is
+#: only applied when the column is absent.
+_ADDED_COLUMNS = [
+    ("annotation_rejections", "resolution", "VARCHAR(16)"),
+    # Added with the metadata type system; a dev database that ran the untyped
+    # first cut of image_metadata has the table but not this column.
+    ("image_metadata", "value_num", "FLOAT"),
+]
+
+
+def _ensure_columns():
+    """Add late-arriving nullable columns to already-created tables.
+
+    Mirrors ``scripts/migrate_roles.py`` but runs on every boot so a dev database
+    stays in step with the models without a manual migration step. Safe on a fresh
+    database: ``create_all`` has already made the columns, so every check is a hit.
+    """
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    with engine.begin() as connection:
+        for table, column, ddl in _ADDED_COLUMNS:
+            if table not in existing_tables:
+                continue
+            columns = {col["name"] for col in inspector.get_columns(table)}
+            if column in columns:
+                continue
+            logger.info("Adding missing column %s.%s", table, column)
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
 def init_db():
     logger.debug("\tInitializing database")
+    _import_models()
     database.metadata.create_all(bind=engine)
+    _ensure_columns()
 
 
 def get_session():
