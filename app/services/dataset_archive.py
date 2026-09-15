@@ -753,9 +753,9 @@ def create_iquana_dataset_archive(
                     mask_id=zip_mask_id,
                     parent_id=parent_ann_id,
                     geometry=geometry,
-                    added_by=c.added_by,
+                    added_by=(c.added_by or "").strip() or "User",
                     confidence_score=float(c.confidence_score) if c.confidence_score is not None else 1.0,
-                    created_at=_to_utc_datetime(c.created_at),
+                    created_at=_to_utc_datetime(c.created_at) or datetime.now(timezone.utc),
                     author_username=c.author_username,
                     reviewed_by=reviewers,
                 )

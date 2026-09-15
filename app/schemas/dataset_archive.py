@@ -349,11 +349,19 @@ class ArchiveAnnotationExtension(StrictArchiveModel):
     mask_id: int = Field(..., ge=1, description="Archive ID of the mask this contour belongs to.")
     parent_id: Optional[int] = Field(default=None, ge=1, description="Archive ID of parent contour, if nested.")
     geometry: ArchiveGeometry = Field(..., description="Canonical normalized polygon coordinates.")
-    added_by: str = Field(..., min_length=1, max_length=255, description="Generator provenance: User, SAM2, etc.")
+    added_by: str = Field(default="User", max_length=255, description="Generator provenance: User, SAM2, etc.")
     confidence_score: float = Field(default=1.0, ge=0.0, le=1.0, description="Inference or assignment confidence.")
     created_at: IsoUtcDatetime = Field(..., description="ISO-8601 UTC creation timestamp.")
     author_username: Optional[str] = Field(default=None, description="Source author username (export provenance only).")
     reviewed_by: list[str] = Field(default_factory=list, description="Source reviewers (export provenance only).")
+
+    @field_validator("added_by", mode="before")
+    @classmethod
+    def normalize_added_by(cls, v: Any) -> str:
+        if v is None:
+            return "User"
+        s = str(v).strip()
+        return s if s else "User"
 
 
 class ArchiveAnnotation(StrictArchiveModel):

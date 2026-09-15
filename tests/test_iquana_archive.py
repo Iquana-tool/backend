@@ -1672,4 +1672,24 @@ def test_dataset_name_uniqueness_migration_and_creation():
         db.close()
 
 
+def test_export_dataset_with_empty_added_by_and_null_created_at(api_client, rich_dataset):
+    """Verify archive export succeeds even when stored contour has empty added_by."""
+    client, _, ds_id = api_client
+    db = client.app.dependency_overrides[get_session]()
 
+    # Force a contour in the dataset to have empty string added_by
+    c = db.query(Contours).first()
+    assert c is not None
+    c.added_by = ""
+    db.commit()
+
+    file_obj, filename = create_iquana_dataset_archive(db, ds_id, include_config=True)
+    try:
+        assert filename.endswith(".zip")
+        with zipfile.ZipFile(file_obj, "r") as zf:
+            ann_data = json.loads(zf.read("annotations.json"))
+            matching_ann = next(a for a in ann_data["annotations"] if a["id"] == c.id)
+            assert matching_ann["iquana"]["added_by"] == "User"
+            assert matching_ann["iquana"]["created_at"] is not None
+    finally:
+        file_obj.close()
