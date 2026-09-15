@@ -512,14 +512,26 @@ def create_iquana_dataset_archive(
                 )
             )
 
-        # Contours: omit temporary contours and their entire descendant subtree
+        # Contours: omit temporary and degenerate contours (< 3 coordinates) and their entire descendant subtree
         children_by_parent_id: dict[int, list[int]] = defaultdict(list)
         for c in contours:
             if c.parent_id is not None:
                 children_by_parent_id[c.parent_id].append(c.id)
 
         excluded_contour_ids: set[int] = set()
-        stack = [c.id for c in contours if c.temporary]
+        stack = []
+        for c in contours:
+            is_degenerate = not c.x or not c.y or len(c.x) != len(c.y) or len(c.x) < 3
+            if c.temporary or is_degenerate:
+                stack.append(c.id)
+                if is_degenerate:
+                    logger.warning(
+                        "Omitted degenerate contour %s (coordinate count: %s) from dataset %s export",
+                        c.id,
+                        len(c.x or []),
+                        dataset_id,
+                    )
+
         while stack:
             cid = stack.pop()
             if cid in excluded_contour_ids:

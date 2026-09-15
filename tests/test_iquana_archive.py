@@ -1693,3 +1693,38 @@ def test_export_dataset_with_empty_added_by_and_null_created_at(api_client, rich
             assert matching_ann["iquana"]["created_at"] is not None
     finally:
         file_obj.close()
+
+
+def test_export_dataset_omits_degenerate_contours(api_client, rich_dataset):
+    """Verify archive export omits degenerate contours (< 3 coordinates) without failing."""
+    client, _, ds_id = api_client
+    db = client.app.dependency_overrides[get_session]()
+
+    # Create a degenerate contour with only 2 points
+    c_existing = db.query(Contours).first()
+    assert c_existing is not None
+    degenerate_contour = Contours(
+        mask_id=c_existing.mask_id,
+        label_id=c_existing.label_id,
+        added_by="User",
+        author_username=c_existing.author_username,
+        confidence_score=1.0,
+        area=0.0,
+        perimeter=0.0,
+        circularity=0.0,
+        diameter=0.0,
+        x=[10.0, 20.0],  # only 2 points
+        y=[10.0, 20.0],
+    )
+    db.add(degenerate_contour)
+    db.commit()
+
+    file_obj, filename = create_iquana_dataset_archive(db, ds_id, include_config=True)
+    try:
+        assert filename.endswith(".zip")
+        with zipfile.ZipFile(file_obj, "r") as zf:
+            ann_data = json.loads(zf.read("annotations.json"))
+            exported_ids = [a["id"] for a in ann_data["annotations"]]
+            assert degenerate_contour.id not in exported_ids
+    finally:
+        file_obj.close()
