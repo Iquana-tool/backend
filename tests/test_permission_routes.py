@@ -30,7 +30,7 @@ from app.database.users import Users
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import DatasetRole, GlobalRole, Permission
 from app.services.auth import get_current_user
-from app.services.permissions import require, require_global
+from app.services.permissions import ensure_permission, require, require_global
 
 
 @event.listens_for(Engine, "connect")
@@ -116,6 +116,12 @@ def ctx(tmp_path):
                      user: AuthenticatedUser = Depends(require(Permission.IMAGE_UPLOAD))):
         return {"ok": True}
 
+    @app.get("/d/{dataset_id}/iquana")
+    async def export_iquana(dataset_id: int,
+                            user: AuthenticatedUser = Depends(require(Permission.EXPORT_ANNOTATIONS))):
+        ensure_permission(user, dataset_id, Permission.EXPORT_IMAGES)
+        return {"ok": True}
+
     current = {"username": "owner"}
 
     def _session_override():
@@ -179,6 +185,18 @@ def test_admin_passes_without_membership(ctx):
     client = as_user("root")
     assert client.get(f"/d/{ids['dataset']}/export").status_code == 200
     assert client.delete(f"/m/{ids['mask']}").status_code == 200
+
+
+def test_iquana_export_permission_requires_both_annotations_and_images(ctx):
+    as_user, ids = ctx
+    # owner has both EXPORT_ANNOTATIONS and EXPORT_IMAGES
+    assert as_user("owner").get(f"/d/{ids['dataset']}/iquana").status_code == 200
+    # ann does not have export permissions
+    assert as_user("ann").get(f"/d/{ids['dataset']}/iquana").status_code == 403
+    # stranger has no access
+    assert as_user("stranger").get(f"/d/{ids['dataset']}/iquana").status_code == 403
+    # root (admin) has access
+    assert as_user("root").get(f"/d/{ids['dataset']}/iquana").status_code == 200
 
 
 def test_global_permission_gate(ctx):

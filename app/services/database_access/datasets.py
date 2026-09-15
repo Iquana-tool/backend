@@ -15,6 +15,7 @@ from iquana_toolbox.schemas.database.image import Image
 from iquana_toolbox.schemas.database.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
 from sqlalchemy import and_, case, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from app.database.contour_metrics import ContourMetrics
@@ -59,7 +60,15 @@ async def create_new_dataset(
         created_by=owner_username,
     )
     db.add(new_dataset)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return {
+            "success": False,
+            "message": f"Dataset with name '{name.strip()}' already exists.",
+            "error": "Duplicate dataset name",
+        }
     db.refresh(new_dataset)
 
     # Ownership is a membership row so it can later be transferred; `created_by`

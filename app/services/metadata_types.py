@@ -26,6 +26,7 @@ They need binning first, which is not built yet — see :data:`GROUPABLE_TYPES`.
 """
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timezone
 from enum import StrEnum
 
@@ -153,9 +154,12 @@ def coerce(
             # Kept as written rather than reformatted: "12.0" and "12" are the
             # same number to every filter (they share a value_num) and the user's
             # spelling is the one that belongs in an export.
-            return value, float(value)
+            val_num = float(value)
         except ValueError:
             raise InvalidMetadataError(f"'{value}' is not a number.")
+        if not math.isfinite(val_num):
+            raise InvalidMetadataError(f"'{value}' is not a finite number.")
+        return value, val_num
 
     if value_type is MetadataValueType.DATE:
         parsed = _parse_datetime(value)

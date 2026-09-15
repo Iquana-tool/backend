@@ -79,10 +79,10 @@ def test_save_image_to_disk_returns_native_dimensions(tmp_path):
 
     assert (width, height) == (native_w, native_h), "native dimensions leaked the thumbnail size"
     assert mode == "RGB"
-    # The full-res file keeps native dims; the thumbnail is capped at 200px.
+    # The full-res file keeps native dims; the thumbnail is capped at 500px.
     assert native_image_size(file_path) == (native_w, native_h)
     tw, th = native_image_size(thumb_path)
-    assert max(tw, th) == 200
+    assert max(tw, th) == 500
 
 
 def test_coco_export_uses_native_dimensions_and_bboxes_fit(tmp_path):

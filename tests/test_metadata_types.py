@@ -141,6 +141,12 @@ def test_a_non_number_is_rejected_rather_than_dropped():
         coerce("shallow", MetadataValueType.NUMBER)
 
 
+def test_non_finite_number_is_rejected():
+    for non_finite in ("NaN", "nan", "Inf", "-Inf", "Infinity", "-Infinity"):
+        with pytest.raises(InvalidMetadataError, match="not a finite number"):
+            coerce(non_finite, MetadataValueType.NUMBER)
+
+
 def test_dates_canonicalise_to_iso_and_stay_date_only():
     canonical, numeric = coerce("01.05.2024", MetadataValueType.DATE)
     assert canonical == "2024-05-01"

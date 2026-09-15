@@ -44,3 +44,28 @@ class InvalidCalibrationError(IQuanaBaseError):
     instead, so the existing /scale routes' 422 mapping is unchanged.
     """
     pass
+
+
+class DatasetArchiveExportError(IQuanaBaseError):
+    """Raised when an IQUANA dataset archive export fails due to invalid or unrepresentable dataset state."""
+    pass
+
+
+class DatasetArchiveImportError(IQuanaBaseError):
+    """Base class for all errors occurring during IQUANA dataset archive import."""
+    pass
+
+
+class DatasetArchiveValidationError(DatasetArchiveImportError):
+    """Raised when an IQUANA dataset archive fails schema, reference, or integrity validation (HTTP 422)."""
+    pass
+
+
+class DatasetArchiveNameConflictError(DatasetArchiveImportError):
+    """Raised when an imported dataset name conflicts with an existing dataset (HTTP 409)."""
+    pass
+
+
+class DatasetArchiveSizeLimitError(DatasetArchiveImportError):
+    """Raised when an archive exceeds compressed or uncompressed size/member limits (HTTP 413)."""
+    pass

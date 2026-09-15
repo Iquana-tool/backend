@@ -5,21 +5,36 @@ from logging import getLogger
 from typing import Literal
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from iquana_toolbox.quantification import list_metrics
 from iquana_toolbox.schemas.database.quantification_profile import QuantificationProfile
 from iquana_toolbox.schemas.user import User
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette import status
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from app.database import get_session
 from app.database.images import Images
-from app.exceptions import InvalidMetadataError
+from app.exceptions import (
+    DatasetArchiveExportError,
+    DatasetArchiveImportError,
+    DatasetArchiveNameConflictError,
+    DatasetArchiveSizeLimitError,
+    DatasetArchiveValidationError,
+    DatasetNotFoundError,
+    InvalidMetadataError,
+)
 from app.schemas.auth_user import AuthenticatedUser
+from app.schemas.dataset_archive import DatasetArchiveImportResponse
 from app.schemas.permissions import DatasetRole, Permission
 from app.services.auth import get_current_user
+from app.services.dataset_archive import (
+    create_iquana_dataset_archive,
+    import_iquana_dataset_archive,
+)
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import image_metadata as metadata_db
 from app.services.database_access import labels as labels_db
@@ -1173,3 +1188,132 @@ async def get_coco_dataset(
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
     )
+
+
+def _chunk_file_iterator(file_obj, chunk_size: int = 64 * 1024):
+    """Yield chunks from an open file and ensure the file is closed on finish or disconnect."""
+    try:
+        while True:
+            chunk = file_obj.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        file_obj.close()
+
+
+@router.get(
+    "/{dataset_id}/iquana",
+    summary="Export dataset in IQUANA archive format (v1)",
+    description=(
+        "Download the dataset in IQUANA format as an ordinary ZIP archive. "
+        "Contains annotations.json, raw images, and optionally config.json. "
+        "Requires EXPORT_ANNOTATIONS and EXPORT_IMAGES permissions."
+    ),
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {"application/zip": {}},
+            "description": "The dataset packaged as an IQUANA ZIP archive.",
+        },
+        400: {"description": "Dataset export failed due to invalid or unrepresentable dataset state."},
+        403: {"description": "Insufficient permissions to export annotations or images."},
+        404: {"description": "Dataset not found."},
+    },
+)
+async def export_iquana_dataset(
+    dataset_id: int,
+    include_config: bool = False,
+    db: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(require(Permission.EXPORT_ANNOTATIONS)),
+) -> StreamingResponse:
+    """Export a dataset as a self-contained IQUANA archive ZIP."""
+    ensure_permission(user, dataset_id, Permission.EXPORT_IMAGES)
+
+    try:
+        file_obj, filename = await run_in_threadpool(
+            create_iquana_dataset_archive,
+            db=db,
+            dataset_id=dataset_id,
+            include_config=include_config,
+        )
+    except DatasetNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except DatasetArchiveExportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return StreamingResponse(
+        _chunk_file_iterator(file_obj),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        background=BackgroundTask(file_obj.close),
+    )
+
+
+@router.post(
+    "/import/iquana",
+    summary="Import dataset from IQUANA archive format (v1)",
+    description=(
+        "Import an IQUANA ZIP archive as a new dataset. "
+        "Requires global DATASET_CREATE permission."
+    ),
+    response_model=DatasetArchiveImportResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        201: {
+            "description": "Dataset imported successfully.",
+            "model": DatasetArchiveImportResponse,
+        },
+        400: {"description": "Malformed request or corrupted archive."},
+        403: {"description": "Insufficient global permission to create datasets."},
+        409: {"description": "Dataset name conflict with an existing dataset or directory."},
+        413: {"description": "Archive exceeds compressed or uncompressed size limits."},
+        422: {"description": "Validation error in archive format, schema, geometry, or references."},
+    },
+)
+async def import_iquana_dataset(
+    file: UploadFile = File(..., description="The IQUANA ZIP archive to import."),
+    name: str | None = Form(None, description="Optional override name for the imported dataset."),
+    db: Session = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_global(Permission.DATASET_CREATE)),
+) -> DatasetArchiveImportResponse:
+    """Import a new dataset from a self-contained IQUANA archive ZIP."""
+    try:
+        result = await run_in_threadpool(
+            import_iquana_dataset_archive,
+            db=db,
+            archive_file=file.file,
+            override_name=name,
+            importer_username=current_user.username,
+            content_length=file.size,
+        )
+    except DatasetArchiveNameConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except DatasetArchiveSizeLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=str(exc),
+        ) from exc
+    except DatasetArchiveValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except DatasetArchiveImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    finally:
+        await file.close()
+
+    return DatasetArchiveImportResponse(**result)
