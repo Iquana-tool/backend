@@ -1,7 +1,7 @@
 # IQUANA Dataset Archive Format Specification (v1)
 
-> **Normative Specification for Issue #94**  
-> **Status:** Draft / Phase 1 technical implementation complete; maintainer contract gate pending  
+> **Normative Specification for Issue #94**
+> **Status:** Draft / Phase 1 technical implementation complete; maintainer contract gate pending
 > **Target Format:** Ordinary `.zip` archive containing native images, a COCO-oriented `annotations.json`, and an optional `config.json`.
 
 ---
