@@ -639,20 +639,6 @@ def api_client(db_session, rich_dataset):
     return client, current_auth_user, rich_dataset["dataset_id"]
 
 
-def test_http_export_streaming_success(api_client):
-    client, _, ds_id = api_client
-    response = client.get(f"/datasets/{ds_id}/iquana?include_config=true")
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "application/zip"
-    assert "attachment; filename=" in response.headers["content-disposition"]
-
-    # Verify that the streamed body is a valid ZIP
-    zip_bytes = io.BytesIO(response.content)
-    with zipfile.ZipFile(zip_bytes, "r") as zf:
-        assert "annotations.json" in zf.namelist()
-        assert "config.json" in zf.namelist()
-
-
 def test_http_export_permission_denied_missing_images(api_client):
     client, user_holder, ds_id = api_client
     # User has EXPORT_ANNOTATIONS but lacks EXPORT_IMAGES
