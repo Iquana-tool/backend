@@ -1695,12 +1695,22 @@ def test_export_dataset_with_empty_added_by_and_null_created_at(api_client, rich
         file_obj.close()
 
 
-def test_export_dataset_omits_degenerate_contours(api_client, rich_dataset):
-    """Verify archive export omits degenerate contours (< 3 coordinates) without failing."""
+def test_export_dataset_fails_on_degenerate_persisted_contours(api_client, rich_dataset):
+    """Verify archive export fails with DatasetArchiveExportError when persisted contours are degenerate (< 3 coordinates)."""
     client, _, ds_id = api_client
     db = client.app.dependency_overrides[get_session]()
 
-    # Create a degenerate contour with only 2 points
+    # Baseline export count before adding degenerate contour
+    baseline_file, _ = create_iquana_dataset_archive(db, ds_id, include_config=False)
+    try:
+        with zipfile.ZipFile(baseline_file, "r") as zf:
+            baseline_ann_data = json.loads(zf.read("annotations.json"))
+            baseline_ann_count = len(baseline_ann_data["annotations"])
+            baseline_temp_omitted = baseline_ann_data["iquana"]["counts"]["temporary_contours_omitted"]
+    finally:
+        baseline_file.close()
+
+    # Create a degenerate persisted contour with only 2 points
     c_existing = db.query(Contours).first()
     assert c_existing is not None
     degenerate_contour = Contours(
@@ -1715,8 +1725,16 @@ def test_export_dataset_omits_degenerate_contours(api_client, rich_dataset):
         diameter=0.0,
         x=[10.0, 20.0],  # only 2 points
         y=[10.0, 20.0],
+        temporary=False,
     )
     db.add(degenerate_contour)
+    db.commit()
+
+    with pytest.raises(DatasetArchiveExportError, match="is degenerate .* minimum is 3"):
+        create_iquana_dataset_archive(db, ds_id, include_config=True)
+
+    # If the degenerate contour is temporary, export succeeds and omits it
+    degenerate_contour.temporary = True
     db.commit()
 
     file_obj, filename = create_iquana_dataset_archive(db, ds_id, include_config=True)
@@ -1724,7 +1742,241 @@ def test_export_dataset_omits_degenerate_contours(api_client, rich_dataset):
         assert filename.endswith(".zip")
         with zipfile.ZipFile(file_obj, "r") as zf:
             ann_data = json.loads(zf.read("annotations.json"))
-            exported_ids = [a["id"] for a in ann_data["annotations"]]
-            assert degenerate_contour.id not in exported_ids
+            assert len(ann_data["annotations"]) == baseline_ann_count
+            assert ann_data["iquana"]["counts"]["temporary_contours_omitted"] == baseline_temp_omitted + 1
     finally:
         file_obj.close()
+
+
+def test_export_dataset_omits_degenerate_child_under_temporary_parent(api_client, rich_dataset):
+    """Verify degenerate persisted child under a temporary parent is omitted with the subtree without failing export."""
+    client, _, ds_id = api_client
+    db = client.app.dependency_overrides[get_session]()
+
+    # Baseline export counts before adding temporary subtree
+    baseline_file, _ = create_iquana_dataset_archive(db, ds_id, include_config=False)
+    try:
+        with zipfile.ZipFile(baseline_file, "r") as zf:
+            baseline_ann_data = json.loads(zf.read("annotations.json"))
+            baseline_ann_count = len(baseline_ann_data["annotations"])
+            baseline_temp_omitted = baseline_ann_data["iquana"]["counts"]["temporary_contours_omitted"]
+    finally:
+        baseline_file.close()
+
+    c_existing = db.query(Contours).first()
+    assert c_existing is not None
+
+    # Temporary parent contour (valid geometry)
+    temp_parent = Contours(
+        mask_id=c_existing.mask_id,
+        label_id=c_existing.label_id,
+        added_by="SAM2",
+        author_username=c_existing.author_username,
+        confidence_score=0.9,
+        area=100.0,
+        perimeter=40.0,
+        circularity=0.8,
+        diameter=10.0,
+        x=[10.0, 20.0, 30.0],
+        y=[10.0, 20.0, 30.0],
+        temporary=True,
+    )
+    db.add(temp_parent)
+    db.flush()
+
+    # Degenerate child contour (< 3 coordinates) with temporary=False
+    degenerate_child = Contours(
+        mask_id=c_existing.mask_id,
+        parent_id=temp_parent.id,
+        label_id=c_existing.label_id,
+        added_by="User",
+        author_username=c_existing.author_username,
+        confidence_score=1.0,
+        area=0.0,
+        perimeter=0.0,
+        circularity=0.0,
+        diameter=0.0,
+        x=[10.0, 20.0],  # only 2 points
+        y=[10.0, 20.0],
+        temporary=False,  # persisted flag, but belongs to temporary parent
+    )
+    db.add(degenerate_child)
+    db.commit()
+
+    file_obj, filename = create_iquana_dataset_archive(db, ds_id, include_config=True)
+    try:
+        assert filename.endswith(".zip")
+        with zipfile.ZipFile(file_obj, "r") as zf:
+            ann_data = json.loads(zf.read("annotations.json"))
+            assert len(ann_data["annotations"]) == baseline_ann_count
+            assert (
+                ann_data["iquana"]["counts"]["temporary_contours_omitted"]
+                == baseline_temp_omitted + 2
+            )
+    finally:
+        file_obj.close()
+
+
+
+def test_create_iquana_archive_annotations_only(db_session, rich_dataset):
+    """Verify create_iquana_dataset_archive with include_images=False produces valid annotations-only archive."""
+    file_obj, filename = create_iquana_dataset_archive(
+        db_session,
+        rich_dataset["dataset_id"],
+        include_config=True,
+        include_images=False,
+    )
+    try:
+        assert filename.endswith("_annotations.zip")
+        with zipfile.ZipFile(file_obj, "r") as zf:
+            member_names = zf.namelist()
+            assert "annotations.json" in member_names
+            assert "config.json" in member_names
+            assert not any(name.startswith("images/") for name in member_names)
+
+            ann_bytes = zf.read("annotations.json")
+            doc = IquanaAnnotationsDocument.model_validate_json(ann_bytes)
+            assert doc.iquana.content_mode == "annotations_only"
+            assert doc.iquana.files == []
+
+            for img in doc.images:
+                assert img.iquana.archive_path is None
+                assert img.iquana.sha256 is None
+                assert img.iquana.size_bytes is None
+                assert img.width > 0
+                assert img.height > 0
+                assert img.iquana.color_mode == "RGB"
+
+            assert len(doc.annotations) > 0
+            assert len(doc.categories) > 0
+            assert len(doc.iquana.masks) > 0
+    finally:
+        file_obj.close()
+
+
+def test_import_iquana_archive_annotations_only_rejected(db_session, rich_dataset, tmp_path):
+    """Verify import_iquana_dataset_archive rejects annotations-only archive with 422 before any DB writes."""
+    file_obj, _ = create_iquana_dataset_archive(
+        db_session,
+        rich_dataset["dataset_id"],
+        include_config=False,
+        include_images=False,
+    )
+    initial_dataset_count = db_session.query(Datasets).count()
+    initial_image_count = db_session.query(Images).count()
+
+    try:
+        file_obj.seek(0)
+        with pytest.raises(DatasetArchiveValidationError) as exc_info:
+            import_iquana_dataset_archive(
+                db=db_session,
+                archive_file=file_obj,
+                override_name="Import Attempt",
+                importer_username="alice",
+            )
+        assert "annotations_only" in str(exc_info.value)
+        assert "Images + annotations" in str(exc_info.value)
+
+        # Ensure no side effects in database
+        assert db_session.query(Datasets).count() == initial_dataset_count
+        assert db_session.query(Images).count() == initial_image_count
+    finally:
+        file_obj.close()
+
+
+def test_import_iquana_archive_annotations_only_with_unexpected_images_rejected(db_session, rich_dataset):
+    """Verify importer rejects archive if content_mode is annotations_only but images/ member is present."""
+    file_obj, _ = create_iquana_dataset_archive(
+        db_session,
+        rich_dataset["dataset_id"],
+        include_config=False,
+        include_images=False,
+    )
+    # Tamper with the zip by adding an unexpected images/ file
+    tampered_buf = io.BytesIO()
+    with zipfile.ZipFile(file_obj, "r") as src_zf:
+        with zipfile.ZipFile(tampered_buf, "w") as dst_zf:
+            for item in src_zf.infolist():
+                dst_zf.writestr(item, src_zf.read(item.filename))
+            dst_zf.writestr("images/unexpected.png", b"fake_bytes")
+    file_obj.close()
+
+    tampered_buf.seek(0)
+    with pytest.raises(DatasetArchiveValidationError) as exc_info:
+        import_iquana_dataset_archive(
+            db=db_session,
+            archive_file=tampered_buf,
+            override_name="Tampered Import",
+            importer_username="alice",
+        )
+    assert "unexpected 'images/' member entries" in str(exc_info.value)
+
+
+def test_http_export_annotations_only(api_client, rich_dataset):
+    """HTTP GET /datasets/{id}/iquana?include_images=false streams annotations-only archive."""
+    client, _, ds_id = api_client
+    response = client.get(f"/datasets/{ds_id}/iquana?include_images=false")
+    assert response.status_code == 200
+    disposition = response.headers.get("content-disposition", "")
+    assert "_annotations.zip" in disposition
+
+    zip_bytes = io.BytesIO(response.content)
+    with zipfile.ZipFile(zip_bytes, "r") as zf:
+        members = zf.namelist()
+        assert "annotations.json" in members
+        assert not any(m.startswith("images/") for m in members)
+        ann_doc = json.loads(zf.read("annotations.json"))
+        assert ann_doc["iquana"]["content_mode"] == "annotations_only"
+        assert ann_doc["iquana"]["files"] == []
+
+
+def test_http_import_annotations_only_returns_422(api_client, rich_dataset):
+    """HTTP POST /datasets/import/iquana with annotations_only archive returns 422 with explanation."""
+    client, _, ds_id = api_client
+    db = client.app.dependency_overrides[get_session]()
+    file_obj, _ = create_iquana_dataset_archive(db, ds_id, include_config=False, include_images=False)
+    try:
+        file_obj.seek(0)
+        response = client.post(
+            "/datasets/import/iquana",
+            files={"file": ("dataset_annotations.zip", file_obj, "application/zip")},
+            data={"name": "Annotations Only Import"},
+        )
+        assert response.status_code == 422
+        detail = response.json().get("detail", "")
+        assert "annotations_only" in detail
+        assert "Images + annotations" in detail
+    finally:
+        file_obj.close()
+
+
+def test_export_dataset_fails_when_control_json_exceeds_limit(api_client, rich_dataset, monkeypatch):
+    """Verify export fails with DatasetArchiveExportError when annotations.json or config.json exceeds size limit."""
+    client, _, ds_id = api_client
+    db = client.app.dependency_overrides[get_session]()
+
+    # 1. annotations.json exceeds limit
+    monkeypatch.setattr("app.services.dataset_archive.DATASET_ARCHIVE_MAX_CONTROL_JSON_BYTES", 50)
+    with pytest.raises(DatasetArchiveExportError, match="'annotations.json' size .* exceeds limit of 50 bytes"):
+        create_iquana_dataset_archive(db, ds_id, include_config=False)
+
+    # Measure annotations.json size
+    monkeypatch.setattr("app.services.dataset_archive.DATASET_ARCHIVE_MAX_CONTROL_JSON_BYTES", 64 * 1024 * 1024)
+    file_obj, _ = create_iquana_dataset_archive(db, ds_id, include_config=True)
+    try:
+        with zipfile.ZipFile(file_obj, "r") as zf:
+            ann_size = len(zf.read("annotations.json"))
+            cfg_size = len(zf.read("config.json"))
+    finally:
+        file_obj.close()
+
+    # 2. config.json exceeds limit
+    monkeypatch.setattr("app.services.dataset_archive.DATASET_ARCHIVE_MAX_CONTROL_JSON_BYTES", ann_size + 100)
+    original_cfg_dump = IquanaConfigDocument.model_dump
+    monkeypatch.setattr(
+        IquanaConfigDocument,
+        "model_dump",
+        lambda self, **kwargs: {**original_cfg_dump(self, **kwargs), "extra_padding": "x" * (ann_size + 200)},
+    )
+    with pytest.raises(DatasetArchiveExportError, match="'config.json' size .* exceeds limit of " + str(ann_size + 100) + " bytes"):
+        create_iquana_dataset_archive(db, ds_id, include_config=True)

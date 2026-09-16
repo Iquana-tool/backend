@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ from iquana_toolbox.schemas.database.image import Image
 from iquana_toolbox.schemas.database.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
 from sqlalchemy import and_, case, func
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from app.database.contour_metrics import ContourMetrics
@@ -25,12 +26,12 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
+from app.exceptions import InvalidLabelFilterError
 from app.services import image_status
 from app.services.database_access.image_metadata import get_metadata_for_dataset
 from app.services.database_access.labels import get_hierarchical_label_name
 from app.services.database_access.members import ensure_owner_membership
 from config import DATASETS_DIR
-from PIL import Image as PILImage
 
 logger = getLogger(__name__)
 
@@ -1338,12 +1339,85 @@ def build_coco_payload(
     return coco_payload, set(images_by_id.keys())
 
 
+def parse_and_validate_label_ids(
+    db: Session,
+    dataset_id: int,
+    label_ids_raw: str | None,
+) -> list[int] | None:
+    """Parses and validates a comma-separated string of label IDs for COCO export.
+
+    Args:
+        db: Active database session.
+        dataset_id: Target dataset ID.
+        label_ids_raw: Raw query parameter string (e.g. "1,2,3"), or None.
+
+    Returns:
+        list[int] of validated label IDs, or None if omitted (all labels).
+
+    Raises:
+        InvalidLabelFilterError: If the parameter is empty, contains non-integer / non-positive values,
+            contains duplicates, or references labels not belonging to dataset_id.
+    """
+    if label_ids_raw is None:
+        return None
+
+    stripped = label_ids_raw.strip()
+    if not stripped:
+        raise InvalidLabelFilterError("label_ids query parameter cannot be empty.")
+
+    tokens = stripped.split(",")
+    parsed_ids: list[int] = []
+    seen: set[int] = set()
+
+    for token in tokens:
+        token_str = token.strip()
+        if not token_str:
+            raise InvalidLabelFilterError("label_ids cannot contain empty elements.")
+        if not re.fullmatch(r"^[0-9]+$", token_str):
+            raise InvalidLabelFilterError(f"Invalid label ID '{token_str}'. Label IDs must be positive integers.")
+        if len(token_str) > 19:
+            raise InvalidLabelFilterError(f"Invalid label ID '{token_str}'. Label IDs must be positive integers.")
+        try:
+            val = int(token_str)
+        except ValueError:
+            raise InvalidLabelFilterError(f"Invalid label ID '{token_str}'. Label IDs must be positive integers.")
+        if val <= 0 or val > 9_223_372_036_854_775_807:
+            raise InvalidLabelFilterError(f"Invalid label ID '{token_str}'. Label IDs must be positive integers.")
+        if val in seen:
+            raise InvalidLabelFilterError(f"Duplicate label ID '{val}' specified in label_ids.")
+        seen.add(val)
+        parsed_ids.append(val)
+
+    if not parsed_ids:
+        raise InvalidLabelFilterError("label_ids cannot be empty.")
+
+    # Verify ownership with one dataset-label query
+    try:
+        dataset_labels = (
+            db.query(Labels.id)
+            .filter(Labels.dataset_id == dataset_id, Labels.id.in_(parsed_ids))
+            .all()
+        )
+    except (OverflowError, DataError) as exc:
+        raise InvalidLabelFilterError("Invalid label ID(s) specified.") from exc
+    found_ids = {row.id for row in dataset_labels}
+    missing_ids = seen - found_ids
+    if missing_ids:
+        missing_str = ", ".join(str(i) for i in sorted(missing_ids))
+        raise InvalidLabelFilterError(
+            f"Label ID(s) [{missing_str}] do not belong to dataset {dataset_id}."
+        )
+
+    return parsed_ids
+
+
 async def export_dataset_contours_to_coco(
         dataset_id: int,
         db: Session,
         exclude_not_fully_annotated: bool = True,
         exclude_unreviewed: bool = True,
         contour_selection: ContourSelection = "all",
+        label_ids: list[int] | None = None,
         output_file_path: str | None = None,
         write_to_disk: bool = True,
         log_to_mlflow: bool = False,
@@ -1371,6 +1445,8 @@ async def export_dataset_contours_to_coco(
         query = query.filter(Masks.fully_annotated == True)
     if exclude_unreviewed:
         query = query.filter(Contours.reviewed_by.any())
+    if label_ids is not None:
+        query = query.filter(Contours.label_id.in_(label_ids))
 
     rows = _filter_contour_rows(query.all(), contour_selection)
     coco_payload, image_ids = build_coco_payload(

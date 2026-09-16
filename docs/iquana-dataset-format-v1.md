@@ -24,6 +24,11 @@ The IQUANA dataset archive format enables lossless, self-contained migration and
 
 ## 2. Archive Layout
 
+An IQUANA dataset archive has two distinct content modes (`full` and `annotations_only`), with `config.json` inclusion independent of content mode:
+
+### Full Archive (`content_mode: "full"`)
+Downloaded as `<dataset-name>.zip`. Fully portable, self-contained, and standalone-importable.
+
 ```text
 <dataset-name>.zip
 ├── annotations.json                          # Required: COCO core + IQUANA extensions
@@ -32,9 +37,19 @@ The IQUANA dataset archive format enables lossless, self-contained migration and
     └── <archive-image-id>/<sanitized-name>   # Raw images isolated by archive ID
 ```
 
+### Annotations-Only Archive (`content_mode: "annotations_only"`)
+Downloaded as `<dataset-name>_annotations.zip`. Contains the full annotation, calibration, mask, and metadata snapshot without image pixels. **Not importable as a standalone dataset**.
+
+```text
+<dataset-name>_annotations.zip
+├── annotations.json                          # Required: COCO core + IQUANA extensions
+└── config.json                               # Optional: Portable dataset settings (default: excluded)
+```
+
 - Every member path uses forward slashes `/`.
 - Member paths starting with `/`, drive letters, containing `..`, or pointing to symlinks or device nodes are strictly invalid and rejected.
-- Each image is nested inside its ZIP-local positive integer image ID folder (`images/<archive-image-id>/<sanitized-basename>`) to prevent collisions between images with identical filenames.
+- In `full` mode, each image is nested inside its ZIP-local positive integer image ID folder (`images/<archive-image-id>/<sanitized-basename>`) to prevent collisions between images with identical filenames.
+- In `annotations_only` mode, no `images/` directory or member entries are present.
 
 ---
 
@@ -59,6 +74,7 @@ Top-level structure:
   "annotations": [ ... ],
   "categories": [ ... ],
   "iquana": {
+    "content_mode": "full",
     "dataset": { ... },
     "actors": [ ... ],
     "metadata_keys": [ ... ],
@@ -80,6 +96,7 @@ Top-level structure:
 | `info.version` | `string` | Document version (default `"1.0"`). |
 | `info.year` | `integer` | Creation calendar year. |
 | `info.date_created` | `string` | ISO-8601 UTC timestamp. |
+| `iquana.content_mode` | `string` | `"full"` (default) or `"annotations_only"`. |
 
 ### 3.2. `images[]`
 
@@ -118,9 +135,12 @@ Standard COCO image fields with nested IQUANA extension:
 }
 ```
 
-- `width` and `height` must reflect authoritative native full-resolution dimensions read from the image header.
-- `metadata` stores raw string key-value pairs matching keys declared in `iquana.metadata_keys`.
-- `calibrations` records parameter payloads, calibration kind, and provenance.
+- `width` and `height` must reflect authoritative native full-resolution dimensions read from the image header (required in both modes).
+- `iquana.color_mode`: Authoritative pixel channel configuration (`"RGB"`, `"L"`, etc., required in both modes).
+- `metadata`: Stores raw string key-value pairs matching keys declared in `iquana.metadata_keys`.
+- `calibrations`: Records parameter payloads, calibration kind, and provenance.
+- In `full` mode: `archive_path`, `sha256`, and `size_bytes` must be non-null and match the member in `images/` and the entry in `iquana.files`.
+- In `annotations_only` mode: `archive_path`, `sha256`, and `size_bytes` must be `null`, and `iquana.files` must be empty `[]`.
 
 ### 3.3. `categories[]`
 
@@ -264,11 +284,11 @@ a curator warning.
 
 ---
 
-## 5. Portability Matrix
+## 5. Portability Matrix & Permissions
 
 | State Category | Included in Archive? | Import Behavior |
 |---|---|---|
-| **Original image bytes** | Yes (`images/` directory) | Byte-for-byte SHA-256 match; preserved intact. |
+| **Original image bytes** | Yes in `full` mode (`images/`); omitted in `annotations_only` | Byte-for-byte SHA-256 match in full mode. In `annotations_only` mode, the archive **cannot be imported as a new dataset** and is rejected with HTTP 422 before staging or DB writes. |
 | **Image metadata & calibrations** | Yes (`annotations.json`) | Re-linked to newly allocated image rows. |
 | **Dataset metadata keys** | Yes (`annotations.json`) | Inserted before values; coerced with type validation. |
 | **Label hierarchy** | Yes (`categories[]`) | New IDs allocated; parent relationships remapped. |
@@ -281,6 +301,12 @@ a curator warning.
 | **Temporary contours** | Excluded | Dropped with count recorded in `counts`. |
 | **Thumbnails & embeddings** | Excluded | Rebuilt fresh locally in staging before commit. |
 | **Batch jobs & undo queues** | Excluded | Operational state discarded. |
+
+### Permissions
+
+- **Exporting Full Archive (`include_images=true`):** Requires both `EXPORT_ANNOTATIONS` and `EXPORT_IMAGES` permissions on the dataset.
+- **Exporting Annotations-Only Archive (`include_images=false`):** Requires `EXPORT_ANNOTATIONS` permission only on the dataset.
+- **Importing Archive:** Requires global `DATASET_CREATE` permission. Rejects `annotations_only` archives with HTTP 422.
 
 ---
 
@@ -316,9 +342,11 @@ a curator warning.
 
 ## 7. Golden Fixture Hashes (v1)
 
-Deterministic test fixtures generated with fixed `ZipInfo` timestamps (`2026-09-14 00:00:00`) and standard permissions:
+Deterministic test fixtures generated with fixed `ZipInfo` timestamps (`2026-09-14 00:00:00`) and standard permissions across all four content-mode and configuration combinations:
 
-| Fixture Variant | Members | Deterministic SHA-256 Digest |
-|---|---|---|
-| **With `config.json`** | `annotations.json`, `config.json`, `images/1/coral_survey.png`, `images/2/coral_survey.png` | `f29176398fd1d85c9e122f2fe6ed87726864e1664e91f89014b9edc52c9c0f3f` |
-| **Without `config.json`** | `annotations.json`, `images/1/coral_survey.png`, `images/2/coral_survey.png` | `7f649288cc3790f27b7a67445498fa93c4424801a550bfee731ef7a88aa1f89f` |
+| Fixture Variant | Content Mode | Configuration | Members | Deterministic SHA-256 Digest |
+|---|---|---|---|---|
+| **Full with Config** | `full` | `config.json` | `annotations.json`, `config.json`, `images/1/coral_survey.png`, `images/2/coral_survey.png` | `2273e51fe8c345977b3d003503ba2fcc9e8e61da3c4c6ccbf044204bf2b2beee` |
+| **Full without Config** | `full` | None | `annotations.json`, `images/1/coral_survey.png`, `images/2/coral_survey.png` | `164bb7a989c6582c9249377cad04bc193b140ed313a3c2572bf5aff88b9d3e93` |
+| **Annotations Only with Config** | `annotations_only` | `config.json` | `annotations.json`, `config.json` | `2fcad19d5d30f22a1bde1b44130a2884d41d14cf5517eaebe2cc9420816fffa3` |
+| **Annotations Only without Config** | `annotations_only` | None | `annotations.json` | `0374f6d7fc1b599a529f67f0fd68ffb6f2b58e1fab096007c44838302feba1c8` |

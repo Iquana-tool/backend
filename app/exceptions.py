@@ -46,6 +46,11 @@ class InvalidCalibrationError(IQuanaBaseError):
     pass
 
 
+class InvalidLabelFilterError(IQuanaBaseError):
+    """Raised when COCO export label filtering parameters are invalid, empty, duplicate, or reference foreign labels (HTTP 422)."""
+    pass
+
+
 class DatasetArchiveExportError(IQuanaBaseError):
     """Raised when an IQUANA dataset archive export fails due to invalid or unrepresentable dataset state."""
     pass

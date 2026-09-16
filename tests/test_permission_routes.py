@@ -53,6 +53,7 @@ def ctx(tmp_path):
     session.add_all([
         Users(username="owner", hashed_password="x"),
         Users(username="ann", hashed_password="x"),
+        Users(username="anno_only", hashed_password="x"),
         Users(username="stranger", hashed_password="x"),
         Users(username="root", hashed_password="x", global_role=GlobalRole.ADMIN.value),
         Users(username="guest", hashed_password="x", global_role=GlobalRole.GUEST.value),
@@ -67,6 +68,10 @@ def ctx(tmp_path):
     session.add(DatasetMembers(dataset_id=ds.id, username="ann",
                                role=DatasetRole.ANNOTATOR.value,
                                extra_permissions=[], denied_permissions=[]))
+    session.add(DatasetMembers(dataset_id=ds.id, username="anno_only",
+                               role=DatasetRole.VIEWER.value,
+                               extra_permissions=[Permission.EXPORT_ANNOTATIONS.value],
+                               denied_permissions=[]))
     img = Images(dataset_id=ds.id, file_name="a.png", file_path="/tmp/a.png",
                  thumbnail_file_path="/tmp/t.png", width=10, height=10, color_mode="RGB")
     session.add(img)
@@ -118,8 +123,10 @@ def ctx(tmp_path):
 
     @app.get("/d/{dataset_id}/iquana")
     async def export_iquana(dataset_id: int,
+                            include_images: bool = True,
                             user: AuthenticatedUser = Depends(require(Permission.EXPORT_ANNOTATIONS))):
-        ensure_permission(user, dataset_id, Permission.EXPORT_IMAGES)
+        if include_images:
+            ensure_permission(user, dataset_id, Permission.EXPORT_IMAGES)
         return {"ok": True}
 
     current = {"username": "owner"}
@@ -191,8 +198,14 @@ def test_iquana_export_permission_requires_both_annotations_and_images(ctx):
     as_user, ids = ctx
     # owner has both EXPORT_ANNOTATIONS and EXPORT_IMAGES
     assert as_user("owner").get(f"/d/{ids['dataset']}/iquana").status_code == 200
+    assert as_user("owner").get(f"/d/{ids['dataset']}/iquana?include_images=false").status_code == 200
     # ann does not have export permissions
     assert as_user("ann").get(f"/d/{ids['dataset']}/iquana").status_code == 403
+    assert as_user("ann").get(f"/d/{ids['dataset']}/iquana?include_images=false").status_code == 403
+    # anno_only has EXPORT_ANNOTATIONS but lacks EXPORT_IMAGES
+    assert as_user("anno_only").get(f"/d/{ids['dataset']}/iquana?include_images=false").status_code == 200
+    assert as_user("anno_only").get(f"/d/{ids['dataset']}/iquana?include_images=true").status_code == 403
+    assert as_user("anno_only").get(f"/d/{ids['dataset']}/iquana").status_code == 403
     # stranger has no access
     assert as_user("stranger").get(f"/d/{ids['dataset']}/iquana").status_code == 403
     # root (admin) has access

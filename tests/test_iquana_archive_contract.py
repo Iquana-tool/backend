@@ -38,6 +38,7 @@ from app.schemas.dataset_archive import (
     ArchiveCategory,
     ArchiveCategoryExtension,
     ArchiveCalibrationDefault,
+    ArchiveContentMode,
     ArchiveGeometry,
     ArchiveImage,
     ArchiveImageCalibration,
@@ -80,7 +81,7 @@ def _create_synthetic_png_image(width: int, height: int, color: tuple[int, int, 
 # Golden Fixture Builder (Data & Deterministic Real ZIP Materialization)
 # ---------------------------------------------------------------------------
 
-def build_golden_fixture_data() -> tuple[dict[str, Any], dict[str, Any], bytes, bytes]:
+def build_golden_fixture_data(content_mode: str = "full") -> tuple[dict[str, Any], dict[str, Any], bytes, bytes]:
     """Builds the normative rich golden dataset fixture with real decodable images.
 
     Returns:
@@ -269,6 +270,7 @@ def build_golden_fixture_data() -> tuple[dict[str, Any], dict[str, Any], bytes, 
             },
         ],
         "iquana": {
+            "content_mode": content_mode,
             "dataset": {
                 "name": "Coral Reef Study 2026",
                 "description": "Benthic cover study transects",
@@ -428,6 +430,13 @@ def build_golden_fixture_data() -> tuple[dict[str, Any], dict[str, Any], bytes, 
         ],
     }
 
+    if content_mode == "annotations_only":
+        for img in annotations_doc["images"]:
+            img["iquana"]["archive_path"] = None
+            img["iquana"]["sha256"] = None
+            img["iquana"]["size_bytes"] = None
+        annotations_doc["iquana"]["files"] = []
+
     return annotations_doc, config_doc, img1_bytes, img2_bytes
 
 
@@ -439,9 +448,9 @@ def _add_deterministic_zip_member(zf: zipfile.ZipFile, arcname: str, data: bytes
     zf.writestr(zinfo, data)
 
 
-def build_golden_archive_zip(include_config: bool = True) -> bytes:
+def build_golden_archive_zip(include_config: bool = True, content_mode: str = "full") -> bytes:
     """Builds a real, deterministic ZIP archive fixture in memory."""
-    ann_dict, config_dict, img1_bytes, img2_bytes = build_golden_fixture_data()
+    ann_dict, config_dict, img1_bytes, img2_bytes = build_golden_fixture_data(content_mode=content_mode)
 
     # Validate models prior to serialization
     IquanaAnnotationsDocument.model_validate(ann_dict)
@@ -459,9 +468,10 @@ def build_golden_archive_zip(include_config: bool = True) -> bytes:
             cfg_json = json.dumps(config_dict, indent=2, sort_keys=True).encode("utf-8")
             _add_deterministic_zip_member(zf, "config.json", cfg_json)
 
-        # 3. Images under images/<id>/<basename>
-        _add_deterministic_zip_member(zf, "images/1/coral_survey.png", img1_bytes)
-        _add_deterministic_zip_member(zf, "images/2/coral_survey.png", img2_bytes)
+        # 3. Images under images/<id>/<basename> (full mode only)
+        if content_mode == "full":
+            _add_deterministic_zip_member(zf, "images/1/coral_survey.png", img1_bytes)
+            _add_deterministic_zip_member(zf, "images/2/coral_survey.png", img2_bytes)
 
     return buf.getvalue()
 
@@ -470,10 +480,11 @@ def build_golden_archive_zip(include_config: bool = True) -> bytes:
 # Test Cases: Actual ZIP Fixture & Integrity & Deterministic Hash
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("content_mode", ["full", "annotations_only"])
 @pytest.mark.parametrize("include_config", [True, False])
-def test_golden_archive_zip_structure_and_integrity(include_config: bool):
+def test_golden_archive_zip_structure_and_integrity(content_mode: str, include_config: bool):
     """Verifies actual member layout, optional config absence, and image decodability from ZIP."""
-    zip_bytes = build_golden_archive_zip(include_config=include_config)
+    zip_bytes = build_golden_archive_zip(include_config=include_config, content_mode=content_mode)
     assert len(zip_bytes) > 0
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
@@ -488,10 +499,6 @@ def test_golden_archive_zip_structure_and_integrity(include_config: bool):
         else:
             assert "config.json" not in namelist
 
-        # Check duplicate basenames are cleanly isolated
-        assert "images/1/coral_survey.png" in namelist
-        assert "images/2/coral_survey.png" in namelist
-
         # Parse and validate annotations.json directly from the ZIP
         ann_bytes = zf.read("annotations.json")
         ann_data = json.loads(ann_bytes.decode("utf-8"))
@@ -502,41 +509,77 @@ def test_golden_archive_zip_structure_and_integrity(include_config: bool):
             cfg_data = json.loads(cfg_bytes.decode("utf-8"))
             IquanaConfigDocument.model_validate(cfg_data)
 
-        # Verify images extracted from ZIP: bytes, SHA-256, and header dimensions
-        for file_entry in ann_doc.iquana.files:
-            member_bytes = zf.read(file_entry.path)
-            # 1. SHA-256 matches manifest and image record
-            assert _compute_sha256(member_bytes) == file_entry.sha256
-            assert len(member_bytes) == file_entry.size_bytes
+        if content_mode == "full":
+            assert ann_doc.iquana.content_mode == "full"
+            # Check duplicate basenames are cleanly isolated
+            assert "images/1/coral_survey.png" in namelist
+            assert "images/2/coral_survey.png" in namelist
 
-            # 2. Decodable image with Pillow verifying native dimensions and color mode
-            with PILImage.open(io.BytesIO(member_bytes)) as pil_img:
-                assert pil_img.width == file_entry.width
-                assert pil_img.height == file_entry.height
-                assert pil_img.mode == file_entry.color_mode
+            # Verify images extracted from ZIP: bytes, SHA-256, and header dimensions
+            for file_entry in ann_doc.iquana.files:
+                member_bytes = zf.read(file_entry.path)
+                # 1. SHA-256 matches manifest and image record
+                assert _compute_sha256(member_bytes) == file_entry.sha256
+                assert len(member_bytes) == file_entry.size_bytes
+
+                # 2. Decodable image with Pillow verifying native dimensions and color mode
+                with PILImage.open(io.BytesIO(member_bytes)) as pil_img:
+                    assert pil_img.width == file_entry.width
+                    assert pil_img.height == file_entry.height
+                    assert pil_img.mode == file_entry.color_mode
+        else:
+            assert ann_doc.iquana.content_mode == "annotations_only"
+            assert not any(name.startswith("images/") for name in namelist)
+            assert len(ann_doc.iquana.files) == 0
+            for img in ann_doc.images:
+                assert img.iquana.archive_path is None
+                assert img.iquana.sha256 is None
+                assert img.iquana.size_bytes is None
 
 
-GOLDEN_ZIP_WITH_CONFIG_SHA256 = "f29176398fd1d85c9e122f2fe6ed87726864e1664e91f89014b9edc52c9c0f3f"
-GOLDEN_ZIP_WITHOUT_CONFIG_SHA256 = "7f649288cc3790f27b7a67445498fa93c4424801a550bfee731ef7a88aa1f89f"
+GOLDEN_ZIP_FULL_WITH_CONFIG_SHA256 = "2273e51fe8c345977b3d003503ba2fcc9e8e61da3c4c6ccbf044204bf2b2beee"
+GOLDEN_ZIP_FULL_WITHOUT_CONFIG_SHA256 = "164bb7a989c6582c9249377cad04bc193b140ed313a3c2572bf5aff88b9d3e93"
+GOLDEN_ZIP_ANNOTATIONS_ONLY_WITH_CONFIG_SHA256 = "2fcad19d5d30f22a1bde1b44130a2884d41d14cf5517eaebe2cc9420816fffa3"
+GOLDEN_ZIP_ANNOTATIONS_ONLY_WITHOUT_CONFIG_SHA256 = "0374f6d7fc1b599a529f67f0fd68ffb6f2b58e1fab096007c44838302feba1c8"
 
 
 def test_golden_zip_hashes_are_deterministic():
-    """ZipInfo fixed timestamps ensure builds generated at different times produce identical SHA-256 hashes."""
-    zip1 = build_golden_archive_zip(include_config=True)
+    """ZipInfo fixed timestamps ensure builds generated at different times produce identical SHA-256 hashes across all 4 modes."""
+    # 1. Full with config
+    zip1 = build_golden_archive_zip(include_config=True, content_mode="full")
     time.sleep(0.01)
-    zip2 = build_golden_archive_zip(include_config=True)
-    hash_with_cfg1 = _compute_sha256(zip1)
-    hash_with_cfg2 = _compute_sha256(zip2)
-    assert hash_with_cfg1 == hash_with_cfg2
-    assert hash_with_cfg1 == GOLDEN_ZIP_WITH_CONFIG_SHA256
+    zip2 = build_golden_archive_zip(include_config=True, content_mode="full")
+    hash_full_cfg1 = _compute_sha256(zip1)
+    hash_full_cfg2 = _compute_sha256(zip2)
+    assert hash_full_cfg1 == hash_full_cfg2
+    assert hash_full_cfg1 == GOLDEN_ZIP_FULL_WITH_CONFIG_SHA256
 
-    zip3 = build_golden_archive_zip(include_config=False)
+    # 2. Full without config
+    zip3 = build_golden_archive_zip(include_config=False, content_mode="full")
     time.sleep(0.01)
-    zip4 = build_golden_archive_zip(include_config=False)
-    hash_without_cfg1 = _compute_sha256(zip3)
-    hash_without_cfg2 = _compute_sha256(zip4)
-    assert hash_without_cfg1 == hash_without_cfg2
-    assert hash_without_cfg1 == GOLDEN_ZIP_WITHOUT_CONFIG_SHA256
+    zip4 = build_golden_archive_zip(include_config=False, content_mode="full")
+    hash_full_nocfg1 = _compute_sha256(zip3)
+    hash_full_nocfg2 = _compute_sha256(zip4)
+    assert hash_full_nocfg1 == hash_full_nocfg2
+    assert hash_full_nocfg1 == GOLDEN_ZIP_FULL_WITHOUT_CONFIG_SHA256
+
+    # 3. Annotations only with config
+    zip5 = build_golden_archive_zip(include_config=True, content_mode="annotations_only")
+    time.sleep(0.01)
+    zip6 = build_golden_archive_zip(include_config=True, content_mode="annotations_only")
+    hash_ann_cfg1 = _compute_sha256(zip5)
+    hash_ann_cfg2 = _compute_sha256(zip6)
+    assert hash_ann_cfg1 == hash_ann_cfg2
+    assert hash_ann_cfg1 == GOLDEN_ZIP_ANNOTATIONS_ONLY_WITH_CONFIG_SHA256
+
+    # 4. Annotations only without config
+    zip7 = build_golden_archive_zip(include_config=False, content_mode="annotations_only")
+    time.sleep(0.01)
+    zip8 = build_golden_archive_zip(include_config=False, content_mode="annotations_only")
+    hash_ann_nocfg1 = _compute_sha256(zip7)
+    hash_ann_nocfg2 = _compute_sha256(zip8)
+    assert hash_ann_nocfg1 == hash_ann_nocfg2
+    assert hash_ann_nocfg1 == GOLDEN_ZIP_ANNOTATIONS_ONLY_WITHOUT_CONFIG_SHA256
 
 
 # ---------------------------------------------------------------------------
@@ -1219,3 +1262,54 @@ def test_config_rejects_query_contour_id_in_inputs():
             model_registry_key="sam2",
             inputs={"conditioning": {"query_contour_id": 42}},
         )
+
+
+def test_content_mode_validation():
+    """Validates cross-document consistency rules for full vs annotations_only modes."""
+    # 1. Invalid content_mode string
+    ann_dict, _, _, _ = build_golden_fixture_data(content_mode="full")
+    bad_mode = copy.deepcopy(ann_dict)
+    bad_mode["iquana"]["content_mode"] = "invalid_mode"
+    with pytest.raises(ValidationError):
+        IquanaAnnotationsDocument.model_validate(bad_mode)
+
+    # 2. full mode with missing asset fields on an image
+    bad_full = copy.deepcopy(ann_dict)
+    bad_full["images"][0]["iquana"]["archive_path"] = None
+    with pytest.raises(ValidationError, match="missing archive_path, sha256, or size_bytes required in 'full' mode"):
+        IquanaAnnotationsDocument.model_validate(bad_full)
+
+    # 3. full mode with missing sha256
+    bad_full_sha = copy.deepcopy(ann_dict)
+    bad_full_sha["images"][0]["iquana"]["sha256"] = None
+    with pytest.raises(ValidationError, match="missing archive_path, sha256, or size_bytes required in 'full' mode"):
+        IquanaAnnotationsDocument.model_validate(bad_full_sha)
+
+    # 4. annotations_only mode with non-empty files manifest
+    ann_dict_ann, _, _, _ = build_golden_fixture_data(content_mode="annotations_only")
+    bad_ann_files = copy.deepcopy(ann_dict_ann)
+    bad_ann_files["iquana"]["files"] = [
+        {
+            "image_id": 1,
+            "path": "images/1/coral_survey.png",
+            "sha256": "a" * 64,
+            "size_bytes": 100,
+            "width": 1920,
+            "height": 1080,
+            "color_mode": "RGB",
+        }
+    ]
+    with pytest.raises(ValidationError, match="File manifest .* must be empty in 'annotations_only' mode"):
+        IquanaAnnotationsDocument.model_validate(bad_ann_files)
+
+    # 5. annotations_only mode with populated asset fields on an image
+    bad_ann_img = copy.deepcopy(ann_dict_ann)
+    bad_ann_img["images"][0]["iquana"]["archive_path"] = "images/1/coral_survey.png"
+    with pytest.raises(ValidationError, match="Asset-only fields must be null in 'annotations_only' mode"):
+        IquanaAnnotationsDocument.model_validate(bad_ann_img)
+
+    # 6. Omission of content_mode defaults to 'full' for backward compatibility
+    omitted_mode = copy.deepcopy(ann_dict)
+    del omitted_mode["iquana"]["content_mode"]
+    doc_omitted = IquanaAnnotationsDocument.model_validate(omitted_mode)
+    assert doc_omitted.iquana.content_mode == "full"

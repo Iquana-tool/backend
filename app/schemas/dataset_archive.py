@@ -232,11 +232,14 @@ class ArchiveImageCalibration(StrictArchiveModel):
         return self
 
 
+ArchiveContentMode = Literal["full", "annotations_only"]
+
+
 class ArchiveImageExtension(StrictArchiveModel):
     """IQUANA non-COCO fields nested under images[].iquana."""
-    archive_path: str = Field(
-        ...,
-        description="Relative path of the image within the archive (images/<id>/<filename>).",
+    archive_path: Optional[str] = Field(
+        default=None,
+        description="Relative path of the image within the archive (images/<id>/<filename>), or None in annotations_only mode.",
     )
     color_mode: str = Field(default="RGB", description="Image color mode (e.g. RGB, RGBA, L).")
     scale_x: float = Field(default=1.0, gt=0, description="Spatial scale along X (unit per pixel).")
@@ -251,8 +254,17 @@ class ArchiveImageExtension(StrictArchiveModel):
         default_factory=list,
         description="List of per-image calibration records.",
     )
-    sha256: str = Field(..., min_length=64, max_length=64, description="SHA-256 hex digest of original image bytes.")
-    size_bytes: int = Field(..., ge=0, description="Original image size in bytes.")
+    sha256: Optional[str] = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        description="SHA-256 hex digest of original image bytes, or None in annotations_only mode.",
+    )
+    size_bytes: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Original image size in bytes, or None in annotations_only mode.",
+    )
 
     @field_validator("calibrations")
     @classmethod
@@ -266,14 +278,18 @@ class ArchiveImageExtension(StrictArchiveModel):
 
     @field_validator("sha256")
     @classmethod
-    def validate_sha256(cls, v: str) -> str:
+    def validate_sha256(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
         if not re.fullmatch(r"^[a-fA-F0-9]{64}$", v):
             raise ValueError("sha256 must be a 64-character hexadecimal string.")
         return v.lower()
 
     @field_validator("archive_path")
     @classmethod
-    def validate_archive_path(cls, v: str) -> str:
+    def validate_archive_path(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
         if not IMAGE_ARCHIVE_PATH_PATTERN.match(v) or ".." in v or v.startswith(("/", "\\")):
             raise ValueError(f"archive_path '{v}' must match 'images/<image-id>/<sanitized-basename>'.")
         return v
@@ -289,12 +305,13 @@ class ArchiveImage(StrictArchiveModel):
 
     @model_validator(mode="after")
     def validate_archive_path_encodes_id(self) -> ArchiveImage:
-        expected_prefix = f"images/{self.id}/"
-        if not self.iquana.archive_path.startswith(expected_prefix):
-            raise ValueError(
-                f"Image {self.id} archive_path '{self.iquana.archive_path}' must encode image id {self.id} "
-                f"(expected prefix '{expected_prefix}')."
-            )
+        if self.iquana.archive_path is not None:
+            expected_prefix = f"images/{self.id}/"
+            if not self.iquana.archive_path.startswith(expected_prefix):
+                raise ValueError(
+                    f"Image {self.id} archive_path '{self.iquana.archive_path}' must encode image id {self.id} "
+                    f"(expected prefix '{expected_prefix}')."
+                )
         return self
 
 
@@ -485,6 +502,10 @@ class ArchiveFileEntry(StrictArchiveModel):
 
 class IquanaDatasetExtension(StrictArchiveModel):
     """Top-level iquana extension object inside annotations.json."""
+    content_mode: ArchiveContentMode = Field(
+        default="full",
+        description="Archive content mode: 'full' (includes images) or 'annotations_only' (metadata and geometries only).",
+    )
     dataset: ArchiveDatasetInfo = Field(..., description="Dataset metadata and source creator.")
     actors: list[ArchiveActorProvenance] = Field(
         default_factory=list,
@@ -681,58 +702,79 @@ class IquanaAnnotationsDocument(StrictArchiveModel):
                         f"annotation {rej_ann.id} mask_id ({rej_ann.iquana.mask_id})."
                     )
 
-        # 7. File manifest: exactly one entry per image with exact agreement
-        manifest_by_image_id: dict[int, ArchiveFileEntry] = {}
-        for f in self.iquana.files:
-            if f.image_id in manifest_by_image_id:
-                raise ValueError(f"Duplicate file manifest entry for image id {f.image_id}.")
-            manifest_by_image_id[f.image_id] = f
+        # 7. File manifest and content mode validation
+        content_mode = self.iquana.content_mode
+        if content_mode == "full":
+            for img in self.images:
+                if img.iquana.archive_path is None or img.iquana.sha256 is None or img.iquana.size_bytes is None:
+                    raise ValueError(
+                        f"Image {img.id} is missing archive_path, sha256, or size_bytes required in 'full' mode."
+                    )
 
-        if set(manifest_by_image_id.keys()) != set(image_by_id.keys()):
-            missing = set(image_by_id.keys()) - set(manifest_by_image_id.keys())
-            extra = set(manifest_by_image_id.keys()) - set(image_by_id.keys())
-            raise ValueError(
-                f"File manifest image IDs do not match images list. Missing: {missing}, extra: {extra}."
-            )
+            manifest_by_image_id: dict[int, ArchiveFileEntry] = {}
+            for f in self.iquana.files:
+                if f.image_id in manifest_by_image_id:
+                    raise ValueError(f"Duplicate file manifest entry for image id {f.image_id}.")
+                manifest_by_image_id[f.image_id] = f
 
-        for img_id, img in image_by_id.items():
-            file_entry = manifest_by_image_id[img_id]
-            expected_prefix = f"images/{img_id}/"
-            if not file_entry.path.startswith(expected_prefix):
+            if set(manifest_by_image_id.keys()) != set(image_by_id.keys()):
+                missing = set(image_by_id.keys()) - set(manifest_by_image_id.keys())
+                extra = set(manifest_by_image_id.keys()) - set(image_by_id.keys())
                 raise ValueError(
-                    f"File manifest path '{file_entry.path}' must encode image id {img_id} "
-                    f"(expected prefix '{expected_prefix}')."
+                    f"File manifest image IDs do not match images list. Missing: {missing}, extra: {extra}."
                 )
-            if file_entry.path != img.iquana.archive_path:
-                raise ValueError(
-                    f"File manifest path '{file_entry.path}' does not match image {img_id} "
-                    f"archive_path '{img.iquana.archive_path}'."
-                )
-            if file_entry.sha256 != img.iquana.sha256:
-                raise ValueError(
-                    f"File manifest sha256 for image {img_id} does not match image record "
-                    f"('{file_entry.sha256}' vs '{img.iquana.sha256}')."
-                )
-            if file_entry.size_bytes != img.iquana.size_bytes:
-                raise ValueError(
-                    f"File manifest size_bytes for image {img_id} does not match image record "
-                    f"({file_entry.size_bytes} vs {img.iquana.size_bytes})."
-                )
-            if file_entry.width != img.width:
-                raise ValueError(
-                    f"File manifest width for image {img_id} does not match image record "
-                    f"({file_entry.width} vs {img.width})."
-                )
-            if file_entry.height != img.height:
-                raise ValueError(
-                    f"File manifest height for image {img_id} does not match image record "
-                    f"({file_entry.height} vs {img.height})."
-                )
-            if file_entry.color_mode != img.iquana.color_mode:
-                raise ValueError(
-                    f"File manifest color_mode for image {img_id} does not match image record "
-                    f"('{file_entry.color_mode}' vs '{img.iquana.color_mode}')."
-                )
+
+            for img_id, img in image_by_id.items():
+                file_entry = manifest_by_image_id[img_id]
+                expected_prefix = f"images/{img_id}/"
+                if not file_entry.path.startswith(expected_prefix):
+                    raise ValueError(
+                        f"File manifest path '{file_entry.path}' must encode image id {img_id} "
+                        f"(expected prefix '{expected_prefix}')."
+                    )
+                if file_entry.path != img.iquana.archive_path:
+                    raise ValueError(
+                        f"File manifest path '{file_entry.path}' does not match image {img_id} "
+                        f"archive_path '{img.iquana.archive_path}'."
+                    )
+                if file_entry.sha256 != img.iquana.sha256:
+                    raise ValueError(
+                        f"File manifest sha256 for image {img_id} does not match image record "
+                        f"('{file_entry.sha256}' vs '{img.iquana.sha256}')."
+                    )
+                if file_entry.size_bytes != img.iquana.size_bytes:
+                    raise ValueError(
+                        f"File manifest size_bytes for image {img_id} does not match image record "
+                        f"({file_entry.size_bytes} vs {img.iquana.size_bytes})."
+                    )
+                if file_entry.width != img.width:
+                    raise ValueError(
+                        f"File manifest width for image {img_id} does not match image record "
+                        f"({file_entry.width} vs {img.width})."
+                    )
+                if file_entry.height != img.height:
+                    raise ValueError(
+                        f"File manifest height for image {img_id} does not match image record "
+                        f"({file_entry.height} vs {img.height})."
+                    )
+                if file_entry.color_mode != img.iquana.color_mode:
+                    raise ValueError(
+                        f"File manifest color_mode for image {img_id} does not match image record "
+                        f"('{file_entry.color_mode}' vs '{img.iquana.color_mode}')."
+                    )
+        elif content_mode == "annotations_only":
+            if self.iquana.files:
+                raise ValueError("File manifest (iquana.files) must be empty in 'annotations_only' mode.")
+            for img in self.images:
+                if (
+                    img.iquana.archive_path is not None
+                    or img.iquana.sha256 is not None
+                    or img.iquana.size_bytes is not None
+                ):
+                    raise ValueError(
+                        f"Image {img.id} has archive_path, sha256, or size_bytes populated. "
+                        f"Asset-only fields must be null in 'annotations_only' mode."
+                    )
 
         # 8. Counts match actual item counts
         counts = self.iquana.counts

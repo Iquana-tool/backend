@@ -78,6 +78,7 @@ from app.schemas.dataset_archive import (
     ArchiveCategory,
     ArchiveCategoryExtension,
     ArchiveConfigDataset,
+    ArchiveContentMode,
     ArchiveCounts,
     ArchiveDatasetInfo,
     ArchiveFileEntry,
@@ -114,12 +115,13 @@ def _sanitize_archive_filename(file_name: str, fallback_id: int) -> str:
     return clean
 
 
-def _sanitize_attachment_filename(dataset_name: str, dataset_id: int) -> str:
+def _sanitize_attachment_filename(dataset_name: str, dataset_id: int, include_images: bool = True) -> str:
     """Derives a safe Content-Disposition attachment filename from the dataset name."""
     clean = re.sub(r"[^a-zA-Z0-9_\-.]", "_", dataset_name.strip()).strip("._")
     if not clean:
         clean = f"dataset_{dataset_id}"
-    return f"{clean}.zip"
+    suffix = "" if include_images else "_annotations"
+    return f"{clean}{suffix}.zip"
 
 
 def _slugify_dataset_name(name: str) -> str:
@@ -335,6 +337,7 @@ def create_iquana_dataset_archive(
     db: Session,
     dataset_id: int,
     include_config: bool = False,
+    include_images: bool = True,
 ) -> tuple[BinaryIO, str]:
     """Creates a complete, verified IQUANA dataset archive (v1) in a temporary file.
 
@@ -342,6 +345,7 @@ def create_iquana_dataset_archive(
         db: Active SQLAlchemy database session.
         dataset_id: Target dataset database ID.
         include_config: Whether to include optional portable dataset configuration (config.json).
+        include_images: Whether to bundle original image binaries (full mode vs. annotations_only mode).
 
     Returns:
         tuple of (open_temporary_file, attachment_filename). The caller is responsible
@@ -512,26 +516,14 @@ def create_iquana_dataset_archive(
                 )
             )
 
-        # Contours: omit temporary and degenerate contours (< 3 coordinates) and their entire descendant subtree
+        # Contours: omit temporary contours and their descendants; fail export if any persisted contour to be exported is degenerate
         children_by_parent_id: dict[int, list[int]] = defaultdict(list)
         for c in contours:
             if c.parent_id is not None:
                 children_by_parent_id[c.parent_id].append(c.id)
 
         excluded_contour_ids: set[int] = set()
-        stack = []
-        for c in contours:
-            is_degenerate = not c.x or not c.y or len(c.x) != len(c.y) or len(c.x) < 3
-            if c.temporary or is_degenerate:
-                stack.append(c.id)
-                if is_degenerate:
-                    logger.warning(
-                        "Omitted degenerate contour %s (coordinate count: %s) from dataset %s export",
-                        c.id,
-                        len(c.x or []),
-                        dataset_id,
-                    )
-
+        stack = [c.id for c in contours if c.temporary]
         while stack:
             cid = stack.pop()
             if cid in excluded_contour_ids:
@@ -540,7 +532,16 @@ def create_iquana_dataset_archive(
             stack.extend(children_by_parent_id.get(cid, []))
 
         temp_contours_count = len(excluded_contour_ids)
+
         valid_contours = [c for c in contours if c.id not in excluded_contour_ids]
+        for c in valid_contours:
+            is_degenerate = not c.x or not c.y or len(c.x) != len(c.y) or len(c.x) < 3
+            if is_degenerate:
+                coord_count = len(c.x or []) if c.x and c.y and len(c.x) == len(c.y) else f"x={len(c.x or [])}, y={len(c.y or [])}"
+                raise DatasetArchiveExportError(
+                    f"Contour {c.id} (mask_id={c.mask_id}) is degenerate ({coord_count} coordinates; minimum is 3) and cannot be exported losslessly."
+                )
+
         contour_id_to_zip_ann_id: dict[int, int] = {
             c.id: idx for idx, c in enumerate(valid_contours, start=1)
         }
@@ -634,31 +635,33 @@ def create_iquana_dataset_archive(
                     ) from exc
 
                 sanitized_name = _sanitize_archive_filename(img.file_name, zip_img_id)
-                archive_path = f"images/{zip_img_id}/{sanitized_name}"
+                archive_path: str | None = f"images/{zip_img_id}/{sanitized_name}" if include_images else None
+                sha256_hex: str | None = None
+                size_bytes: int | None = None
 
-                hasher = hashlib.sha256()
-                size_bytes = 0
-                try:
-                    with open(img.file_path, "rb") as src_f, zf.open(archive_path, "w") as dst_f:
-                        while True:
-                            chunk = src_f.read(64 * 1024)
-                            if not chunk:
-                                break
-                            hasher.update(chunk)
-                            size_bytes += len(chunk)
-                            dst_f.write(chunk)
-                except OSError as exc:
-                    raise DatasetArchiveExportError(
-                        f"Failed to read image file for image ID {img.id} ('{img.file_path}'): {exc}"
-                    ) from exc
-
-                sha256_hex = hasher.hexdigest()
+                if include_images:
+                    hasher = hashlib.sha256()
+                    size_bytes = 0
+                    try:
+                        with open(img.file_path, "rb") as src_f, zf.open(archive_path, "w") as dst_f:
+                            while True:
+                                chunk = src_f.read(64 * 1024)
+                                if not chunk:
+                                    break
+                                hasher.update(chunk)
+                                size_bytes += len(chunk)
+                                dst_f.write(chunk)
+                    except OSError as exc:
+                        raise DatasetArchiveExportError(
+                            f"Failed to read image file for image ID {img.id} ('{img.file_path}'): {exc}"
+                        ) from exc
+                    sha256_hex = hasher.hexdigest()
 
                 info = _ImageInfo(
                     image_id=zip_img_id,
-                    archive_path=archive_path,
-                    sha256=sha256_hex,
-                    size_bytes=size_bytes,
+                    archive_path=archive_path or "",
+                    sha256=sha256_hex or "",
+                    size_bytes=size_bytes or 0,
                     width=actual_w,
                     height=actual_h,
                     color_mode=actual_mode,
@@ -708,17 +711,18 @@ def create_iquana_dataset_archive(
                     )
                 )
 
-                archive_files.append(
-                    ArchiveFileEntry(
-                        image_id=zip_img_id,
-                        path=archive_path,
-                        sha256=sha256_hex,
-                        size_bytes=size_bytes,
-                        width=actual_w,
-                        height=actual_h,
-                        color_mode=actual_mode,
+                if include_images:
+                    archive_files.append(
+                        ArchiveFileEntry(
+                            image_id=zip_img_id,
+                            path=archive_path,
+                            sha256=sha256_hex,
+                            size_bytes=size_bytes,
+                            width=actual_w,
+                            height=actual_h,
+                            color_mode=actual_mode,
+                        )
                     )
-                )
 
             # 6. Build Annotations
             archive_annotations: list[ArchiveAnnotation] = []
@@ -890,7 +894,9 @@ def create_iquana_dataset_archive(
                 url=None,
             )
 
+            content_mode: ArchiveContentMode = "full" if include_images else "annotations_only"
             iquana_extension = IquanaDatasetExtension(
+                content_mode=content_mode,
                 dataset=ArchiveDatasetInfo(
                     name=dataset.name,
                     description=dataset.description,
@@ -1069,11 +1075,21 @@ def create_iquana_dataset_archive(
             # 12. Write control JSON documents to ZipFile
             ann_dict = annotations_document.model_dump(mode="json")
             ann_json = json.dumps(ann_dict, indent=2, sort_keys=True).encode("utf-8")
+            if len(ann_json) > DATASET_ARCHIVE_MAX_CONTROL_JSON_BYTES:
+                raise DatasetArchiveExportError(
+                    f"'annotations.json' size ({len(ann_json)} bytes) exceeds limit of "
+                    f"{DATASET_ARCHIVE_MAX_CONTROL_JSON_BYTES} bytes."
+                )
             zf.writestr("annotations.json", ann_json)
 
             if config_document is not None:
                 cfg_dict = config_document.model_dump(mode="json")
                 cfg_json = json.dumps(cfg_dict, indent=2, sort_keys=True).encode("utf-8")
+                if len(cfg_json) > DATASET_ARCHIVE_MAX_CONTROL_JSON_BYTES:
+                    raise DatasetArchiveExportError(
+                        f"'config.json' size ({len(cfg_json)} bytes) exceeds limit of "
+                        f"{DATASET_ARCHIVE_MAX_CONTROL_JSON_BYTES} bytes."
+                    )
                 zf.writestr("config.json", cfg_json)
 
         tmp_file.seek(0)
@@ -1092,7 +1108,7 @@ def create_iquana_dataset_archive(
         tmp_file.close()
         raise
 
-    attachment_name = _sanitize_attachment_filename(dataset.name, dataset.id)
+    attachment_name = _sanitize_attachment_filename(dataset.name, dataset.id, include_images=include_images)
     return tmp_file, attachment_name
 
 
@@ -1244,6 +1260,16 @@ def import_iquana_dataset_archive(
             annotations_doc = IquanaAnnotationsDocument.model_validate(ann_raw)
         except Exception as exc:
             raise DatasetArchiveValidationError(f"'annotations.json' failed schema validation: {exc}") from exc
+
+        if annotations_doc.iquana.content_mode == "annotations_only":
+            if any(info.filename.startswith("images/") for info in infolist):
+                raise DatasetArchiveValidationError(
+                    "Archive declared 'annotations_only' mode but contains unexpected 'images/' member entries."
+                )
+            raise DatasetArchiveValidationError(
+                "This archive was exported in 'annotations_only' mode and cannot be imported as a standalone dataset. "
+                "Please export using 'Images + annotations' to create an importable dataset archive."
+            )
 
         config_doc: IquanaConfigDocument | None = None
         if cfg_info is not None:

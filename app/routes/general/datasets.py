@@ -25,6 +25,7 @@ from app.exceptions import (
     DatasetArchiveSizeLimitError,
     DatasetArchiveValidationError,
     DatasetNotFoundError,
+    InvalidLabelFilterError,
     InvalidMetadataError,
 )
 from app.schemas.auth_user import AuthenticatedUser
@@ -40,7 +41,11 @@ from app.services.database_access import image_metadata as metadata_db
 from app.services.database_access import labels as labels_db
 from app.services.database_access import members as members_db
 from app.services.database_access import quantification_profiles as profiles_db
-from app.services.database_access.datasets import ContourSelection, export_dataset_contours_to_coco
+from app.services.database_access.datasets import (
+    ContourSelection,
+    export_dataset_contours_to_coco,
+    parse_and_validate_label_ids,
+)
 from app.services.quantification import (
     APPEARANCE_METRIC_KEYS,
     CONTEXTUAL_METRIC_KEYS,
@@ -1050,6 +1055,7 @@ async def get_coco_annotations(
         exclude_not_fully_annotated: bool = True,
         exclude_unreviewed: bool = True,
         contour_selection: ContourSelection = "all",
+        label_ids: str | None = None,
         log_to_mlflow: bool = False,
         mlflow_run_id: str | None = None,
         db: Session = Depends(get_session),
@@ -1068,6 +1074,8 @@ async def get_coco_annotations(
             annotation hierarchy to emit. "all" keeps every contour (parents overlap
             their children), "leaves" keeps only the innermost contours, "top_level"
             keeps only contours without a parent.
+        label_ids (str | None): Optional comma-separated list of positive integer label IDs
+            belonging to this dataset to restrict the exported annotations.
         log_to_mlflow (bool): Whether to log the export to MLflow.
         mlflow_run_id (str | None): The MLflow run ID.
         db (Session, optional): The database session. Defaults to Depends(get_session).
@@ -1082,12 +1090,18 @@ async def get_coco_annotations(
     if not dataset:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
 
+    try:
+        parsed_label_ids = parse_and_validate_label_ids(db, dataset_id, label_ids)
+    except InvalidLabelFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
     result = await export_dataset_contours_to_coco(
         dataset_id,
         db,
         exclude_not_fully_annotated,
         exclude_unreviewed,
         contour_selection=contour_selection,
+        label_ids=parsed_label_ids,
         write_to_disk=False,
         log_to_mlflow=log_to_mlflow,
         mlflow_run_id=mlflow_run_id,
@@ -1109,6 +1123,7 @@ async def get_coco_dataset(
         exclude_not_fully_annotated: bool = True,
         exclude_unreviewed: bool = True,
         contour_selection: ContourSelection = "all",
+        label_ids: str | None = None,
         include_images: bool = True,
         log_to_mlflow: bool = False,
         mlflow_run_id: str | None = None,
@@ -1126,6 +1141,8 @@ async def get_coco_dataset(
             annotation hierarchy to emit. "all" keeps every contour (parents overlap
             their children), "leaves" keeps only the innermost contours, "top_level"
             keeps only contours without a parent.
+        label_ids (str | None): Optional comma-separated list of positive integer label IDs
+            belonging to this dataset to restrict the exported annotations.
         include_images (bool): Whether to include images in the dataset. Bundling the
             raw imagery needs `export.images` on top of `export.annotations`, so
             collaborators can be given the annotations without the pixels.
@@ -1144,6 +1161,11 @@ async def get_coco_dataset(
     if not dataset:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
 
+    try:
+        parsed_label_ids = parse_and_validate_label_ids(db, dataset_id, label_ids)
+    except InvalidLabelFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
     # Export contours to COCO format
     result = await export_dataset_contours_to_coco(
         dataset_id,
@@ -1151,6 +1173,7 @@ async def get_coco_dataset(
         exclude_not_fully_annotated,
         exclude_unreviewed,
         contour_selection=contour_selection,
+        label_ids=parsed_label_ids,
         log_to_mlflow=log_to_mlflow,
         mlflow_run_id=mlflow_run_id,
     )
@@ -1207,8 +1230,8 @@ def _chunk_file_iterator(file_obj, chunk_size: int = 64 * 1024):
     summary="Export dataset in IQUANA archive format (v1)",
     description=(
         "Download the dataset in IQUANA format as an ordinary ZIP archive. "
-        "Contains annotations.json, raw images, and optionally config.json. "
-        "Requires EXPORT_ANNOTATIONS and EXPORT_IMAGES permissions."
+        "Contains annotations.json, raw images (when include_images=true), and optionally config.json. "
+        "Requires EXPORT_ANNOTATIONS, and EXPORT_IMAGES when include_images=true."
     ),
     response_class=StreamingResponse,
     responses={
@@ -1224,11 +1247,13 @@ def _chunk_file_iterator(file_obj, chunk_size: int = 64 * 1024):
 async def export_iquana_dataset(
     dataset_id: int,
     include_config: bool = False,
+    include_images: bool = True,
     db: Session = Depends(get_session),
     user: AuthenticatedUser = Depends(require(Permission.EXPORT_ANNOTATIONS)),
 ) -> StreamingResponse:
     """Export a dataset as a self-contained IQUANA archive ZIP."""
-    ensure_permission(user, dataset_id, Permission.EXPORT_IMAGES)
+    if include_images:
+        ensure_permission(user, dataset_id, Permission.EXPORT_IMAGES)
 
     try:
         file_obj, filename = await run_in_threadpool(
@@ -1236,6 +1261,7 @@ async def export_iquana_dataset(
             db=db,
             dataset_id=dataset_id,
             include_config=include_config,
+            include_images=include_images,
         )
     except DatasetNotFoundError as exc:
         raise HTTPException(
