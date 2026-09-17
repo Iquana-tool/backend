@@ -501,6 +501,7 @@ def create_iquana_dataset_archive(
 
         # Masks: sorted by DB id
         mask_by_id: dict[int, Masks] = {m.id: m for m in masks}
+        image_by_id: dict[int, Images] = {img.id: img for img in images}
         mask_id_to_zip_mask_id: dict[int, int] = {
             m.id: idx for idx, m in enumerate(masks, start=1)
         }
@@ -516,7 +517,7 @@ def create_iquana_dataset_archive(
                 )
             )
 
-        # Contours: omit temporary contours and their descendants; fail export if any persisted contour to be exported is degenerate
+        # Contours: omit temporary or malformed contours and their descendants.
         children_by_parent_id: dict[int, list[int]] = defaultdict(list)
         for c in contours:
             if c.parent_id is not None:
@@ -533,14 +534,42 @@ def create_iquana_dataset_archive(
 
         temp_contours_count = len(excluded_contour_ids)
 
-        valid_contours = [c for c in contours if c.id not in excluded_contour_ids]
-        for c in valid_contours:
-            is_degenerate = not c.x or not c.y or len(c.x) != len(c.y) or len(c.x) < 3
-            if is_degenerate:
-                coord_count = len(c.x or []) if c.x and c.y and len(c.x) == len(c.y) else f"x={len(c.x or [])}, y={len(c.y or [])}"
-                raise DatasetArchiveExportError(
-                    f"Contour {c.id} (mask_id={c.mask_id}) is degenerate ({coord_count} coordinates; minimum is 3) and cannot be exported losslessly."
+        def has_invalid_coordinates(contour: Contours) -> bool:
+            try:
+                if not contour.x or not contour.y or len(contour.x) != len(contour.y) or len(contour.x) < 3:
+                    return True
+                raw_x = [float(value) for value in contour.x]
+                raw_y = [float(value) for value in contour.y]
+                if any(not math.isfinite(value) for value in (*raw_x, *raw_y)):
+                    return True
+                if max(map(abs, raw_x)) <= 1.5 and max(map(abs, raw_y)) <= 1.5:
+                    return False
+                image = image_by_id[mask_by_id[contour.mask_id].image_id]
+                return (
+                    image.width <= 0
+                    or image.height <= 0
+                    or any(abs(value / image.width) > 1.5 for value in raw_x)
+                    or any(abs(value / image.height) > 1.5 for value in raw_y)
                 )
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return True
+
+        invalid_contour_ids: set[int] = set()
+        stack = [
+            c.id
+            for c in contours
+            if c.id not in excluded_contour_ids and has_invalid_coordinates(c)
+        ]
+        while stack:
+            cid = stack.pop()
+            if cid in excluded_contour_ids or cid in invalid_contour_ids:
+                continue
+            invalid_contour_ids.add(cid)
+            stack.extend(children_by_parent_id.get(cid, []))
+
+        excluded_contour_ids.update(invalid_contour_ids)
+        invalid_contours_count = len(invalid_contour_ids)
+        valid_contours = [c for c in contours if c.id not in excluded_contour_ids]
 
         contour_id_to_zip_ann_id: dict[int, int] = {
             c.id: idx for idx, c in enumerate(valid_contours, start=1)
@@ -635,7 +664,7 @@ def create_iquana_dataset_archive(
                     ) from exc
 
                 sanitized_name = _sanitize_archive_filename(img.file_name, zip_img_id)
-                archive_path: str | None = f"images/{zip_img_id}/{sanitized_name}" if include_images else None
+                archive_path: str | None = f"images/{zip_img_id}_{sanitized_name}" if include_images else None
                 sha256_hex: str | None = None
                 size_bytes: int | None = None
 
@@ -881,6 +910,7 @@ def create_iquana_dataset_archive(
                 masks=len(archive_masks),
                 rejections=len(archive_rejections),
                 temporary_contours_omitted=temp_contours_count,
+                invalid_contours_omitted=invalid_contours_count,
             )
 
             # 10. Assemble annotations.json
@@ -1561,6 +1591,10 @@ def import_iquana_dataset_archive(
         if annotations_doc.iquana.counts.temporary_contours_omitted > 0:
             warnings.append(
                 f"Archive omitted {annotations_doc.iquana.counts.temporary_contours_omitted} temporary contour(s) during export."
+            )
+        if annotations_doc.iquana.counts.invalid_contours_omitted > 0:
+            warnings.append(
+                f"Archive omitted {annotations_doc.iquana.counts.invalid_contours_omitted} invalid contour(s) during export."
             )
 
         # 7. Staging and image extraction

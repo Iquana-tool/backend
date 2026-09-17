@@ -31,8 +31,11 @@ from app.services.metadata_types import InvalidMetadataError, MetadataValueType,
 ARCHIVE_FORMAT: Literal["iquana"] = "iquana"
 ARCHIVE_FORMAT_VERSION: Literal[1] = 1
 
-# Path safety regex: images/<archive-image-id>/<sanitized-basename>
-IMAGE_ARCHIVE_PATH_PATTERN = re.compile(r"^images/(?P<image_id>\d+)/(?P<basename>[^/\\\x00]+)$")
+# Path safety regex. V1 readers accept the original nested layout and the newer
+# flat layout; exporters emit the flat form.
+IMAGE_ARCHIVE_PATH_PATTERN = re.compile(
+    r"^images/(?P<image_id>\d+)(?:/|_)(?P<basename>[^/\\\x00]+)$"
+)
 
 # Allowed calibration source literals
 CalibrationSourceLiteral = Literal["manual", "measured", "dataset", "file_metadata"]
@@ -239,7 +242,7 @@ class ArchiveImageExtension(StrictArchiveModel):
     """IQUANA non-COCO fields nested under images[].iquana."""
     archive_path: Optional[str] = Field(
         default=None,
-        description="Relative path of the image within the archive (images/<id>/<filename>), or None in annotations_only mode.",
+        description="Relative path of the image within the archive (images/<id>_<filename>), or None in annotations_only mode.",
     )
     color_mode: str = Field(default="RGB", description="Image color mode (e.g. RGB, RGBA, L).")
     scale_x: float = Field(default=1.0, gt=0, description="Spatial scale along X (unit per pixel).")
@@ -290,8 +293,11 @@ class ArchiveImageExtension(StrictArchiveModel):
     def validate_archive_path(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
-        if not IMAGE_ARCHIVE_PATH_PATTERN.match(v) or ".." in v or v.startswith(("/", "\\")):
-            raise ValueError(f"archive_path '{v}' must match 'images/<image-id>/<sanitized-basename>'.")
+        if not IMAGE_ARCHIVE_PATH_PATTERN.fullmatch(v) or ".." in v or v.startswith(("/", "\\")):
+            raise ValueError(
+                f"archive_path '{v}' must match 'images/<image-id>_<sanitized-basename>' "
+                "or the legacy 'images/<image-id>/<sanitized-basename>'."
+            )
         return v
 
 
@@ -306,11 +312,11 @@ class ArchiveImage(StrictArchiveModel):
     @model_validator(mode="after")
     def validate_archive_path_encodes_id(self) -> ArchiveImage:
         if self.iquana.archive_path is not None:
-            expected_prefix = f"images/{self.id}/"
-            if not self.iquana.archive_path.startswith(expected_prefix):
+            match = IMAGE_ARCHIVE_PATH_PATTERN.fullmatch(self.iquana.archive_path)
+            if match is None or int(match.group("image_id")) != self.id:
                 raise ValueError(
                     f"Image {self.id} archive_path '{self.iquana.archive_path}' must encode image id {self.id} "
-                    f"(expected prefix '{expected_prefix}')."
+                    f"(expected prefix 'images/{self.id}_')."
                 )
         return self
 
@@ -473,12 +479,13 @@ class ArchiveCounts(StrictArchiveModel):
     masks: int = Field(..., ge=0)
     rejections: int = Field(..., ge=0)
     temporary_contours_omitted: int = Field(default=0, ge=0)
+    invalid_contours_omitted: int = Field(default=0, ge=0)
 
 
 class ArchiveFileEntry(StrictArchiveModel):
     """Checksum and dimension manifest entry for an archived image file."""
     image_id: int = Field(..., ge=1, description="Referenced archive image ID.")
-    path: str = Field(..., description="Relative archive path (images/<id>/<filename>).")
+    path: str = Field(..., description="Relative archive path (images/<id>_<filename>).")
     sha256: str = Field(..., min_length=64, max_length=64, description="SHA-256 digest of the image file.")
     size_bytes: int = Field(..., ge=0, description="File size in bytes.")
     width: int = Field(..., gt=0, description="Image width verified from file header.")
@@ -495,8 +502,11 @@ class ArchiveFileEntry(StrictArchiveModel):
     @field_validator("path")
     @classmethod
     def validate_path(cls, v: str) -> str:
-        if not IMAGE_ARCHIVE_PATH_PATTERN.match(v) or ".." in v or v.startswith(("/", "\\")):
-            raise ValueError(f"path '{v}' must match 'images/<image-id>/<sanitized-basename>'.")
+        if not IMAGE_ARCHIVE_PATH_PATTERN.fullmatch(v) or ".." in v or v.startswith(("/", "\\")):
+            raise ValueError(
+                f"path '{v}' must match 'images/<image-id>_<sanitized-basename>' "
+                "or the legacy 'images/<image-id>/<sanitized-basename>'."
+            )
         return v
 
 
@@ -726,11 +736,11 @@ class IquanaAnnotationsDocument(StrictArchiveModel):
 
             for img_id, img in image_by_id.items():
                 file_entry = manifest_by_image_id[img_id]
-                expected_prefix = f"images/{img_id}/"
-                if not file_entry.path.startswith(expected_prefix):
+                match = IMAGE_ARCHIVE_PATH_PATTERN.fullmatch(file_entry.path)
+                if match is None or int(match.group("image_id")) != img_id:
                     raise ValueError(
                         f"File manifest path '{file_entry.path}' must encode image id {img_id} "
-                        f"(expected prefix '{expected_prefix}')."
+                        f"(expected prefix 'images/{img_id}_')."
                     )
                 if file_entry.path != img.iquana.archive_path:
                     raise ValueError(

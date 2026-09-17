@@ -421,12 +421,12 @@ def test_create_iquana_dataset_archive_full_with_config(db_session, rich_dataset
             member_names = sorted(zf.namelist())
             assert "annotations.json" in member_names
             assert "config.json" in member_names
-            assert "images/1/transect_001.png" in member_names
-            assert "images/2/transect_002.png" in member_names
+            assert "images/1_transect_001.png" in member_names
+            assert "images/2_transect_002.png" in member_names
 
             # 1. Byte-for-byte image matching
-            assert zf.read("images/1/transect_001.png") == rich_dataset["img1_bytes"]
-            assert zf.read("images/2/transect_002.png") == rich_dataset["img2_bytes"]
+            assert zf.read("images/1_transect_001.png") == rich_dataset["img1_bytes"]
+            assert zf.read("images/2_transect_002.png") == rich_dataset["img2_bytes"]
 
             # 2. Parse and validate annotations.json
             ann_raw = zf.read("annotations.json").decode("utf-8")
@@ -442,7 +442,7 @@ def test_create_iquana_dataset_archive_full_with_config(db_session, rich_dataset
             img1 = next(im for im in ann_doc.images if im.id == 1)
             assert img1.width == 200
             assert img1.height == 150
-            assert img1.iquana.archive_path == "images/1/transect_001.png"
+            assert img1.iquana.archive_path == "images/1_transect_001.png"
             assert img1.iquana.metadata == {"site": "Reef Alpha", "depth_m": "12.5"}
             assert len(img1.iquana.calibrations) == 1
             assert img1.iquana.calibrations[0].kind == "scale"
@@ -544,7 +544,7 @@ def test_create_iquana_dataset_archive_base_omits_config(db_session, rich_datase
             member_names = zf.namelist()
             assert "annotations.json" in member_names
             assert "config.json" not in member_names
-            assert "images/1/transect_001.png" in member_names
+            assert "images/1_transect_001.png" in member_names
     finally:
         file_obj.close()
 
@@ -752,7 +752,7 @@ def test_export_streams_images_in_chunks(db_session, rich_dataset, monkeypatch):
         # Verify ZIP integrity and SHA256 match
         with zipfile.ZipFile(file_obj, "r") as zf:
             with open(img1_path, "rb") as orig_f:
-                assert zf.read("images/1/transect_001.png") == orig_f.read()
+                assert zf.read("images/1_transect_001.png") == orig_f.read()
     finally:
         file_obj.close()
 
@@ -915,8 +915,8 @@ def test_import_full_archive_roundtrip(db_session, rich_dataset, monkeypatch):
             with zipfile.ZipFile(reexport_obj, "r") as zf:
                 assert "annotations.json" in zf.namelist()
                 assert "config.json" in zf.namelist()
-                assert zf.read("images/1/transect_001.png") == rich_dataset["img1_bytes"]
-                assert zf.read("images/2/transect_002.png") == rich_dataset["img2_bytes"]
+                assert zf.read("images/1_transect_001.png") == rich_dataset["img1_bytes"]
+                assert zf.read("images/2_transect_002.png") == rich_dataset["img2_bytes"]
         finally:
             reexport_obj.close()
     finally:
@@ -1222,7 +1222,7 @@ def test_import_rejects_mismatched_image_checksum(db_session, rich_dataset):
     with zipfile.ZipFile(file_obj, "r") as src_zf, zipfile.ZipFile(corrupted_zip_bytes, "w") as dst_zf:
         for item in src_zf.infolist():
             data = src_zf.read(item.filename)
-            if item.filename == "images/1/transect_001.png":
+            if item.filename == "images/1_transect_001.png":
                 data = b"corrupted_png_header" + data[20:]
             dst_zf.writestr(item, data)
 
@@ -1681,8 +1681,8 @@ def test_export_dataset_with_empty_added_by_and_null_created_at(api_client, rich
         file_obj.close()
 
 
-def test_export_dataset_fails_on_degenerate_persisted_contours(api_client, rich_dataset):
-    """Verify archive export fails with DatasetArchiveExportError when persisted contours are degenerate (< 3 coordinates)."""
+def test_export_dataset_omits_degenerate_persisted_contours(api_client, rich_dataset):
+    """Verify degenerate persisted contours are omitted without blocking export."""
     client, _, ds_id = api_client
     db = client.app.dependency_overrides[get_session]()
 
@@ -1693,6 +1693,7 @@ def test_export_dataset_fails_on_degenerate_persisted_contours(api_client, rich_
             baseline_ann_data = json.loads(zf.read("annotations.json"))
             baseline_ann_count = len(baseline_ann_data["annotations"])
             baseline_temp_omitted = baseline_ann_data["iquana"]["counts"]["temporary_contours_omitted"]
+            baseline_invalid_omitted = baseline_ann_data["iquana"]["counts"]["invalid_contours_omitted"]
     finally:
         baseline_file.close()
 
@@ -1714,10 +1715,34 @@ def test_export_dataset_fails_on_degenerate_persisted_contours(api_client, rich_
         temporary=False,
     )
     db.add(degenerate_contour)
+    db.flush()
+    db.add(
+        Contours(
+            mask_id=c_existing.mask_id,
+            parent_id=degenerate_contour.id,
+            label_id=c_existing.label_id,
+            added_by="User",
+            author_username=c_existing.author_username,
+            confidence_score=1.0,
+            area=1.0,
+            perimeter=4.0,
+            circularity=0.5,
+            diameter=1.0,
+            x=[10.0, 20.0, 15.0],
+            y=[10.0, 10.0, 20.0],
+            temporary=False,
+        )
+    )
     db.commit()
 
-    with pytest.raises(DatasetArchiveExportError, match="is degenerate .* minimum is 3"):
-        create_iquana_dataset_archive(db, ds_id, include_config=True)
+    file_obj, _ = create_iquana_dataset_archive(db, ds_id, include_config=True)
+    try:
+        with zipfile.ZipFile(file_obj, "r") as zf:
+            ann_data = json.loads(zf.read("annotations.json"))
+            assert len(ann_data["annotations"]) == baseline_ann_count
+            assert ann_data["iquana"]["counts"]["invalid_contours_omitted"] == baseline_invalid_omitted + 2
+    finally:
+        file_obj.close()
 
     # If the degenerate contour is temporary, export succeeds and omits it
     degenerate_contour.temporary = True
@@ -1729,7 +1754,8 @@ def test_export_dataset_fails_on_degenerate_persisted_contours(api_client, rich_
         with zipfile.ZipFile(file_obj, "r") as zf:
             ann_data = json.loads(zf.read("annotations.json"))
             assert len(ann_data["annotations"]) == baseline_ann_count
-            assert ann_data["iquana"]["counts"]["temporary_contours_omitted"] == baseline_temp_omitted + 1
+            assert ann_data["iquana"]["counts"]["temporary_contours_omitted"] == baseline_temp_omitted + 2
+            assert ann_data["iquana"]["counts"]["invalid_contours_omitted"] == baseline_invalid_omitted
     finally:
         file_obj.close()
 

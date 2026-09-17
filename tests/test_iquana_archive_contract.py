@@ -112,7 +112,7 @@ def build_golden_fixture_data(content_mode: str = "full") -> tuple[dict[str, Any
                 "width": 1920,
                 "height": 1080,
                 "iquana": {
-                    "archive_path": "images/1/coral_survey.png",
+                    "archive_path": "images/1_coral_survey.png",
                     "color_mode": "RGB",
                     "scale_x": 0.05,
                     "scale_y": 0.05,
@@ -159,11 +159,11 @@ def build_golden_fixture_data(content_mode: str = "full") -> tuple[dict[str, Any
             },
             {
                 "id": 2,
-                "file_name": "coral_survey.png",  # Duplicate basename isolated under images/2/
+                "file_name": "coral_survey.png",  # Duplicate basename isolated by the image-ID prefix
                 "width": 800,
                 "height": 600,
                 "iquana": {
-                    "archive_path": "images/2/coral_survey.png",
+                    "archive_path": "images/2_coral_survey.png",
                     "color_mode": "RGB",
                     "scale_x": 0.1,
                     "scale_y": 0.1,
@@ -350,11 +350,12 @@ def build_golden_fixture_data(content_mode: str = "full") -> tuple[dict[str, Any
                 "masks": 2,
                 "rejections": 2,
                 "temporary_contours_omitted": 1,
+                "invalid_contours_omitted": 0,
             },
             "files": [
                 {
                     "image_id": 1,
-                    "path": "images/1/coral_survey.png",
+                    "path": "images/1_coral_survey.png",
                     "sha256": img1_hash,
                     "size_bytes": len(img1_bytes),
                     "width": 1920,
@@ -363,7 +364,7 @@ def build_golden_fixture_data(content_mode: str = "full") -> tuple[dict[str, Any
                 },
                 {
                     "image_id": 2,
-                    "path": "images/2/coral_survey.png",
+                    "path": "images/2_coral_survey.png",
                     "sha256": img2_hash,
                     "size_bytes": len(img2_bytes),
                     "width": 800,
@@ -468,10 +469,10 @@ def build_golden_archive_zip(include_config: bool = True, content_mode: str = "f
             cfg_json = json.dumps(config_dict, indent=2, sort_keys=True).encode("utf-8")
             _add_deterministic_zip_member(zf, "config.json", cfg_json)
 
-        # 3. Images under images/<id>/<basename> (full mode only)
+        # 3. Images under images/<id>_<basename> (full mode only)
         if content_mode == "full":
-            _add_deterministic_zip_member(zf, "images/1/coral_survey.png", img1_bytes)
-            _add_deterministic_zip_member(zf, "images/2/coral_survey.png", img2_bytes)
+            _add_deterministic_zip_member(zf, "images/1_coral_survey.png", img1_bytes)
+            _add_deterministic_zip_member(zf, "images/2_coral_survey.png", img2_bytes)
 
     return buf.getvalue()
 
@@ -512,8 +513,8 @@ def test_golden_archive_zip_structure_and_integrity(content_mode: str, include_c
         if content_mode == "full":
             assert ann_doc.iquana.content_mode == "full"
             # Check duplicate basenames are cleanly isolated
-            assert "images/1/coral_survey.png" in namelist
-            assert "images/2/coral_survey.png" in namelist
+            assert "images/1_coral_survey.png" in namelist
+            assert "images/2_coral_survey.png" in namelist
 
             # Verify images extracted from ZIP: bytes, SHA-256, and header dimensions
             for file_entry in ann_doc.iquana.files:
@@ -537,10 +538,10 @@ def test_golden_archive_zip_structure_and_integrity(content_mode: str, include_c
                 assert img.iquana.size_bytes is None
 
 
-GOLDEN_ZIP_FULL_WITH_CONFIG_SHA256 = "2273e51fe8c345977b3d003503ba2fcc9e8e61da3c4c6ccbf044204bf2b2beee"
-GOLDEN_ZIP_FULL_WITHOUT_CONFIG_SHA256 = "164bb7a989c6582c9249377cad04bc193b140ed313a3c2572bf5aff88b9d3e93"
-GOLDEN_ZIP_ANNOTATIONS_ONLY_WITH_CONFIG_SHA256 = "2fcad19d5d30f22a1bde1b44130a2884d41d14cf5517eaebe2cc9420816fffa3"
-GOLDEN_ZIP_ANNOTATIONS_ONLY_WITHOUT_CONFIG_SHA256 = "0374f6d7fc1b599a529f67f0fd68ffb6f2b58e1fab096007c44838302feba1c8"
+GOLDEN_ZIP_FULL_WITH_CONFIG_SHA256 = "8826544b295b5d119404a85ddd79881200f8e00a1e55d803eb035be49c3c2686"
+GOLDEN_ZIP_FULL_WITHOUT_CONFIG_SHA256 = "90525c5a98b0c3e555d4741c19e1e9dea493a53996acba70750775b573a2c6d0"
+GOLDEN_ZIP_ANNOTATIONS_ONLY_WITH_CONFIG_SHA256 = "26bccda5782189aeeb608a15cdced3b6a021b087e059ea77505249476674c7db"
+GOLDEN_ZIP_ANNOTATIONS_ONLY_WITHOUT_CONFIG_SHA256 = "9a8749f12d06d3c68f90734c106fdd3475118565e65b00bf31cd89ba15fa36cd"
 
 
 def test_golden_zip_hashes_are_deterministic():
@@ -836,14 +837,27 @@ def test_manifest_mismatched_hash_rejected():
 
 
 def test_image_archive_path_must_encode_image_id():
-    """Image archive_path must encode its image ID (images/<id>/<name>)."""
+    """Image archive_path must encode its image ID (images/<id>_<name>)."""
     ann_dict, _, _, _ = build_golden_fixture_data()
     bad_ann = copy.deepcopy(ann_dict)
     # Image 1 has archive_path claiming image 2
-    bad_ann["images"][0]["iquana"]["archive_path"] = "images/2/coral_survey.png"
+    bad_ann["images"][0]["iquana"]["archive_path"] = "images/2_coral_survey.png"
 
     with pytest.raises(ValidationError, match="must encode image id 1"):
         IquanaAnnotationsDocument.model_validate(bad_ann)
+
+
+def test_legacy_nested_image_paths_remain_valid():
+    """V1 readers keep accepting archives emitted before the flat image layout."""
+    ann_dict, _, _, _ = build_golden_fixture_data()
+    for image in ann_dict["images"]:
+        image_id = image["id"]
+        image["iquana"]["archive_path"] = f"images/{image_id}/{image['file_name']}"
+    for file_entry in ann_dict["iquana"]["files"]:
+        image = next(image for image in ann_dict["images"] if image["id"] == file_entry["image_id"])
+        file_entry["path"] = image["iquana"]["archive_path"]
+
+    IquanaAnnotationsDocument.model_validate(ann_dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1197,7 +1211,7 @@ def test_path_traversal_and_invalid_archive_paths_rejected():
 
     # Path traversal with ..
     bad_path1 = copy.deepcopy(ann_dict)
-    bad_path1["images"][0]["iquana"]["archive_path"] = "images/1/../../etc/passwd"
+    bad_path1["images"][0]["iquana"]["archive_path"] = "images/1_../../etc/passwd"
     with pytest.raises(ValidationError, match="archive_path"):
         IquanaAnnotationsDocument.model_validate(bad_path1)
 
@@ -1291,7 +1305,7 @@ def test_content_mode_validation():
     bad_ann_files["iquana"]["files"] = [
         {
             "image_id": 1,
-            "path": "images/1/coral_survey.png",
+            "path": "images/1_coral_survey.png",
             "sha256": "a" * 64,
             "size_bytes": 100,
             "width": 1920,
@@ -1304,7 +1318,7 @@ def test_content_mode_validation():
 
     # 5. annotations_only mode with populated asset fields on an image
     bad_ann_img = copy.deepcopy(ann_dict_ann)
-    bad_ann_img["images"][0]["iquana"]["archive_path"] = "images/1/coral_survey.png"
+    bad_ann_img["images"][0]["iquana"]["archive_path"] = "images/1_coral_survey.png"
     with pytest.raises(ValidationError, match="Asset-only fields must be null in 'annotations_only' mode"):
         IquanaAnnotationsDocument.model_validate(bad_ann_img)
 
