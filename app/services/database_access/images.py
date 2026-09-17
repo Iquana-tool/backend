@@ -24,7 +24,7 @@ async def save_image_to_disk(
         thumbnail_path: Path
 ) -> tuple[int, int, str]:
     """
-    Save a full-resolution image to ``file_path`` and a downscaled preview (<=200px
+    Save a full-resolution image to ``file_path`` and a downscaled preview (<=500px
     on the longest side, aspect ratio preserved) to ``thumbnail_path``.
 
     Returns the *native* ``(width, height, color_mode)`` of the full-resolution

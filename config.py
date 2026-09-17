@@ -61,3 +61,33 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", 
 LABEL_SPACE_LLM_MODEL = os.environ.get("LABEL_SPACE_LLM_MODEL", "anthropic/claude-opus-4-8")
 LABEL_SPACE_LLM_API_KEY = os.environ.get("LABEL_SPACE_LLM_API_KEY")
 LABEL_SPACE_LLM_API_BASE = os.environ.get("LABEL_SPACE_LLM_API_BASE")  # optional: self-hosted / Azure / Ollama
+
+# --- Dataset ZIP Archive Limits (Issue #94 - Provisional Defaults) ------------
+# Provisional defaults pending representative user-study dataset evidence.
+# The approval gate for production limits remains open.
+#
+# Note on upload exhaustion: HTTP multipart parsers spool incoming request
+# bodies before route handlers run. DATASET_ARCHIVE_MAX_COMPRESSED_BYTES is a
+# secondary application-level check on the staged archive; frontline upload
+# exhaustion protection MUST be configured at the reverse proxy / ASGI layer
+# (e.g. Nginx client_max_body_size).
+# Maximum compressed upload bytes (provisional default: 10 GiB).
+DATASET_ARCHIVE_MAX_COMPRESSED_BYTES = int(
+    os.environ.get("DATASET_ARCHIVE_MAX_COMPRESSED_BYTES", str(10 * 1024 * 1024 * 1024))
+)
+# Maximum total declared uncompressed bytes across all members (provisional default: 20 GiB).
+DATASET_ARCHIVE_MAX_UNCOMPRESSED_BYTES = int(
+    os.environ.get("DATASET_ARCHIVE_MAX_UNCOMPRESSED_BYTES", str(20 * 1024 * 1024 * 1024))
+)
+# Maximum number of entries/members in a dataset ZIP archive (provisional default: 50,000).
+DATASET_ARCHIVE_MAX_MEMBERS = int(
+    os.environ.get("DATASET_ARCHIVE_MAX_MEMBERS", "50000")
+)
+# Maximum uncompressed bytes for annotations.json or config.json (provisional default: 64 MiB).
+DATASET_ARCHIVE_MAX_CONTROL_JSON_BYTES = int(
+    os.environ.get("DATASET_ARCHIVE_MAX_CONTROL_JSON_BYTES", str(64 * 1024 * 1024))
+)
+# Maximum uncompressed size for any individual ZIP member (provisional default: 2 GiB).
+DATASET_ARCHIVE_MAX_MEMBER_BYTES = int(
+    os.environ.get("DATASET_ARCHIVE_MAX_MEMBER_BYTES", str(2 * 1024 * 1024 * 1024))
+)

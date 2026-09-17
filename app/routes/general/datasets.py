@@ -5,27 +5,47 @@ from logging import getLogger
 from typing import Literal
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from iquana_toolbox.quantification import list_metrics
 from iquana_toolbox.schemas.database.quantification_profile import QuantificationProfile
 from iquana_toolbox.schemas.user import User
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette import status
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from app.database import get_session
 from app.database.images import Images
-from app.exceptions import InvalidMetadataError
+from app.exceptions import (
+    DatasetArchiveExportError,
+    DatasetArchiveImportError,
+    DatasetArchiveNameConflictError,
+    DatasetArchiveSizeLimitError,
+    DatasetArchiveValidationError,
+    DatasetNotFoundError,
+    InvalidLabelFilterError,
+    InvalidMetadataError,
+)
 from app.schemas.auth_user import AuthenticatedUser
+from app.schemas.dataset_archive import DatasetArchiveImportResponse
 from app.schemas.permissions import DatasetRole, Permission
 from app.services.auth import get_current_user
+from app.services.dataset_archive import (
+    create_iquana_dataset_archive,
+    import_iquana_dataset_archive,
+)
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import image_metadata as metadata_db
 from app.services.database_access import labels as labels_db
 from app.services.database_access import members as members_db
 from app.services.database_access import quantification_profiles as profiles_db
-from app.services.database_access.datasets import ContourSelection, export_dataset_contours_to_coco
+from app.services.database_access.datasets import (
+    ContourSelection,
+    export_dataset_contours_to_coco,
+    parse_and_validate_label_ids,
+)
 from app.services.quantification import (
     APPEARANCE_METRIC_KEYS,
     CONTEXTUAL_METRIC_KEYS,
@@ -1035,6 +1055,7 @@ async def get_coco_annotations(
         exclude_not_fully_annotated: bool = True,
         exclude_unreviewed: bool = True,
         contour_selection: ContourSelection = "all",
+        label_ids: str | None = None,
         log_to_mlflow: bool = False,
         mlflow_run_id: str | None = None,
         db: Session = Depends(get_session),
@@ -1053,6 +1074,8 @@ async def get_coco_annotations(
             annotation hierarchy to emit. "all" keeps every contour (parents overlap
             their children), "leaves" keeps only the innermost contours, "top_level"
             keeps only contours without a parent.
+        label_ids (str | None): Optional comma-separated list of positive integer label IDs
+            belonging to this dataset to restrict the exported annotations.
         log_to_mlflow (bool): Whether to log the export to MLflow.
         mlflow_run_id (str | None): The MLflow run ID.
         db (Session, optional): The database session. Defaults to Depends(get_session).
@@ -1067,12 +1090,18 @@ async def get_coco_annotations(
     if not dataset:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
 
+    try:
+        parsed_label_ids = parse_and_validate_label_ids(db, dataset_id, label_ids)
+    except InvalidLabelFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
     result = await export_dataset_contours_to_coco(
         dataset_id,
         db,
         exclude_not_fully_annotated,
         exclude_unreviewed,
         contour_selection=contour_selection,
+        label_ids=parsed_label_ids,
         write_to_disk=False,
         log_to_mlflow=log_to_mlflow,
         mlflow_run_id=mlflow_run_id,
@@ -1094,6 +1123,7 @@ async def get_coco_dataset(
         exclude_not_fully_annotated: bool = True,
         exclude_unreviewed: bool = True,
         contour_selection: ContourSelection = "all",
+        label_ids: str | None = None,
         include_images: bool = True,
         log_to_mlflow: bool = False,
         mlflow_run_id: str | None = None,
@@ -1111,6 +1141,8 @@ async def get_coco_dataset(
             annotation hierarchy to emit. "all" keeps every contour (parents overlap
             their children), "leaves" keeps only the innermost contours, "top_level"
             keeps only contours without a parent.
+        label_ids (str | None): Optional comma-separated list of positive integer label IDs
+            belonging to this dataset to restrict the exported annotations.
         include_images (bool): Whether to include images in the dataset. Bundling the
             raw imagery needs `export.images` on top of `export.annotations`, so
             collaborators can be given the annotations without the pixels.
@@ -1129,6 +1161,11 @@ async def get_coco_dataset(
     if not dataset:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
 
+    try:
+        parsed_label_ids = parse_and_validate_label_ids(db, dataset_id, label_ids)
+    except InvalidLabelFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
     # Export contours to COCO format
     result = await export_dataset_contours_to_coco(
         dataset_id,
@@ -1136,6 +1173,7 @@ async def get_coco_dataset(
         exclude_not_fully_annotated,
         exclude_unreviewed,
         contour_selection=contour_selection,
+        label_ids=parsed_label_ids,
         log_to_mlflow=log_to_mlflow,
         mlflow_run_id=mlflow_run_id,
     )
@@ -1173,3 +1211,135 @@ async def get_coco_dataset(
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
     )
+
+
+def _chunk_file_iterator(file_obj, chunk_size: int = 64 * 1024):
+    """Yield chunks from an open file and ensure the file is closed on finish or disconnect."""
+    try:
+        while True:
+            chunk = file_obj.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        file_obj.close()
+
+
+@router.get(
+    "/{dataset_id}/iquana",
+    summary="Export dataset in IQUANA archive format (v1)",
+    description=(
+        "Download the dataset in IQUANA format as an ordinary ZIP archive. "
+        "Contains annotations.json, raw images (when include_images=true), and optionally config.json. "
+        "Requires EXPORT_ANNOTATIONS, and EXPORT_IMAGES when include_images=true."
+    ),
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {"application/zip": {}},
+            "description": "The dataset packaged as an IQUANA ZIP archive.",
+        },
+        400: {"description": "Dataset export failed due to invalid or unrepresentable dataset state."},
+        403: {"description": "Insufficient permissions to export annotations or images."},
+        404: {"description": "Dataset not found."},
+    },
+)
+async def export_iquana_dataset(
+    dataset_id: int,
+    include_config: bool = False,
+    include_images: bool = True,
+    db: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(require(Permission.EXPORT_ANNOTATIONS)),
+) -> StreamingResponse:
+    """Export a dataset as a self-contained IQUANA archive ZIP."""
+    if include_images:
+        ensure_permission(user, dataset_id, Permission.EXPORT_IMAGES)
+
+    try:
+        file_obj, filename = await run_in_threadpool(
+            create_iquana_dataset_archive,
+            db=db,
+            dataset_id=dataset_id,
+            include_config=include_config,
+            include_images=include_images,
+        )
+    except DatasetNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except DatasetArchiveExportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return StreamingResponse(
+        _chunk_file_iterator(file_obj),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        background=BackgroundTask(file_obj.close),
+    )
+
+
+@router.post(
+    "/import/iquana",
+    summary="Import dataset from IQUANA archive format (v1)",
+    description=(
+        "Import an IQUANA ZIP archive as a new dataset. "
+        "Requires global DATASET_CREATE permission."
+    ),
+    response_model=DatasetArchiveImportResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        201: {
+            "description": "Dataset imported successfully.",
+            "model": DatasetArchiveImportResponse,
+        },
+        400: {"description": "Malformed request or corrupted archive."},
+        403: {"description": "Insufficient global permission to create datasets."},
+        409: {"description": "Dataset name conflict with an existing dataset or directory."},
+        413: {"description": "Archive exceeds compressed or uncompressed size limits."},
+        422: {"description": "Validation error in archive format, schema, geometry, or references."},
+    },
+)
+async def import_iquana_dataset(
+    file: UploadFile = File(..., description="The IQUANA ZIP archive to import."),
+    name: str | None = Form(None, description="Optional override name for the imported dataset."),
+    db: Session = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_global(Permission.DATASET_CREATE)),
+) -> DatasetArchiveImportResponse:
+    """Import a new dataset from a self-contained IQUANA archive ZIP."""
+    try:
+        result = await run_in_threadpool(
+            import_iquana_dataset_archive,
+            db=db,
+            archive_file=file.file,
+            override_name=name,
+            importer_username=current_user.username,
+            content_length=file.size,
+        )
+    except DatasetArchiveNameConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except DatasetArchiveSizeLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=str(exc),
+        ) from exc
+    except DatasetArchiveValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except DatasetArchiveImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    finally:
+        await file.close()
+
+    return DatasetArchiveImportResponse(**result)

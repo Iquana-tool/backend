@@ -92,16 +92,17 @@ _ADDED_COLUMNS = [
 ]
 
 
-def _ensure_columns():
+def _ensure_columns(target_engine: Engine | None = None):
     """Add late-arriving nullable columns to already-created tables.
 
     Mirrors ``scripts/migrate_roles.py`` but runs on every boot so a dev database
     stays in step with the models without a manual migration step. Safe on a fresh
     database: ``create_all`` has already made the columns, so every check is a hit.
     """
-    inspector = inspect(engine)
+    db_engine = target_engine or engine
+    inspector = inspect(db_engine)
     existing_tables = set(inspector.get_table_names())
-    with engine.begin() as connection:
+    with db_engine.begin() as connection:
         for table, column, ddl in _ADDED_COLUMNS:
             if table not in existing_tables:
                 continue
@@ -112,11 +113,59 @@ def _ensure_columns():
             connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
 
-def init_db():
+def _ensure_dataset_name_uniqueness(target_engine: Engine | None = None):
+    """Ensure dataset names are unique across existing databases.
+
+    Deduplicates pre-existing identical names (by suffixing duplicates with
+    their id) and creates a unique index so concurrent creations/imports fail
+    fast with IntegrityError rather than corrupting dataset directories or queries.
+    """
+    db_engine = target_engine or engine
+    inspector = inspect(db_engine)
+    existing_tables = set(inspector.get_table_names())
+    if "datasets" not in existing_tables:
+        return
+
+    with db_engine.begin() as connection:
+        rows = connection.execute(text("SELECT id, name FROM datasets ORDER BY id ASC")).fetchall()
+        seen_names = set()
+        for ds_id, ds_name in rows:
+            ds_name = ds_name or ""
+            if ds_name in seen_names:
+                suffix = f" (dup {ds_id})"
+                base = ds_name[: 50 - len(suffix)]
+                new_name = f"{base}{suffix}"
+                counter = 1
+                while new_name in seen_names:
+                    suffix = f" (dup {ds_id}_{counter})"
+                    base = ds_name[: 50 - len(suffix)]
+                    new_name = f"{base}{suffix}"
+                    counter += 1
+
+                logger.warning(
+                    "Deduplicating dataset id=%s: renaming duplicate '%s' to '%s'",
+                    ds_id,
+                    ds_name,
+                    new_name,
+                )
+                connection.execute(
+                    text("UPDATE datasets SET name = :new_name WHERE id = :id"),
+                    {"new_name": new_name, "id": ds_id},
+                )
+                seen_names.add(new_name)
+            else:
+                seen_names.add(ds_name)
+
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_datasets_name ON datasets (name)"))
+
+
+def init_db(target_engine: Engine | None = None):
     logger.debug("\tInitializing database")
     _import_models()
-    database.metadata.create_all(bind=engine)
-    _ensure_columns()
+    db_engine = target_engine or engine
+    database.metadata.create_all(bind=db_engine)
+    _ensure_columns(db_engine)
+    _ensure_dataset_name_uniqueness(db_engine)
 
 
 def get_session():
