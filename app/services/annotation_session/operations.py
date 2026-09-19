@@ -134,6 +134,29 @@ def filter_exemplar_overlaps(
     return kept
 
 
+def parent_region_masks(
+        hierarchy: ContourHierarchy,
+        label_hierarchy: LabelHierarchy,
+        concept_label_id: int | None,
+        height: int,
+        width: int,
+) -> list:
+    """Binary masks of the existing contours of the concept's parent label.
+
+    These are the regions a suggested instance of the concept may live in (e.g. the coral
+    fragments when suggesting polyps). Empty for a root or unknown concept.
+    """
+    if concept_label_id is None or concept_label_id not in label_hierarchy.id_to_label_object:
+        return []
+    parent_label = label_hierarchy.get_parent_by_id_of_child(concept_label_id)
+    if parent_label is None:
+        return []
+    return [
+        contour.to_binary_mask_model(height, width)
+        for contour in hierarchy.label_id_to_contours.get(parent_label.id, [])
+    ]
+
+
 def assign_hierarchy_parents(
         found: list[Contour],
         hierarchy: ContourHierarchy,
@@ -296,6 +319,7 @@ async def run_suggestion_segmentation(
         positive_exemplars: list,
         concept=None,
         negative_exemplars: list | None = None,
+        parent_regions: list | None = None,
         parameters: dict | None = None,
 ) -> SuggestionResult:
     """Run annotation suggestion and parse the discovered contours.
@@ -303,7 +327,8 @@ async def run_suggestion_segmentation(
     Returns the raw discovered contours. Exemplar-overlap filtering
     (``filter_exemplar_overlaps``) and hierarchy placement (``assign_hierarchy_parents``)
     are applied by the caller, which has access to the seed contours and the mask /
-    label hierarchies.
+    label hierarchies. ``parent_regions`` (see ``parent_region_masks``) lets
+    hierarchy-aware models search only inside the concept's parent objects.
     """
     request = InstanceSuggestionRequest(
         image_url=image_url,
@@ -312,6 +337,7 @@ async def run_suggestion_segmentation(
         positive_exemplars=positive_exemplars,
         negative_exemplars=negative_exemplars,
         concept=concept,
+        parent_regions=parent_regions or [],
         parameters=parameters or {},
     )
     response = await service.inference(request)

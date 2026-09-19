@@ -28,6 +28,7 @@ from app.services.ai_services.instance_segmentation import InstanceSegmentationS
 from app.services.ai_services.prompted_segmentation import PromptedSegmentationService
 from app.services.annotation_session.operations import (
     assign_hierarchy_parents,
+    parent_region_masks,
     filter_exemplar_overlaps,
     run_suggestion_segmentation,
     run_instance_segmentation,
@@ -592,6 +593,10 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
     else:
         concept = None
 
+    with get_context_session() as db:
+        hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
+        label_hierarchy = await labels_db.get_label_hierarchy(state.image_db.dataset_id, db)
+
     result = await run_suggestion_segmentation(
         service=state._running_backends[Backends.SUGGESTION_SEGMENTATION.value],
         image_url=state.image_db.file_path,
@@ -599,6 +604,7 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
         user_id=state.user_id,
         positive_exemplars=positive_exemplars,
         concept=concept,
+        parent_regions=parent_region_masks(hierarchy, label_hierarchy, label_id, height, width),
         parameters=parameters,
     )
 
@@ -608,9 +614,6 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
     # Place the suggested instances in the hierarchy: tag them with the concept label and
     # nest each one under the existing contour (of the correct parent label) that contains
     # it. Contours without a valid parent stay at root level.
-    with get_context_session() as db:
-        hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
-        label_hierarchy = await labels_db.get_label_hierarchy(state.image_db.dataset_id, db)
     suggested = assign_hierarchy_parents(suggested, hierarchy, label_hierarchy, label_id)
 
     # One suggestion run is one thing the user did, so it is one undo step however
