@@ -15,6 +15,10 @@ The two contracts worth knowing:
   ordered *before* the kind being calibrated, so a colour patch is read in the
   same tone space the colour gains will later act on. Sampling raw and applying
   corrected is the subtle way this kind of feature goes wrong.
+* **The canvas preview is the pipeline, not a copy of it.** :func:`pixel_lut`
+  answers what the correction does by running a 0-255 ramp through the very same
+  stages, so the client can show corrected pixels without a second implementation
+  of the maths to drift from this one.
 """
 from logging import getLogger
 from typing import Iterable
@@ -38,6 +42,11 @@ DEFAULT_SAMPLE_RADIUS = 8
 
 #: Ceiling on the sample radius, so a request cannot turn into a full-image mean.
 MAX_SAMPLE_RADIUS = 256
+
+#: Every 8-bit level once, in all three channels, shaped like a 1x256 image so it
+#: can be fed straight to the pixel pipeline. Running this through the pipeline is
+#: what turns a separable chain of stages into a lookup table (see `pixel_lut`).
+_LUT_RAMP = np.tile(np.arange(256, dtype=np.float32).reshape(1, 256, 1), (1, 1, 3))
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +121,10 @@ def get_calibration_state(db: Session, image_id: int) -> dict:
         "calibrations": entries,
         "calibrated_count": sum(1 for e in entries if e["calibrated"]),
         "total_count": len(entries),
+        # Rides along with the state the workspace already fetches per image, so
+        # the canvas preview costs no extra request and can never be out of step
+        # with the calibrations rendered beside it.
+        "pixel_lut": pixel_lut(db, image_id),
     }
 
 
@@ -447,6 +460,36 @@ def load_calibrated_image_rgb(db: Session, image: Images) -> np.ndarray | None:
     if raw is None:
         return None
     return apply_calibration_pipeline(db, image.id, raw)
+
+
+def pixel_lut(db: Session, image_id: int) -> list[list[int]] | None:
+    """The image's pixel pipeline as a per-channel 0-255 lookup table.
+
+    What the canvas needs to show the user the correction it is already applying
+    behind their back in the metrics. Returning a table rather than a corrected
+    image means the client can toggle the preview instantly, with no second
+    download and no re-encode — and, because the table is produced by running a
+    ramp through :func:`apply_calibration_pipeline`, it is the pipeline rather
+    than a reimplementation of it. Change ``_apply_response`` and the preview
+    changes with it.
+
+    Returns:
+        ``[r, g, b]``, each 256 integers giving the output for input level *i* —
+        or ``None`` when there is nothing to preview, or when a stage is not
+        separable and so cannot honestly be reduced to a curve. A caller that
+        gets ``None`` must show the raw image, not an approximation.
+    """
+    stages = _active_stages(db, image_id)
+    if not stages:
+        return None
+    if any(not kind.separable for kind, _ in stages):
+        # A spatial stage (flat-field, distortion) does different things to
+        # different pixels; one ramp cannot describe it, and pretending otherwise
+        # would put a confidently wrong picture on the canvas.
+        return None
+
+    table = apply_calibration_pipeline(db, image_id, _LUT_RAMP.copy())
+    return [table[0, :, index].tolist() for index in range(3)]
 
 
 # ---------------------------------------------------------------------------
