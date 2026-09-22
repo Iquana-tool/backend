@@ -130,6 +130,14 @@ class CalibrationKind:
     describe: Callable[[dict], str]
     fields: tuple[ParamField, ...] = ()
     apply: Callable[[np.ndarray, dict], np.ndarray] | None = None
+    #: Whether ``apply`` treats every pixel identically and every channel
+    #: independently — i.e. whether the whole transform is described by a
+    #: per-channel lookup table. True for a tone/colour response; a flat-field or
+    #: distortion kind would be False, because where a pixel is changes what
+    #: happens to it. Only a separable pipeline can be previewed client-side
+    #: (see ``service.pixel_lut``), so a kind that lies here would put a wrong
+    #: picture on the canvas.
+    separable: bool = False
     persist: Callable | None = None
     read: Callable | None = None
     dataset_propagatable: bool = True
@@ -151,6 +159,7 @@ class CalibrationKind:
             "permission": str(self.permission),
             "affects_metrics": list(self.stale_metric_keys),
             "transforms_pixels": self.apply is not None,
+            "separable": self.separable,
             "dataset_propagatable": self.dataset_propagatable,
             "fields": [field.as_dict() for field in self.fields],
             "strategies": strategy_list,
@@ -370,6 +379,7 @@ register(CalibrationKind(
     normalize=_normalize_response,
     describe=_describe_response,
     apply=_apply_response,
+    separable=True,
     strategy_keys=("gray_wedge", "two_patch"),
     fields=(
         ParamField("strategy", "Strategy", "enum",

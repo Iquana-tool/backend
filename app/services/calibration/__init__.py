@@ -53,6 +53,7 @@ from app.services.calibration.service import (  # noqa: F401
     get_dataset_defaults,
     kinds_metadata,
     load_calibrated_image_rgb,
+    pixel_lut,
     sample_patch,
     sample_patches,
     set_calibration,

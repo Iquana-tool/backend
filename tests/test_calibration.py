@@ -11,6 +11,8 @@ Four layers, tested where each one's risk actually lives:
   * the pixel pipeline end to end, including the property that makes re-calibration
     safe (a re-sample must not see the calibration it is about to replace).
 """
+import dataclasses
+
 import numpy as np
 import pytest
 from PIL import Image as PILImage
@@ -602,6 +604,59 @@ class TestPipeline:
         assert before != pytest.approx(after)
         # The image is a solid (180, 160, 120), which the calibration neutralises.
         assert max(after) - min(after) <= 1.5
+
+
+class TestPixelLut:
+    """The canvas preview. Its one job is to agree with the pipeline."""
+
+    def test_an_uncalibrated_image_has_no_lut(self, session, image):
+        assert service.pixel_lut(session, image.id) is None
+
+    def test_scale_alone_has_no_lut(self, session, image):
+        """Scale changes what a pixel means, not what it contains."""
+        service.set_calibration(session, image.id, "scale",
+                                {"scale_x": 0.5, "scale_y": 0.5, "unit": "mm"})
+        assert service.pixel_lut(session, image.id) is None
+
+    def test_the_lut_reproduces_the_pipeline_exactly(self, session, image):
+        """What makes the preview trustworthy: looking a pixel up in the table is
+        the same as running it through the correction."""
+        service.set_calibration(session, image.id, "response",
+                                {"strategy": "two_patch", "black_level": 10,
+                                 "white_level": 200, "neutral_rgb": [180, 160, 120],
+                                 "gamma": 1.2})
+        lut = service.pixel_lut(session, image.id)
+        assert lut is not None
+        assert [len(channel) for channel in lut] == [256, 256, 256]
+
+        pixels = np.random.default_rng(0).integers(0, 256, (16, 16, 3), dtype=np.uint8)
+        piped = service.apply_calibration_pipeline(session, image.id, pixels)
+        looked_up = np.stack(
+            [np.array(lut[index], dtype=np.uint8)[pixels[..., index]] for index in range(3)],
+            axis=-1,
+        )
+        assert np.array_equal(piped, looked_up)
+
+    def test_a_non_separable_stage_refuses_to_be_a_curve(self, session, image, monkeypatch):
+        """A spatial correction cannot be previewed as a tone curve, and saying so
+        is the difference between no preview and a confidently wrong one."""
+        service.set_calibration(session, image.id, "response",
+                                {"strategy": "two_patch", "black_level": 10,
+                                 "white_level": 200})
+        # CalibrationKind is frozen, so swap the registry entry for a copy that
+        # claims to be spatial — the shape a flat-field kind would arrive in.
+        monkeypatch.setitem(
+            registry._KINDS, "response",
+            dataclasses.replace(registry.get_kind("response"), separable=False))
+        assert service.pixel_lut(session, image.id) is None
+
+    def test_the_state_carries_the_lut(self, session, image):
+        service.set_calibration(session, image.id, "response",
+                                {"strategy": "two_patch", "black_level": 10,
+                                 "white_level": 200})
+        state = service.get_calibration_state(session, image.id)
+        assert state["pixel_lut"] is not None
+        assert len(state["pixel_lut"][0]) == 256
 
 
 class TestSampling:
