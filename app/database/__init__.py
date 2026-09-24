@@ -75,6 +75,8 @@ def _import_models():
         quantification_profiles,
         rejections,
         scans,
+        activity_log_settings,
+        user_events,
         users,
     )
 

@@ -459,6 +459,7 @@ async def handle_prompted_segmentation(
         model_key=model_identifier,
         prompts=prompts_model,
         user_id=state.user_id,
+        session_id=getattr(state, "activity_session", None),
         previous_mask=previous_mask,
         parent_id=state.focussed_contour_id,
         focus_contour=focus_contour,
@@ -602,6 +603,7 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
         image_url=state.image_db.file_path,
         model_key=client_data.get('model_key'),
         user_id=state.user_id,
+        session_id=getattr(state, "activity_session", None),
         positive_exemplars=positive_exemplars,
         concept=concept,
         parent_regions=parent_region_masks(hierarchy, label_hierarchy, label_id, height, width),
@@ -725,6 +727,7 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         model_registry_key=model_registry_key,
         user_id=state.user_id,
         parameters=parameters,
+        session_id=getattr(state, "activity_session", None),
     )
 
     contours_to_add = result.contours

@@ -1,4 +1,5 @@
 from logging import getLogger
+from time import perf_counter
 
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket
@@ -16,6 +17,7 @@ from app.schemas.permissions import Permission
 from app.services.annotation_session.state import AnnotationSessionState
 from app.services.auth import authenticate_websocket
 from app.services.permissions import dataset_id_for_image
+from app.services.activity_log.emit import emit_api, emit_navigation
 
 router = APIRouter(prefix="/annotation_session", tags=["annotation_session"])
 logger = getLogger(__name__)
@@ -26,7 +28,8 @@ _POLICY_VIOLATION = 1008
 
 @router.websocket("/ws/{user_id}")
 @router.websocket("/ws/{user_id}/{image_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int | None = None):
+async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int | None = None,
+                             activity_session: str | None = None):
     """WebSocket endpoint to handle real-time image annotation sessions. The image annotation session takes multiple
         messages from the user as input to start tasks in the background.
         Client sent messages should be structured as JSON and should look like this: \n
@@ -61,6 +64,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int |
         :param websocket: The WebSocket connection.
         :param user_id: Display identifier from the URL. Ignored for authorisation.
         :param image_id: Unique identifier for the image to be annotated. Optional.
+        :param activity_session: Study session id, so the events this socket emits
+            join the participant's timeline. A handshake cannot carry the
+            ``X-Activity-Session`` header the HTTP routes use, hence the query
+            parameter. Purely for grouping captured events; never used for access.
         :raises WebsocketException: If the WebSocket connection fails.
     """
     await websocket.accept()
@@ -93,11 +100,14 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int |
         mask_id=None,
         user_id=user.username,
         dataset_id=dataset_id,
+        activity_session=activity_session,
     )
     try:
         # Call some functions on startup
         logger.info(f"Calling on startup for user {user_id} and image {image_id}")
         await handlers.startup(websocket, state)
+        emit_navigation("session.ws_open", username=state.user_id, session_id=activity_session,
+                        dataset_id=dataset_id, image_id=image_id)
         while True:
             client_msg = await receive_msg(websocket)
             if client_msg is None:
@@ -118,6 +128,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int |
                 continue
 
             # Here we handle different types of messages based on their "type" field
+            # One `api.request`-equivalent event per message, timed around the whole
+            # dispatch. Doing it here rather than in each handler means every current
+            # and future message type is covered by one call site.
+            handler_started = perf_counter()
+            handler_error: Exception | None = None
             try:
                 match client_msg.type:
                     case ClientMessageType.SWITCH_IMAGE:
@@ -168,6 +183,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int |
             except Exception as e:
                 # A single message failing should not tear down the session. Report the error
                 # back to the client and keep the connection open for further messages.
+                handler_error = e
                 # The traceback is logged, not just the message: swallowing an exception
                 # here used to leave nothing to debug from beyond its str().
                 logger.exception(f"Ran into an error handling message: {e} \n Message: {client_msg}")
@@ -179,9 +195,25 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, image_id: int |
                     data=None
                 ))
                 # Loop continues; the websocket stays connected.
+            finally:
+                payload = {
+                    "type": getattr(client_msg.type, "value", str(client_msg.type)),
+                    "ok": handler_error is None,
+                }
+                if handler_error is not None:
+                    payload["error"] = type(handler_error).__name__
+                emit_api("ws.message",
+                         username=state.user_id,
+                         session_id=activity_session,
+                         dataset_id=state.dataset_id,
+                         image_id=state.image_id,
+                         duration_ms=int((perf_counter() - handler_started) * 1000),
+                         payload=payload)
     except WebSocketDisconnect:
         # Client disconnected normally, just log and exit
         logger.info(f"WebSocket disconnected for user {user.username} and image {state.image_id}")
+        emit_navigation("session.ws_close", username=user.username, session_id=activity_session,
+                        dataset_id=state.dataset_id, image_id=state.image_id)
     except Exception as e:
         # Fallback: anything the per-message handling above did not catch, e.g. a failure
         # in startup() or while sending on a socket the client has already dropped.

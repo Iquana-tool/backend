@@ -91,3 +91,42 @@ DATASET_ARCHIVE_MAX_CONTROL_JSON_BYTES = int(
 DATASET_ARCHIVE_MAX_MEMBER_BYTES = int(
     os.environ.get("DATASET_ARCHIVE_MAX_MEMBER_BYTES", str(2 * 1024 * 1024 * 1024))
 )
+
+def _flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# -- User event capture (user studies) ------------------------------------
+# Two levels of the same gate, not two kinds of data: nothing is recorded unless
+# both are true.
+#
+# USER_EVENTS_ENABLED is the deployment-level lock, read once at boot: when it is
+# false no middleware is installed, the /activity-log routes are not mounted, and
+# nothing -- including an admin account -- can switch capture on at runtime.
+# Changing it needs a restart. The USER_EVENTS_* values below are only *boot
+# defaults*: once the lock is open an admin can change them live over
+# PUT /activity-log/config, and those choices persist in `activity_log_settings`.
+USER_EVENTS_ENABLED = _flag("USER_EVENTS_ENABLED", False)
+# Whether capture is actually running. Separate from the lock so that starting and
+# stopping a study is a routine admin action, while deciding a deployment may
+# collect at all stays with whoever controls the deploy config.
+USER_EVENTS_CAPTURE = _flag("USER_EVENTS_CAPTURE", False)
+#: Individually switchable capture components. See app/services/activity_log/config.py.
+USER_EVENTS_COMPONENTS = os.environ.get(
+    "USER_EVENTS_COMPONENTS", "annotation,ai,navigation,api")
+# Client batching hints, served to the frontend by GET /activity-log/config.
+USER_EVENTS_FLUSH_INTERVAL_MS = int(os.environ.get("USER_EVENTS_FLUSH_INTERVAL_MS", "5000"))
+USER_EVENTS_BATCH_SIZE = int(os.environ.get("USER_EVENTS_BATCH_SIZE", "50"))
+# Hard caps applied server-side regardless of what a client sends.
+USER_EVENTS_MAX_PAYLOAD_BYTES = int(os.environ.get("USER_EVENTS_MAX_PAYLOAD_BYTES", "4096"))
+USER_EVENTS_MAX_BATCH = int(os.environ.get("USER_EVENTS_MAX_BATCH", "200"))
+# How many events the in-process queue holds before it starts dropping. Activity log
+# must never be the reason an annotation request blocks, so the queue is bounded
+# and overflow is counted rather than awaited.
+USER_EVENTS_QUEUE_SIZE = int(os.environ.get("USER_EVENTS_QUEUE_SIZE", "10000"))
+# No pointer, key or wheel input on an open image for this long counts as idle.
+# Boot default only; an admin can change it live over PUT /activity-log/config.
+USER_EVENTS_IDLE_THRESHOLD_MS = int(os.environ.get("USER_EVENTS_IDLE_THRESHOLD_MS", "60000"))
