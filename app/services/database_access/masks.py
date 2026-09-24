@@ -69,7 +69,8 @@ async def delete_mask(
 
 async def mark_mask_as_complete(
         mask_id: int,
-        db: Session
+        db: Session,
+        username: str | None = None,
 ):
     mask = db.query(Masks).filter_by(id=mask_id).first()
     image = mask.image
@@ -92,7 +93,7 @@ async def mark_mask_as_complete(
     )
 
     # Mark the mask as finished
-    mask.fully_annotated = True
+    mask.mark_finished_by(username)
     db.commit()
 
 

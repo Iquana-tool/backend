@@ -105,7 +105,7 @@ async def mark_as_fully_annotated(
     Returns:
         dict: A dictionary containing the success status and mask ID.
     """
-    await masks_db.mark_mask_as_complete(mask_id, db)
+    await masks_db.mark_mask_as_complete(mask_id, db, username=user.username)
     return {
         "success": True,
         "message": "Mask marked as finished successfully.",
