@@ -56,7 +56,7 @@ class AnnotationActions(database):
                      nullable=False, index=True)
     # The stack is per annotator: Ctrl+Z must never revert a colleague's work on
     # a shared image. FK to users so a deleted account takes its history with it.
-    username = Column(String, ForeignKey("users.username", ondelete="CASCADE"),
+    username = Column(String, ForeignKey("users.username", ondelete="CASCADE", onupdate="CASCADE"),
                       nullable=False, index=True)
     # Rows sharing a group are one step in both directions. Set for fan-out
     # operations -- a suggestion run that adds thirty instances should cost one

@@ -30,6 +30,21 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 logger = getLogger(__name__)
 
 
+def _account_summary(account: Users, dataset_count: int) -> dict:
+    """One row of the admin's account list."""
+    return {
+        "username": account.username,
+        "display_name": account.display_name,
+        "email": account.email,
+        "global_role": account.global_role,
+        "is_active": bool(account.is_active),
+        "must_change_password": bool(account.must_change_password),
+        "created_at": account.created_at.isoformat() if account.created_at else None,
+        "last_login_at": account.last_login_at.isoformat() if account.last_login_at else None,
+        "dataset_count": dataset_count,
+    }
+
+
 @router.get("/users")
 async def list_users(
         db: Session = Depends(get_session),
@@ -46,15 +61,7 @@ async def list_users(
 
     return {
         "success": True,
-        "users": [
-            {
-                "username": account.username,
-                "global_role": account.global_role,
-                "is_active": bool(account.is_active),
-                "dataset_count": counts.get(account.username, 0),
-            }
-            for account in users
-        ],
+        "users": [_account_summary(account, counts.get(account.username, 0)) for account in users],
     }
 
 
@@ -70,8 +77,8 @@ async def create_user(
     invite only ever grants access to a single dataset -- so until now there was
     no way to hand somebody an account at all. This is that way.
 
-    The password is chosen by the admin and passed on out of band; the account
-    holder should change it afterwards.
+    The password is chosen by the admin and passed on out of band, so the account
+    is flagged ``must_change_password`` until its holder picks their own.
     """
     if body.global_role is not GlobalRole.MEMBER:
         # Handing out a non-default role at creation is the same act as changing
@@ -83,28 +90,28 @@ async def create_user(
         hashed_password=get_password_hash(body.password),
         global_role=body.global_role.value,
         is_active=body.is_active,
+        display_name=body.display_name,
+        email=body.email,
+        must_change_password=True,
     )
     db.add(account)
     try:
         db.commit()
     except IntegrityError:
-        # Checked by letting the unique constraint answer rather than by a prior
+        # Checked by letting the unique constraints answer rather than by a prior
         # SELECT, which two concurrent creates could both pass.
         db.rollback()
+        taken = ("Email address" if body.email and db.query(Users).filter_by(email=body.email).first()
+                 else "Username")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail="Username already exists.")
+                            detail=f"{taken} already exists.")
 
     logger.info("Account %r created by %r as a platform %s.",
                 account.username, user.username, account.global_role)
     return {
         "success": True,
         "message": f"Account {account.username} created.",
-        "user": {
-            "username": account.username,
-            "global_role": account.global_role,
-            "is_active": bool(account.is_active),
-            "dataset_count": 0,
-        },
+        "user": _account_summary(account, 0),
     }
 
 
@@ -153,6 +160,10 @@ async def set_user_active(
                             detail="You cannot deactivate your own account.")
 
     account.is_active = is_active
+    if not is_active:
+        # Otherwise reactivating the account would bring every session it had back
+        # to life, including one on a machine it should never have been left on.
+        account.sign_out_everywhere()
     db.commit()
     return {
         "success": True,

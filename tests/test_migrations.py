@@ -15,7 +15,7 @@ import uuid
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.pool import NullPool
 
 from alembic import command
@@ -57,16 +57,19 @@ def pg_engine():
         admin.dispose()
 
 
-def _make_legacy(engine):
-    """Turn a database at the baseline into what the pre-Alembic boot path left.
+def _make_legacy(engine, through: str = "0001"):
+    """Turn a database into what the pre-Alembic boot path left.
 
-    Built from the baseline revision rather than from the models, so the shape stays
-    that of 2026-09-25 however far the models move on. The quirks are the ones real
-    databases were found with: no revision stamp, ``create_all``'s unique constraint
-    next to ``uq_datasets_name``, and a column patched in by ALTER without its index.
+    Built from the revisions rather than from the models, so the shape stays that of
+    2026-09-25 however far the models move on. ``through`` is the last revision
+    whose schema the old boot path had already created: "0001" for a database that
+    predates the activity log, "0002" for one that booted #130/#131 before Alembic.
+    The quirks are the ones real databases were found with: no revision stamp,
+    ``create_all``'s unique constraint next to ``uq_datasets_name``, and a column
+    patched in by ALTER without its index.
     """
     with engine.begin() as connection:
-        command.upgrade(alembic_config(connection), "0001")
+        command.upgrade(alembic_config(connection), through)
         connection.execute(text("DROP TABLE alembic_version"))
         connection.execute(text("ALTER TABLE datasets ADD CONSTRAINT datasets_name_key UNIQUE (name)"))
         connection.execute(text("DROP INDEX ix_image_metadata_value_num"))
@@ -107,8 +110,9 @@ def test_baseline_downgrades_to_nothing_and_back(pg_engine):
         assert schema_drift(connection) == []
 
 
-def test_adopts_a_database_from_before_alembic(pg_engine):
-    _make_legacy(pg_engine)
+@pytest.mark.parametrize("through", ["0001", "0002"])
+def test_adopts_a_database_from_before_alembic(pg_engine, through):
+    _make_legacy(pg_engine, through)
 
     init_db(target_engine=pg_engine)
 
@@ -119,6 +123,49 @@ def test_adopts_a_database_from_before_alembic(pg_engine):
         assert current_revision(connection) == head_revision()
         assert schema_drift(connection) == []
         assert connection.execute(text("SELECT name FROM datasets")).scalars().all() == ["Reef"]
+
+
+def _seed_alice_with_a_dataset(connection):
+    """An account that created a dataset and granted itself on it -- rows in several
+    tables that point back at the username. The new users columns are left to their
+    server defaults, as a row written before 0003 would have them."""
+    connection.execute(text(
+        "INSERT INTO users (username, hashed_password, global_role, is_active) "
+        "VALUES ('alice', 'x', 'admin', true)"))
+    dataset_id = connection.execute(text(
+        "INSERT INTO datasets (name, dataset_type, folder_path, created_by, "
+        "require_independent_review) VALUES ('Reef', 'image', '/tmp/reef', 'alice', false) "
+        "RETURNING id")).scalar()
+    connection.execute(text(
+        "INSERT INTO dataset_members (dataset_id, username, role, extra_permissions, "
+        "denied_permissions, granted_by, granted_at) "
+        "VALUES (:id, 'alice', 'owner', '[]', '[]', 'alice', now())"), {"id": dataset_id})
+
+
+def test_renaming_a_user_carries_their_rows_along(pg_engine):
+    init_db(target_engine=pg_engine)
+    with pg_engine.begin() as connection:
+        _seed_alice_with_a_dataset(connection)
+        connection.execute(text("UPDATE users SET username = 'alice2' WHERE username = 'alice'"))
+
+    with pg_engine.connect() as connection:
+        assert connection.execute(text("SELECT created_by FROM datasets")).scalar() == "alice2"
+        assert connection.execute(text(
+            "SELECT username, granted_by FROM dataset_members")).one() == ("alice2", "alice2")
+        assert connection.execute(text(
+            "SELECT preferences::text, must_change_password FROM users")).one() == ("{}", False)
+
+
+def test_deleting_a_user_never_deletes_their_datasets(pg_engine):
+    init_db(target_engine=pg_engine)
+    with pg_engine.begin() as connection:
+        _seed_alice_with_a_dataset(connection)
+
+    with pytest.raises(IntegrityError), pg_engine.begin() as connection:
+        connection.execute(text("DELETE FROM users WHERE username = 'alice'"))
+
+    with pg_engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM datasets")).scalar() == 1
 
 
 def test_refuses_a_database_that_needs_the_roles_migration(pg_engine):

@@ -46,7 +46,7 @@ reviewer_contour_association = Table('reviewer_contour_association',
                                      # FK column type matches its target -- SQLite tolerated the
                                      # Integer/VARCHAR mismatch, PostgreSQL rejects it at CREATE.
                                      Column('reviewer_id', String,
-                                            ForeignKey('users.username', ondelete='CASCADE'), primary_key=True),
+                                            ForeignKey('users.username', ondelete='CASCADE', onupdate='CASCADE'), primary_key=True),
                                      # Indexed on its own: the composite PK leads with
                                      # reviewer_id, so filtering by contour_id alone (the
                                      # ``~reviewed_by.any()`` status subquery, and cascade
@@ -75,7 +75,7 @@ class Contours(database):
     # populated even for AI-assisted contours (added_by names the model, this names
     # the human who accepted it). Separation of duties on review and the planned
     # per-user study metrics both key off this, so it must not come from the client.
-    author_username: Mapped[str] = Column(String, ForeignKey("users.username", ondelete="SET NULL"), nullable=True, index=True)
+    author_username: Mapped[str] = Column(String, ForeignKey("users.username", ondelete="SET NULL", onupdate="CASCADE"), nullable=True, index=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     confidence_score: Mapped[float] = Column(Float, nullable=False)  # Confidence score provided by a model, for users this is set to 1
     # Allowing labels to be null, this allows contours without labels to exist, such that users can label them later.

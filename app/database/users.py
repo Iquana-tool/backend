@@ -1,10 +1,29 @@
-from sqlalchemy import Column, String, Boolean, case
+from datetime import datetime, timezone
+
+from sqlalchemy import JSON, Boolean, Column, DateTime, String, case, false, text
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship
 
 from app.database import database
 from app.database.contours import reviewer_contour_association
 from app.schemas.permissions import GlobalRole
+
+
+def utc_now() -> datetime:
+    """Now in UTC, without a time zone, for this table's timestamp columns.
+
+    The columns carry no time zone. Given an aware datetime, PostgreSQL converts it
+    to the *session's* time zone before dropping the offset, so what gets stored
+    depends on server configuration; a naive UTC value is stored as it is. This
+    matters for ``tokens_valid_after``: moved an hour into the future by a server
+    set to Berlin time, it would refuse every fresh login for that hour.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def as_utc(value: datetime) -> datetime:
+    """Read one of this table's timestamps back as an aware UTC datetime."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 class Users(database):
@@ -18,6 +37,30 @@ class Users(database):
     global_role = Column(String(20), nullable=False, default=GlobalRole.MEMBER.value)
     # Accounts can be switched off without deleting the annotations they authored.
     is_active = Column(Boolean, nullable=False, default=True)
+
+    # -- Profile -----------------------------------------------------------
+    # How the person is shown. The username stays the login and the key.
+    display_name = Column(String(100), nullable=True)
+    # Stored lower-cased, so uniqueness is case-insensitive without an expression
+    # index. Optional: accounts are handed out by admins and nothing sends mail yet.
+    email = Column(String(254), nullable=True, unique=True)
+    # UI choices that should follow the person between machines (theme, tools).
+    # Free-form: the frontend owns the keys.
+    preferences = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
+
+    # -- Lifecycle ---------------------------------------------------------
+    # NULL for accounts that predate the column, whose creation date is unknown.
+    created_at = Column(DateTime, nullable=True, default=utc_now)
+    last_login_at = Column(DateTime, nullable=True)
+    # Login tokens issued before this moment are refused. Moved forward to sign the
+    # account out everywhere: on a password change and on deactivation.
+    tokens_valid_after = Column(DateTime, nullable=True)
+    # Set when an admin chose the password; cleared once the holder changes it.
+    must_change_password = Column(Boolean, nullable=False, default=False, server_default=false())
+
+    def sign_out_everywhere(self) -> None:
+        """Invalidate every login token issued to this account so far."""
+        self.tokens_valid_after = utc_now()
 
     owned_datasets = relationship("Datasets",
                                   back_populates="owner")

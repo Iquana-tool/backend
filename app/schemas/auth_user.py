@@ -71,6 +71,11 @@ class AuthenticatedUser(User):
         default_factory=dict,
         description="Dataset id -> the caller's role and permissions on it.",
     )
+    display_name: str | None = Field(None, description="How to show the person; the username when unset.")
+    email: str | None = Field(None, description="Contact address, lower-cased.")
+    must_change_password: bool = Field(
+        False, description="The password was chosen by an admin and should be replaced.")
+    preferences: dict = Field(default_factory=dict, description="UI choices kept per account.")
 
     @classmethod
     def from_query(cls, user_db) -> "AuthenticatedUser":
@@ -117,6 +122,10 @@ class AuthenticatedUser(User):
             owned_datasets=owned,
             accessible_datasets=accessible,
             memberships=memberships,
+            display_name=getattr(user_db, "display_name", None),
+            email=getattr(user_db, "email", None),
+            must_change_password=bool(getattr(user_db, "must_change_password", False)),
+            preferences=getattr(user_db, "preferences", None) or {},
         )
 
     def role_for(self, dataset_id: int) -> DatasetRole | None:

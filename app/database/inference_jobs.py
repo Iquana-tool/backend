@@ -59,7 +59,7 @@ class InferenceJobs(database):
     )
     # SET NULL rather than CASCADE: a deleted account must not take the run history of a
     # dataset with it -- the contours it wrote are still there.
-    created_by = Column(String, ForeignKey("users.username", ondelete="SET NULL"), nullable=True)
+    created_by = Column(String, ForeignKey("users.username", ondelete="SET NULL", onupdate="CASCADE"), nullable=True)
     name = Column(String(80), nullable=True)
 
     status = Column(String(16), nullable=False, default="pending", index=True)

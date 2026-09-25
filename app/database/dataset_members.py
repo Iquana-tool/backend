@@ -33,11 +33,11 @@ class DatasetMembers(database):
     __tablename__ = "dataset_members"
 
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), primary_key=True)
-    username = Column(String, ForeignKey("users.username", ondelete="CASCADE"), primary_key=True)
+    username = Column(String, ForeignKey("users.username", ondelete="CASCADE", onupdate="CASCADE"), primary_key=True)
     role = Column(String(20), nullable=False, default=DatasetRole.VIEWER.value)
     extra_permissions = Column(JSON, nullable=False, default=list)
     denied_permissions = Column(JSON, nullable=False, default=list)
-    granted_by = Column(String, ForeignKey("users.username", ondelete="SET NULL"), nullable=True)
+    granted_by = Column(String, ForeignKey("users.username", ondelete="SET NULL", onupdate="CASCADE"), nullable=True)
     granted_at = Column(DateTime, nullable=False, default=_utcnow)
 
     dataset = relationship("Datasets", back_populates="memberships")
@@ -58,7 +58,7 @@ class DatasetInvites(database):
     token_hash = Column(String(64), nullable=False, unique=True, index=True)
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False)
     role = Column(String(20), nullable=False, default=DatasetRole.ANNOTATOR.value)
-    created_by = Column(String, ForeignKey("users.username", ondelete="CASCADE"), nullable=False)
+    created_by = Column(String, ForeignKey("users.username", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     expires_at = Column(DateTime, nullable=True)
     max_uses = Column(Integer, nullable=True)  # None => unlimited

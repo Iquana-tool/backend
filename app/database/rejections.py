@@ -32,10 +32,10 @@ class AnnotationRejections(database):
     contour_id = Column(Integer, ForeignKey("contours.id", ondelete="CASCADE"), nullable=True)
     reason = Column(String(32), nullable=False, default=RejectionReason.OTHER.value)
     note = Column(String(1000), nullable=True)
-    created_by = Column(String, ForeignKey("users.username", ondelete="SET NULL"), nullable=True)
+    created_by = Column(String, ForeignKey("users.username", ondelete="SET NULL", onupdate="CASCADE"), nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     resolved_at = Column(DateTime, nullable=True)
-    resolved_by = Column(String, ForeignKey("users.username", ondelete="SET NULL"), nullable=True)
+    resolved_by = Column(String, ForeignKey("users.username", ondelete="SET NULL", onupdate="CASCADE"), nullable=True)
     # How the rejection was closed, once resolved: "fixed" (the annotator reworked
     # the annotation) or "wont_fix" (looked at, left as is). NULL while still open
     # and on legacy rows resolved before resolution kinds existed.

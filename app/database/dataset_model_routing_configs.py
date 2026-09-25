@@ -38,7 +38,7 @@ class DatasetModelRoutingConfigs(database):
 
     # Nullable FK to users: if the user account is deleted, the dataset policy is preserved.
     updated_by = Column(
-        String, ForeignKey("users.username", ondelete="SET NULL"), nullable=True
+        String, ForeignKey("users.username", ondelete="SET NULL", onupdate="CASCADE"), nullable=True
     )
 
     created_at = Column(DateTime, nullable=False, default=_utcnow)

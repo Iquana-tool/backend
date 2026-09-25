@@ -192,6 +192,23 @@ The matrix deliberately lives here rather than in `iquana-toolbox`: the toolbox 
 as a git-pinned dependency, so keeping it local means a permission change does not require a
 toolbox release and re-pin.
 
+### Accounts
+
+- **Profile.** `PATCH /auth/me` changes one's own display name, email address (stored
+  lower-cased, unique) and UI `preferences`. Preferences are merged key by key, and a key
+  sent as `null` is removed.
+- **Password.** `POST /auth/password` changes one's own password. Accounts an admin
+  creates are flagged `must_change_password` until their holder picks their own.
+- **Signing out everywhere.** Login tokens carry their issue time and are refused once
+  they are older than `users.tokens_valid_after`. A password change moves that cut-off
+  (the response carries a fresh token for the current session), and so does deactivation,
+  so reactivating an account does not bring its old sessions back.
+- **Never deleted.** Accounts are deactivated, not deleted: `datasets.created_by` is
+  `ON DELETE RESTRICT`. Every foreign key into `users.username` is `ON UPDATE CASCADE`, so
+  a username can be changed in place. Columns that hold a username *without* a foreign key
+  (provenance such as `updated_by`, `masks.fully_annotated_by`, the activity log) do not
+  follow such a change.
+
 ---
 
 ## Database migrations

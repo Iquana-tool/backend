@@ -10,8 +10,9 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from app.schemas.account import normalise_email
 from app.schemas.permissions import DatasetRole, GlobalRole, Permission
 
 
@@ -438,12 +439,24 @@ class AdminUserCreate(BaseModel):
     password: str = Field(min_length=8, max_length=128)
     global_role: GlobalRole = GlobalRole.MEMBER
     is_active: bool = True
+    display_name: str | None = Field(None, max_length=100)
+    email: EmailStr | None = None
 
     @field_validator("username", mode="before")
     @classmethod
     def _strip_username(cls, value):
         """Trim surrounding whitespace so a pasted name still matches at login."""
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _blank_display_name_is_none(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+    _normalise_email = field_validator("email", mode="before")(normalise_email)
 
 
 class SettingsUpdate(BaseModel):
