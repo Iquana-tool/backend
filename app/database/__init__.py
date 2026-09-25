@@ -66,6 +66,7 @@ def import_models():
     to drop it.
     """
     from app.database import (  # noqa: F401  (imported for their side effects)
+        ai_suggestions,
         annotation_actions,
         annotation_queues,
         contour_metrics,

@@ -1922,6 +1922,7 @@ def import_iquana_dataset_archive(
                         parent_id=parent_db_id,
                         temporary=False,
                         added_by=ann.iquana.added_by or "User",
+                        origin="import",
                         # Source actor usernames are provenance-only and must be cleared
                         # on import per the frozen decoupling policy (docs/iquana-dataset-format-v1.md);
                         # the importing user becomes the dataset owner, not the content author.
