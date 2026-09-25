@@ -1,11 +1,12 @@
 import io
 import os
 import zipfile
+from datetime import datetime, timedelta, timezone
 from logging import getLogger
 from typing import Literal
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from iquana_toolbox.quantification import list_metrics
 from iquana_toolbox.schemas.database.quantification_profile import QuantificationProfile
 from iquana_toolbox.schemas.user import User
@@ -31,6 +32,7 @@ from app.exceptions import (
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.dataset_archive import DatasetArchiveImportResponse
 from app.schemas.permissions import DatasetRole, Permission
+from app.services import dataset_activity as activity_service
 from app.services.auth import get_current_user
 from app.services.dataset_archive import (
     create_iquana_dataset_archive,
@@ -318,6 +320,33 @@ async def get_number_of_images(
     return {
         "success": True,
         "number_of_images": await datasets_db.get_num_of_images_in_dataset(dataset_id, db=db)
+    }
+
+
+@router.get("/{dataset_id}/activity")
+async def get_dataset_activity(dataset_id: int,
+                               days: int = Query(default=7, ge=0, le=3650),
+                               user: AuthenticatedUser = Depends(require(Permission.DATASET_READ)),
+                               db: Session = Depends(get_session)):
+    """Who did what on this dataset: per-user counts over the last `days` days.
+
+    `days=0` means all time. Counts come from the annotation data, not the
+    activity log, so they are available on every deployment. See `app.services.dataset_activity` for what each number means.
+
+    Returns:
+        dict: ``success``, ``since`` (naive UTC ISO timestamp, or null for all time)
+        and ``users``: one entry per user with ``annotated``, ``annotated_ai``,
+        ``finished``, ``reviewed``, ``sent_back``, ``resolved``, ``calibrated`` and
+        ``last_active``, most recently active first.
+    """
+    since = None
+    if days:
+        since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    users = activity_service.get_dataset_activity(dataset_id, since, db)
+    return {
+        "success": True,
+        "since": since.isoformat() if since else None,
+        "users": users,
     }
 
 

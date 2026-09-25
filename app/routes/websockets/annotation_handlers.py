@@ -847,7 +847,7 @@ async def handle_finish_annotation(websocket: WebSocket, client_msg: ClientMessa
             return
         # mark_mask_as_complete returns None; the old code subscripted it as a dict
         # and raised a TypeError on every finish.
-        await masks_db.mark_mask_as_complete(state.mask_id, db)
+        await masks_db.mark_mask_as_complete(state.mask_id, db, username=user.username)
         status = db.query(Masks).filter_by(id=state.mask_id).one().status
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,

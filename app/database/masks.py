@@ -1,6 +1,8 @@
-from sqlalchemy import Column, Integer, ForeignKey, Boolean, exists, case, not_, select, func, String
+from datetime import datetime, timezone
+
+from sqlalchemy import Column, DateTime, Integer, ForeignKey, Boolean, exists, case, not_, select, func, String
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 
 from . import database
 from .contours import Contours
@@ -17,9 +19,28 @@ class Masks(database):
     image_id = Column(Integer, ForeignKey('images.id', ondelete='CASCADE'),
                       nullable=False, index=True)
     fully_annotated = Column(Boolean, default=False, nullable=False)  # Users can mark a mask as fully annotated indicating that all objects are there.
+    # Who marked it finished, and when; for the dataset activity summary. Cleared
+    # whenever the mask stops being finished (reopened, sent back, wiped), so they
+    # always describe the current finished state. NULL on masks finished before
+    # the columns existed.
+    fully_annotated_by = Column(String, nullable=True)
+    fully_annotated_at = Column(DateTime, nullable=True)
     file_path = Column(String, nullable=False)  # Where this mask should be saved
 
     image = relationship("Images")
+
+    @validates("fully_annotated")
+    def _clear_finisher_when_reopened(self, _key, value):
+        if not value:
+            self.fully_annotated_by = None
+            self.fully_annotated_at = None
+        return value
+
+    def mark_finished_by(self, username: str | None) -> None:
+        """Mark the mask finished and record who did it."""
+        self.fully_annotated = True
+        self.fully_annotated_by = username
+        self.fully_annotated_at = datetime.now(timezone.utc)
     # passive_deletes=True: rely on the DB's ON DELETE CASCADE to remove contours
     # instead of SQLAlchemy trying to NULL out the (non-nullable) contours.mask_id.
     contours = relationship("Contours", backref="mask", passive_deletes=True)

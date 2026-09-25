@@ -91,6 +91,10 @@ _ADDED_COLUMNS = [
     # Added with the metadata type system; a dev database that ran the untyped
     # first cut of image_metadata has the table but not this column.
     ("image_metadata", "value_num", "FLOAT"),
+    # Dataset activity summary: who finished a mask and when an approval was given.
+    ("masks", "fully_annotated_by", "VARCHAR"),
+    ("masks", "fully_annotated_at", "TIMESTAMP"),
+    ("reviewer_contour_association", "reviewed_at", "TIMESTAMP"),
 ]
 
 

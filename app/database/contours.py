@@ -54,6 +54,11 @@ reviewer_contour_association = Table('reviewer_contour_association',
                                      Column('contour_id', Integer,
                                             ForeignKey('contours.id', ondelete='CASCADE'), primary_key=True,
                                             index=True),
+                                     # When the approval was given, for the dataset activity summary.
+                                     # A Python-side default, so every path that appends a reviewer
+                                     # stamps it without knowing the column exists. NULL on rows
+                                     # recorded before the column was added.
+                                     Column('reviewed_at', DateTime, nullable=True, default=_utcnow),
                                      )
 
 
