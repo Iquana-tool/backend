@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
 
 from . import database
@@ -7,8 +7,14 @@ from . import database
 class Datasets(database):
     """ Represents a dataset in the database."""
     __tablename__ = 'datasets'
+    __table_args__ = (
+        # A unique index rather than `unique=True`: databases from before names had
+        # to be unique got this index (after deduplication) instead of a constraint,
+        # and declaring it the same way keeps every database on one shape.
+        Index("uq_datasets_name", "name", unique=True),
+    )
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(50), nullable=False, unique=True)
+    name = Column(String(50), nullable=False)
     description = Column(String(255), nullable=True)
     dataset_type = Column(String(20), nullable=False)  # Type of dataset, e.g., "image", "scan", "DICOM"
     folder_path = Column(String(255), nullable=False)  # Path to the dataset folder on disk

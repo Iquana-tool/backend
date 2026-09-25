@@ -12,6 +12,10 @@ THUMBNAILS_DIR = os.getenv("THUMBNAILS_DIR", os.path.join(DATA_DIR, "thumbnails"
 
 # URLS <- probably should be replaced with editable YAML
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///" + os.path.join(DATA_DIR, "database.db"))
+# Upgrade a PostgreSQL database to the newest Alembic revision on boot. Turn off to
+# run `alembic upgrade head` by hand instead (e.g. to take a backup first); the
+# backend then only warns when the schema is behind the code.
+AUTO_MIGRATE = os.getenv("IQUANA_AUTO_MIGRATE", "true").lower() in ("1", "true", "yes", "on")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 MLFLOW_URL = os.getenv("MLFLOW_URL", "http://localhost:5000")
 # AI services: all tasks are served by the unified ai-service, one surface per

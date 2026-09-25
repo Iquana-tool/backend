@@ -1,9 +1,8 @@
 """Migrate an existing database to the generalised image-calibration model.
 
-The project has no Alembic setup — schema comes from ``metadata.create_all``, which
-creates missing *tables* but never backfills them. ``image_calibrations`` is a new
-table, so ``init_db()`` makes it; this script does the data part, and is safe to
-re-run.
+Schema changes are Alembic's job, and ``init_db()`` applies them -- including
+``image_calibrations`` on a database that predates it. What no schema migration can
+do is backfill the rows; this script does that part, and is safe to re-run.
 
 What it does:
   1. Creates ``image_calibrations`` (via ``init_db``) if it does not exist yet.

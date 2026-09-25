@@ -170,25 +170,24 @@ class Embeddings(database):
             sqlite_where=text("contour_id IS NOT NULL"),
             postgresql_where=text("contour_id IS NOT NULL"),
         ),
+        # Cosine HNSW index for in-database nearest-neighbour search. PostgreSQL only:
+        # on SQLite the column is JSON text and similarity is computed in NumPy.
+        Index(
+            "ix_embeddings_vector_hnsw",
+            "vector",
+            postgresql_using="hnsw",
+            postgresql_ops={"vector": "vector_cosine_ops"},
+        ).ddl_if(dialect="postgresql"),
     )
 
 
-# --- PostgreSQL-only DDL: the pgvector extension and the HNSW index ---------- #
-# ``create_all`` runs for every dialect, so these are guarded to PostgreSQL and are no-ops
-# on SQLite. The extension must exist *before* a table with a vector column is created; the
-# cosine HNSW index is added after. Both are IF-(NOT-)EXISTS so re-running create_all is safe.
+# --- PostgreSQL-only DDL: the pgvector extension ----------------------------- #
+# The extension must exist *before* a table with a vector column is created. Only
+# ``create_all`` needs this hook; the Alembic baseline creates the extension itself.
 event.listen(
     Embeddings.__table__,
     "before_create",
     DDL("CREATE EXTENSION IF NOT EXISTS vector").execute_if(dialect="postgresql"),
-)
-event.listen(
-    Embeddings.__table__,
-    "after_create",
-    DDL(
-        "CREATE INDEX IF NOT EXISTS ix_embeddings_vector_hnsw "
-        "ON embeddings USING hnsw (vector vector_cosine_ops)"
-    ).execute_if(dialect="postgresql"),
 )
 
 

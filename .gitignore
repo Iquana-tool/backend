@@ -23,6 +23,8 @@ pip-delete-this-directory.txt
 .env
 .env.local
 *.ini
+# Not a secret: the database URL comes from the environment via config.py.
+!alembic.ini
 *.cfg
 
 # Data Files
