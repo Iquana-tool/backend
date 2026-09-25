@@ -21,6 +21,7 @@ from iquana_toolbox.schemas.prompts import Prompts
 
 from app.database import get_context_session
 from app.database.contours import Contours
+from app.database.ai_suggestions import SuggestionSource
 from app.database.masks import Masks
 from app.routes.websockets.messaging import send_msg
 from app.services.ai_services.instance_suggestion import SuggestionService
@@ -35,7 +36,8 @@ from app.services.annotation_session.operations import (
     run_prompted_segmentation,
 )
 from app.schemas.permissions import Permission
-from app.services import image_status
+from app.services import ai_tools, image_status, provenance
+from app.services.ai_tools import AiTool
 from app.services.annotation_session.state import AnnotationSessionState, Backends
 from app.services.auth import load_user
 from app.services.permissions import dataset_id_for_image
@@ -85,6 +87,29 @@ def _mask_state(state: AnnotationSessionState) -> dict:
         "mask_status": image_state["status"] if image_state else None,
         "phase_status": image_state["phases"] if image_state else None,
     }
+
+
+async def _tool_switched_off(websocket: WebSocket, client_msg: ClientMessage,
+                             state: AnnotationSessionState, tool: AiTool) -> bool:
+    """Refuse an AI request when the dataset has that tool switched off.
+
+    Returns True (after telling the client) when the request must stop here.
+    """
+    dataset_id = getattr(state, "dataset_id", None)
+    if dataset_id is None:
+        return False
+    with get_context_session() as db:
+        enabled = ai_tools.is_enabled(dataset_id, tool, db)
+    if enabled:
+        return False
+    await send_msg(websocket, ServerMessage(
+        id=client_msg.id,
+        type=ServerMessageType.ERROR,
+        success=False,
+        message=ai_tools.disabled_message(tool),
+        data={"disabled_tool": tool.value},
+    ))
+    return True
 
 
 async def send_objects(websocket: WebSocket, state: AnnotationSessionState, message_id: str):
@@ -291,7 +316,7 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
     # the DB insert, which made the client invent a bogus (decimal) id for the new
     # object and rebuild from the full hierarchy — blanking every other object's
     # label until the next page reload.
-    await add_object(contour, websocket, client_msg, state)
+    await add_object(contour, websocket, client_msg, state, source=provenance.MANUAL)
 
 
 async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -424,6 +449,9 @@ async def handle_prompted_segmentation(
     prompts_data = client_msg.data.get("prompts")
     prompts_model = Prompts.model_validate(prompts_data)
     using_refinement = state.refinement_contour_id is not None
+    if await _tool_switched_off(websocket, client_msg, state,
+                                AiTool.REFINE if using_refinement else AiTool.PROMPTED):
+        return
     if using_refinement:
         # Get the contour to refine
         with get_context_session() as db:
@@ -489,9 +517,13 @@ async def handle_prompted_segmentation(
         # it patched only one of the hierarchy's three indexes anyway, leaving root_contours
         # and the parent's children list pointing at the replaced contour. Replacing the
         # contour invalidates the cache entry, so the next read rebuilds it in full.
-        await replace_object(state.refinement_contour_id, contour_model, websocket, client_msg, state)
+        if await replace_object(state.refinement_contour_id, contour_model, websocket, client_msg, state):
+            with get_context_session() as db:
+                provenance.record_refinement(db, state.refinement_contour_id,
+                                             model_key=model_identifier, username=state.user_id)
     else:
-        await add_object(contour_model, websocket, client_msg, state)
+        await add_object(contour_model, websocket, client_msg, state,
+                         source=SuggestionSource.PROMPTED, model_key=model_identifier)
 
 
 async def handle_suggestion_select_model(websocket: WebSocket, client_msg: ClientMessage,
@@ -562,6 +594,8 @@ async def handle_suggestion_disable(websocket: WebSocket, client_msg: ClientMess
 
 async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
     """ Handle the suggestion of a suggestion model. """
+    if await _tool_switched_off(websocket, client_msg, state, AiTool.INSTANCE_SUGGESTION):
+        return
     client_data = client_msg.data or {}
     seed_contour_ids = client_data.get("seed_contour_ids") or []
     inputs_data = client_data.get("inputs") or {}
@@ -638,6 +672,11 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
                     "Skipped contour on mask %s because hierarchy fitting removed all pixels.",
                     state.mask_id,
                 )
+        provenance.record_suggestions(
+            db, [persisted.id for _, persisted in persisted_contours],
+            source=SuggestionSource.INSTANCE_SUGGESTION, model_key=client_data.get("model_key"),
+            username=state.user_id, run_id=group_id,
+        )
 
     # 1. Send SUCCESS acknowledgment first so the client's pending request resolves with accurate added_count
     await send_msg(websocket, ServerMessage(
@@ -712,6 +751,8 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
             data=None
         ))
         return
+    if await _tool_switched_off(websocket, client_msg, state, AiTool.INSTANCE_SEGMENTATION):
+        return
 
     model_registry_key = message_data.get("model_registry_key")
     inputs_data = message_data.get("inputs") or {}
@@ -744,8 +785,9 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
             # clients that omit write_mode.
             await masks_db.delete_all_contours_of_mask(state.mask_id, db=db)
 
+        added_ids = []
         for contour in contours_to_add:
-            await masks_db.add_contour_to_mask(
+            added = await masks_db.add_contour_to_mask(
                 state.mask_id,
                 contour,
                 db=db,
@@ -754,6 +796,12 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
                 check_hierarchy=write_mode == "override",
                 author_username=state.user_id,
             )
+            if added is not None:
+                added_ids.extend(provenance.contour_ids_of(added))
+        provenance.record_suggestions(
+            db, added_ids, source=SuggestionSource.INSTANCE_SEGMENTATION,
+            model_key=model_registry_key, username=state.user_id,
+        )
         hierarchy, payload = await masks_db.get_cached_contour_hierarchy_of_mask(state.mask_id, db)
     state.contour_hierarchy = hierarchy
 
@@ -775,7 +823,8 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
 
 
 async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage,
-                     state: AnnotationSessionState, group_id: str | None = None):
+                     state: AnnotationSessionState, group_id: str | None = None,
+                     source: str = provenance.MANUAL, model_key: str | None = None):
     """Persist one new object and tell the client about it.
 
     Every interactive add reaches the database through here -- manual drawing,
@@ -788,6 +837,9 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
     Args:
         group_id: Ties this creation to others made in the same operation, so a
             suggestion run that adds thirty objects is undone in one step.
+        source: What created the object: ``provenance.MANUAL`` or an AI
+            ``SuggestionSource``, which also logs the outline as a suggestion.
+        model_key: The model behind an AI source.
     """
     with get_context_session() as db:
         response = await masks_db.add_contour_to_mask(
@@ -804,6 +856,12 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
         else:
             history_db.record_create(db, state.mask_id, state.user_id, response.id,
                                      group_id=group_id)
+            if source in provenance.AI_SOURCES:
+                provenance.record_suggestions(db, provenance.contour_ids_of(response),
+                                              source=source, model_key=model_key,
+                                              username=state.user_id, run_id=group_id)
+            else:
+                provenance.mark_manual(db, provenance.contour_ids_of(response), origin=source)
     if response is None:
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,

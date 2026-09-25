@@ -32,6 +32,7 @@ from app.exceptions import (
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.dataset_archive import DatasetArchiveImportResponse
 from app.schemas.permissions import DatasetRole, Permission
+from app.services import ai_tools, suggestion_stats
 from app.services import dataset_activity as activity_service
 from app.services.auth import get_current_user
 from app.services.dataset_archive import (
@@ -239,6 +240,8 @@ async def get_all_datasets(
             "folder_path": ds.folder_path,
             "created_by": ds.created_by,
             "shared_with": [u.username for u in ds.shared_with],
+            # The workspace and menus read AI tool switches from this list.
+            "disabled_ai_tools": ds.disabled_ai_tools,
             # What *this* caller may do, so the UI can hide actions it would reject.
             "my_role": user.role_for(ds.id).value if user.role_for(ds.id) else None,
             "my_permissions": sorted(p.value for p in user.permissions_for(ds.id)),
@@ -277,26 +280,34 @@ async def get_dataset(
 async def update_dataset_settings(
         dataset_id: int,
         require_independent_review: bool | None = None,
+        disabled_ai_tools: str | None = None,
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE))
 ):
-    """Update per-dataset review policy.
+    """Update per-dataset review policy and AI tool switches.
 
     With `require_independent_review` on, a contour cannot be approved by whoever
     created it, so `finished` means a second pair of eyes actually saw the work.
     Off by default, because a single owner annotating their own dataset would
     otherwise never be able to finish it.
+
+    `disabled_ai_tools` is the full comma-separated list of AI tools to switch off
+    (see `app.services.ai_tools.AiTool`); send it empty to switch every tool back on.
     """
     dataset = await datasets_db.get_dataset(dataset_id, db=db)
     if dataset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.")
     if require_independent_review is not None:
         dataset.require_independent_review = require_independent_review
-        db.commit()
+    if disabled_ai_tools is not None:
+        names = [name.strip() for name in disabled_ai_tools.split(",") if name.strip()]
+        dataset.disabled_ai_tools = ai_tools.format_tools(ai_tools.validate(names)) or None
+    db.commit()
     return {
         "success": True,
         "message": "Dataset settings updated.",
         "require_independent_review": dataset.require_independent_review,
+        "disabled_ai_tools": sorted(ai_tools.parse(dataset.disabled_ai_tools)),
     }
 
 
@@ -347,6 +358,27 @@ async def get_dataset_activity(dataset_id: int,
         "success": True,
         "since": since.isoformat() if since else None,
         "users": users,
+    }
+
+
+@router.get("/{dataset_id}/suggestion-stats")
+async def get_suggestion_stats(dataset_id: int,
+                               days: int = Query(default=7, ge=0, le=3650),
+                               user: AuthenticatedUser = Depends(require(Permission.DATASET_READ)),
+                               db: Session = Depends(get_session)):
+    """How each model's AI suggestions on this dataset were treated.
+
+    Per model: how many suggestions were kept as the model made them (`as_is`),
+    kept after a hand edit (`edited`) or deleted (`rejected`), over the last `days`
+    days (`days=0` for all time). See `app.services.suggestion_stats`.
+    """
+    since = None
+    if days:
+        since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    return {
+        "success": True,
+        "since": since.isoformat() if since else None,
+        "models": suggestion_stats.get_suggestion_stats(dataset_id, since, db),
     }
 
 

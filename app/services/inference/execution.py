@@ -41,6 +41,8 @@ from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.schemas.inference import InferenceOptions, ResolvedStep, UnparentedPolicy
+from app.database.ai_suggestions import SuggestionSource
+from app.services import provenance
 from app.services.database_access.contours import invalidate_metrics_for_new_contours
 
 logger = getLogger(__name__)
@@ -314,6 +316,14 @@ def run_unit(
             result.created += 1
 
     invalidate_metrics_for_new_contours(db, saved_rows)
+    # Batch output lands unreviewed, so every object is a suggestion someone will accept,
+    # fix or delete. The caller owns the transaction, hence commit=False.
+    provenance.record_suggestions(
+        db, [row.id for row in saved_rows],
+        source=(SuggestionSource.CROSS_IMAGE if step.task == "cross-image-suggestion"
+                else SuggestionSource.BATCH_INFERENCE),
+        model_key=step.model_registry_key, username=username, commit=False,
+    )
     return result
 
 
