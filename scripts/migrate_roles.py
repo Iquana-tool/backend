@@ -1,8 +1,10 @@
 """Migrate an existing database to the role-based access model.
 
-The project has no Alembic setup — schema comes from ``metadata.create_all``, which
-creates missing *tables* but never adds columns to existing ones. This script does
-the rest, and is safe to re-run.
+For databases from before roles, which the Alembic baseline refuses to adopt (they
+carry the NOT NULL ``users.is_admin`` and lack ``users.global_role``). The schema is
+built the pre-Alembic way -- ``metadata.create_all``, which creates missing *tables*
+but never adds columns to existing ones -- and this script does the rest. Safe to
+re-run; once it has run, the next backend start adopts the database.
 
 What it does:
   1. Adds the new columns to existing tables (``users.global_role``,
@@ -34,7 +36,7 @@ if _BACKEND_ROOT not in sys.path:
 
 from sqlalchemy import inspect, text  # noqa: E402
 
-from app.database import engine, init_db  # noqa: E402
+from app.database import build_schema_from_models, engine  # noqa: E402
 from app.schemas.permissions import DatasetRole, GlobalRole  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -211,7 +213,7 @@ def main():
 
     # Create any tables that do not exist yet (dataset_members, dataset_invites,
     # annotation_rejections) before touching them.
-    init_db()
+    build_schema_from_models()
 
     with engine.begin() as connection:
         added = add_missing_columns(connection, args.dry_run)

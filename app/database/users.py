@@ -10,7 +10,9 @@ from app.schemas.permissions import GlobalRole
 class Users(database):
     """ Represents our users. """
     __tablename__ = "users"
-    username = Column(String, nullable=False, unique=True, primary_key=True)  # Ensure usernames are unique
+    # The primary key is what keeps usernames unique; `unique=True` on top of it would
+    # only ask for a second index over the same column.
+    username = Column(String, nullable=False, primary_key=True)
     hashed_password = Column(String, nullable=False)  # Store hashed passwords only
     # Platform-level role. Dataset-level rights live on `dataset_members.role`.
     global_role = Column(String(20), nullable=False, default=GlobalRole.MEMBER.value)

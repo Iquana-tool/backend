@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 import sqlite3
 
-from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import MetaData, create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -30,8 +30,21 @@ def _set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.close()
 
 
+#: Names for constraints a model does not name itself. They copy PostgreSQL's own
+#: defaults, which is what every such constraint in a database built before Alembic
+#: already carries -- so a migration can refer to an existing constraint by name (to
+#: drop or alter it) and hit. There is deliberately no "ck" entry: a convention that
+#: uses ``%(constraint_name)s`` is applied on top of explicit names as well, and would
+#: rename ``ck_embeddings_one_subject``.
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "%(table_name)s_%(column_0_N_name)s_key",
+    "fk": "%(table_name)s_%(column_0_N_name)s_fkey",
+    "pk": "%(table_name)s_pkey",
+}
+
 # Define the declarative general
-database = declarative_base()
+database = declarative_base(metadata=MetaData(naming_convention=NAMING_CONVENTION))
 
 engine = create_engine(DATABASE_URL,
                        pool_size=20,  # Default is usually 5
@@ -40,18 +53,17 @@ engine = create_engine(DATABASE_URL,
                        pool_recycle=3600,  # Recycle after 1 hour
                        )
 
-database.metadata.create_all(engine)
-
 # Create a configured "Session" class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-def _import_models():
-    """Import every model module so `create_all` sees the full metadata.
+def import_models():
+    """Import every model module so the metadata describes every table.
 
     Tables referenced only by string in relationships (e.g. ``dataset_members``)
     are otherwise never imported, which leaves SQLAlchemy unable to resolve the
-    mapper and the table missing from a fresh database.
+    mapper, ``create_all`` without the table, and Alembic's autogenerate proposing
+    to drop it.
     """
     from app.database import (  # noqa: F401  (imported for their side effects)
         annotation_actions,
@@ -86,6 +98,9 @@ def _import_models():
 #: ALTERs an existing one, so a nullable column added to a shipped model has to be
 #: patched in here for databases that predate it. Each entry is idempotent — it is
 #: only applied when the column is absent.
+#:
+#: Frozen: this only serves the SQLite path of :func:`init_db`. PostgreSQL schema
+#: changes are Alembic revisions under ``migrations/versions``.
 _ADDED_COLUMNS = [
     ("annotation_rejections", "resolution", "VARCHAR(16)"),
     # Added with the metadata type system; a dev database that ran the untyped
@@ -166,9 +181,39 @@ def _ensure_dataset_name_uniqueness(target_engine: Engine | None = None):
 
 
 def init_db(target_engine: Engine | None = None):
+    """Bring the schema in line with the models.
+
+    PostgreSQL -- every real deployment -- is migrated by Alembic: the database is
+    upgraded to the newest revision under ``migrations/versions``, and a database
+    from before Alembic is adopted on the way (see the baseline revision).
+
+    Anything else is the SQLite used by tests and throwaway dev databases, which
+    keeps building its schema straight from the models. Revisions are written for
+    PostgreSQL only, so a SQLite database never gets later ALTERs; delete it and
+    let it be recreated instead.
+    """
     logger.debug("\tInitializing database")
-    _import_models()
+    import_models()
     db_engine = target_engine or engine
+    if db_engine.dialect.name == "postgresql":
+        from app.database.migrate import upgrade_to_head
+        upgrade_to_head(db_engine)
+        return
+    build_schema_from_models(db_engine)
+
+
+def build_schema_from_models(target_engine: Engine | None = None):
+    """The pre-Alembic schema path: ``create_all`` plus the hand-written patches.
+
+    What ``init_db`` does for SQLite, and what ``scripts/migrate_roles.py`` needs on
+    a PostgreSQL database too old for the baseline revision to adopt. Refused on a
+    database Alembic already manages, where ``create_all`` would create tables
+    ahead of the revisions that are meant to create them.
+    """
+    import_models()
+    db_engine = target_engine or engine
+    if db_engine.dialect.name == "postgresql" and inspect(db_engine).has_table("alembic_version"):
+        raise RuntimeError("This database is managed by Alembic; use init_db() instead.")
     database.metadata.create_all(bind=db_engine)
     _ensure_columns(db_engine)
     _ensure_dataset_name_uniqueness(db_engine)

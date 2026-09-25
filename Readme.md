@@ -59,7 +59,9 @@ app/
                            #   mlflow, model registry, embeddings, redis, ...
 config.py                  # Environment-driven settings (paths, URLs, secrets)
 main.py                    # Entry point — builds the app and configures logging
-scripts/                   # One-off migrations and backfills
+alembic.ini                # Alembic configuration (the database URL comes from config.py)
+migrations/                # Alembic environment and schema revisions (versions/)
+scripts/                   # One-off data migrations and backfills
 tests/                     # pytest suite
 data/                      # Runtime data (gitignored)
 ├── datasets/<name>/       #   uploaded images and masks per dataset
@@ -101,6 +103,9 @@ Then start the API:
 uv run fastapi dev main.py
 ```
 
+On start the backend brings the database schema up to date by itself — see
+[Database migrations](#database-migrations).
+
 > API at http://127.0.0.1:8000, interactive OpenAPI docs at http://127.0.0.1:8000/docs
 
 Batch inference additionally needs the Celery worker, on its **own** queue. This must not
@@ -138,6 +143,7 @@ list and `config.py` the defaults. The ones that matter most:
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | sqlite in `data/` | Postgres in any real deployment: `postgresql+psycopg://...` |
+| `IQUANA_AUTO_MIGRATE` | `true` | Apply pending schema migrations on start. Off: only warn, and migrate by hand |
 | `REDIS_URL` | `redis://localhost:6379` | Celery broker and result backend |
 | `MLFLOW_URL` | `http://localhost:5000` | Model and experiment tracking |
 | `AI_SERVICE_URL` | `http://localhost:8004` | The unified ai-service. Per-task URLs are derived as `<AI_SERVICE_URL>/<task>` |
@@ -188,22 +194,63 @@ toolbox release and re-pin.
 
 ---
 
+## Database migrations
+
+The PostgreSQL schema is managed by **[Alembic](https://alembic.sqlalchemy.org/)**. Revisions
+live in `migrations/versions/`, and the backend applies any that are pending **every time it
+starts** (`init_db()` → `app/database/migrate.py`). Upgrading a deployment is therefore just
+pulling the new code and restarting; nobody runs a migration script by hand. The upgrade
+runs in a single transaction under a PostgreSQL advisory lock, so several workers starting at
+once do not race, and a revision that fails rolls back whole.
+
+A database from before Alembic is **adopted** on its first start: the baseline revision
+(`0001`) adds whatever it lacks and normalises the known differences, then stamps it. It
+refuses a database that still needs the roles data migration and says so; run
+`scripts/migrate_roles.py` first in that case.
+
+**Changing the schema.** Edit the model, then generate a revision from `backend/`:
+
+```bash
+.venv/Scripts/python.exe -m alembic revision --autogenerate -m "add teams"
+```
+
+Read the generated file before using it. Autogenerate is a draft: it turns a renamed column
+into a drop plus an add (losing the data), does not see changes to server defaults, and
+knows nothing about data. Backfills and other data changes belong in the revision as well,
+next to the schema change they depend on. Apply it by restarting the backend, or:
+
+```bash
+.venv/Scripts/python.exe -m alembic upgrade head
+```
+
+A few rules keep this working:
+
+- **Never edit a revision that has been released.** Databases that ran it will not run it
+  again; write a new revision instead.
+- **Revisions do not import the models.** A revision describes the schema as it was when it
+  was written, so it spells out its own tables, columns and constraint names.
+- **Revisions are PostgreSQL-only.** SQLite (tests and throwaway dev databases) builds its
+  schema straight from the models and never receives later changes; delete such a database
+  and let it be recreated.
+- Constraint names follow PostgreSQL's own defaults (`<table>_<column>_fkey`, `_key`,
+  `_pkey`) through the metadata's naming convention, so a revision can refer to an existing
+  constraint by name.
+
+`tests/test_migrations.py` upgrades a fresh database and requires it to match the models
+exactly, which catches a model change that is missing its revision.
+
+---
+
 ## Tests
 
 ```bash
 uv run pytest tests/ -q
 ```
 
-`app/database/__init__.py` calls `create_all` **at import time**, so with Postgres down the
-suite fails during *collection* with connection errors, which looks like a code break but is
-not. Run against sqlite instead, using an absolute forward-slash path:
-
-```bash
-DATABASE_URL="sqlite:////absolute/path/to/backend/data/test_scratch.db" uv run pytest tests/ -q
-```
-
-`.env` also sets `DATABASE_URL`, but `load_dotenv()` does not override a real environment
-variable, so the shell value wins. Delete the scratch database afterwards.
+The tests build their own SQLite databases, so the suite needs no running database — except
+`tests/test_migrations.py`, which needs PostgreSQL: it creates and drops a throwaway database
+on the server named by `MIGRATION_TEST_DATABASE_URL`, or by `DATABASE_URL` when that is
+PostgreSQL, and skips otherwise.
 
 ---
 
@@ -216,7 +263,10 @@ variable, so the shell value wins. Delete the scratch database afterwards.
 | `clear_stuck_inference_jobs.py` | Reset inference jobs left marked `running` after a crash |
 | `copy_sqlite_to_postgres.py` | Migrate a local sqlite database into Postgres |
 | `migrate_calibrations.py`, `migrate_response_calibration.py` | Move older scale data onto the calibration model |
-| `migrate_roles.py` | Backfill the role columns for pre-RBAC installations |
+| `migrate_roles.py` | Backfill the role columns for pre-RBAC installations, before the first start with Alembic |
+
+Schema changes are not scripts any more; they are Alembic revisions (see
+[Database migrations](#database-migrations)).
 
 ---
 
