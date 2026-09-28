@@ -1610,7 +1610,10 @@ def test_dataset_name_uniqueness_migration_and_creation():
             "dataset_type VARCHAR(20) NOT NULL, "
             "folder_path VARCHAR(255) NOT NULL, "
             "created_by VARCHAR NOT NULL, "
-            "require_independent_review BOOLEAN NOT NULL DEFAULT 0)"
+            "require_independent_review BOOLEAN NOT NULL DEFAULT 0, "
+            # SQLite databases no longer get new columns patched in (see init_db), so
+            # the hand-built table carries every column the model has since gained.
+            "disabled_ai_tools VARCHAR(255))"
         ))
         conn.execute(text("CREATE TABLE users (username VARCHAR PRIMARY KEY, hashed_password VARCHAR, global_role VARCHAR)"))
         conn.execute(text("CREATE TABLE dataset_members (id INTEGER PRIMARY KEY AUTOINCREMENT, dataset_id INTEGER, username VARCHAR, role VARCHAR, extra_permissions JSON, denied_permissions JSON, granted_by VARCHAR, granted_at DATETIME)"))

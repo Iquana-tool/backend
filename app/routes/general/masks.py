@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
-from app.services import image_status
+from app.services import image_status, provenance
 from app.services.database_access import masks as masks_db
 from app.services.permissions import require
 
@@ -197,11 +197,24 @@ async def add_contour(
             status_code=status.HTTP_409_CONFLICT,
             detail="Contour has no drawable pixels after hierarchy fitting.",
         )
+    _mark_if_manual(db, [added_contour])
     return {
         "success": True,
         "message": "Contour added successfully.",
         "added_contour": added_contour.model_dump(),
     }
+
+
+def _mark_if_manual(db: Session, contours: list[Contour]) -> None:
+    """Record hand-drawn objects added over REST as manual; AI output here stays unlabelled.
+
+    These routes take whatever geometry the client sends, so only the client's own
+    `added_by` says whether a person drew it. AI objects created through the annotation
+    session are recorded there, with their suggestion.
+    """
+    manual = [c for c in contours if (c.added_by or "User") in provenance.MANUAL_ADDED_BY]
+    ids = [cid for c in manual for cid in provenance.contour_ids_of(c)]
+    provenance.mark_manual(db, ids)
 
 
 @router.put("/{mask_id}/contours/multi")
@@ -238,6 +251,7 @@ async def add_contours(
 
         # 3. Add to a list for us to return
         added.append(fitted_contour)
+    _mark_if_manual(db, added)
 
     if len(added) < len(contours_to_add):
         return {

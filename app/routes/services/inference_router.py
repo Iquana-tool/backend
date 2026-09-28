@@ -36,6 +36,7 @@ from app.schemas.inference import (
     WriteMode,
 )
 from app.schemas.permissions import Permission
+from app.services.ai_tools import AiTool, ensure_tool_enabled
 from app.services.auth import get_current_user
 from app.services.celery_app import BACKEND_QUEUE, celery_app
 from app.services.inference import configuration, planning, progress, tasks
@@ -119,6 +120,7 @@ async def create_job(
 ):
     """Validate an orchestration, freeze it into a work list, and hand it to Celery."""
     ensure_permission(user, body.dataset_id, Permission.AI_BATCH_INFER)
+    ensure_tool_enabled(body.dataset_id, AiTool.BATCH_INFERENCE, db)
     if body.options.write_mode == WriteMode.REPLACE:
         # Destroying annotations is not something AI assistance alone should authorize.
         ensure_permission(user, body.dataset_id, Permission.MASK_DELETE)

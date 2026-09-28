@@ -71,6 +71,18 @@ class Contours(database):
     parent_id: Mapped[int] = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'), index=True)
     temporary = Column(Boolean, nullable=False, default=False)  # Whether a contour is temporary or not.
     added_by: Mapped[str] = Column(String(255), nullable=False)  # What produced the geometry: User, SAM2, UNET, DINO etc.
+    # How the object came to be, as a fixed vocabulary for analysis: "manual", "import",
+    # or an AI source from app.database.ai_suggestions.SuggestionSource. `added_by`
+    # keeps naming the model; this says which tool was used. NULL on objects created
+    # before the column existed.
+    origin = Column(String(32), nullable=True)
+    # The AI suggestion (ai_suggestions.id) whose outline this object currently carries;
+    # a refinement points it at the newer suggestion. Not a foreign key, as the
+    # suggestion log outlives objects.
+    suggestion_id = Column(Integer, nullable=True, index=True)
+    # Last time a person changed the outline by hand. NULL means the geometry is still
+    # exactly what the tool (or the person, for manual objects) first produced.
+    geometry_edited_at = Column(DateTime, nullable=True)
     # Who was at the keyboard. Set server-side from the authenticated session, and
     # populated even for AI-assisted contours (added_by names the model, this names
     # the human who accepted it). Separation of duties on review and the planned

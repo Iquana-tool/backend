@@ -37,7 +37,7 @@ from app.database.contours import Contours, dual_write_geometry_metrics
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
-from app.services import hierarchy_cache
+from app.services import hierarchy_cache, provenance
 from app.services.database_access.contours import (
     invalidate_metrics_for_new_contours,
     mark_contextual_stale_for_group,
@@ -68,6 +68,10 @@ def _serialize_contour(contour: Contours) -> dict:
         "temporary": bool(contour.temporary),
         "created_at": contour.created_at.isoformat() if contour.created_at else None,
         "reviewed_by": [reviewer.username for reviewer in contour.reviewed_by],
+        "origin": contour.origin,
+        "suggestion_id": contour.suggestion_id,
+        "geometry_edited_at": (contour.geometry_edited_at.isoformat()
+                               if contour.geometry_edited_at else None),
     }
 
 
@@ -147,6 +151,10 @@ def _restore_subtree(mask_id: int, snapshot: dict, db: Session) -> tuple[list[Co
             author_username=entry.get("author_username"),
             confidence_score=entry.get("confidence_score", 1.0),
             created_at=datetime.fromisoformat(created_at) if created_at else None,
+            origin=entry.get("origin"),
+            suggestion_id=entry.get("suggestion_id"),
+            geometry_edited_at=(datetime.fromisoformat(entry["geometry_edited_at"])
+                                if entry.get("geometry_edited_at") else None),
             x=entry.get("x") or [],
             y=entry.get("y") or [],
             # NOT NULL columns; dual_write_geometry_metrics recomputes them below
@@ -175,6 +183,9 @@ def _restore_subtree(mask_id: int, snapshot: dict, db: Session) -> tuple[list[Co
         from app.services.embedding_lifecycle import enqueue_embed_contours
         enqueue_embed_contours([c.id for c in restored if not c.temporary])
 
+    # A restored AI object is no longer a rejected suggestion.
+    provenance.record_restore(db, [c.id for c in restored], commit=False)
+
     # Dedupe while preserving order -- a 20-contour subtree should not report the
     # same missing label twenty times.
     return restored, list(dict.fromkeys(notes))
@@ -190,8 +201,15 @@ def _delete_subtree_root(contour_id: int, db: Session) -> bool:
     # a neighbour and the parent lost a child.
     mark_contextual_stale_for_group(db, mask_id, parent_id)
     mark_relational_stale_for_parent(db, [parent_id])
+    subtree_ids, frontier = [contour.id], [contour.id]
+    while frontier:
+        frontier = [cid for (cid,) in
+                    db.query(Contours.id).filter(Contours.parent_id.in_(frontier)).all()]
+        subtree_ids.extend(frontier)
     db.delete(contour)
     db.flush()
+    # Undoing an AI run removes its objects, which rejects those suggestions.
+    provenance.record_deletion(db, subtree_ids, commit=False)
     return True
 
 

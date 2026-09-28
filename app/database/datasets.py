@@ -26,6 +26,9 @@ class Datasets(database):
     # turn it on for multi-annotator work where "finished" has to mean "checked by
     # someone else".
     require_independent_review = Column(Boolean, nullable=False, default=False)
+    # AI tools switched off for this dataset, comma-separated (see app.services.ai_tools).
+    # Empty or NULL means every tool is available.
+    disabled_ai_tools = Column(String(255), nullable=True)
 
     owner = relationship("Users", back_populates="owned_datasets", foreign_keys=[created_by])
     memberships = relationship("DatasetMembers",

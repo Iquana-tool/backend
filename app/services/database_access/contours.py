@@ -16,7 +16,7 @@ from app.database.images import Images
 from app.database.masks import Masks
 from app.database.rejections import AnnotationRejections
 from app.database.users import Users
-from app.services import hierarchy_cache
+from app.services import hierarchy_cache, provenance
 from app.services.database_access.labels import get_label_hierarchy
 from app.services.quantification import (
     mark_appearance_stale,
@@ -239,6 +239,7 @@ async def review_contour(
         db.commit()
         # reviewed_by rides along in the hierarchy payload, so an approval changes it.
         hierarchy_cache.invalidate(contour_db.mask_id)
+        provenance.record_review(db, contour_id)
     return True
 
 
@@ -265,11 +266,19 @@ async def delete_contour(
     mark_contextual_stale_for_group(db, mask_id, parent_id)
     mark_relational_stale_for_parent(db, [parent_id])
 
+    # The CASCADE removes the descendants too; their suggestions are rejected with them.
+    subtree_ids, frontier = [contour.id], [contour.id]
+    while frontier:
+        frontier = [cid for (cid,) in
+                    db.query(Contours.id).filter(Contours.parent_id.in_(frontier)).all()]
+        subtree_ids.extend(frontier)
+
     # Delete the root contour (CASCADE will handle the rest)
     db.delete(contour)
     db.flush()
     db.commit()
     hierarchy_cache.invalidate(mask_id)
+    provenance.record_deletion(db, subtree_ids)
 
 
 async def remove_review(
@@ -365,6 +374,8 @@ async def modify_contour(
 
     db.commit()
     hierarchy_cache.invalidate(contour_db.mask_id)
+    if geometry_changed:
+        provenance.record_geometry_edit(db, contour_id)
 
     return True
 
@@ -426,6 +437,15 @@ async def replace_contour(
     # contour's geometry does not silently reassign who is credited with it.
     author_username = author_username or contour.author_username
     mask_id, parent_id = contour.mask_id, contour.parent_id
+    # Identity survives the swap along with the id: when the object was created, which
+    # tool created it and which suggestion it carries. Callers that change these (an AI
+    # refinement, a hand edit) update them after the replace.
+    kept = {
+        "created_at": contour.created_at,
+        "origin": contour.origin,
+        "suggestion_id": contour.suggestion_id,
+        "geometry_edited_at": contour.geometry_edited_at,
+    }
 
     # A replace is delete + re-insert under the SAME id — logically an in-place
     # geometry update (e.g. an outline refinement), not a real deletion. But the
@@ -447,6 +467,10 @@ async def replace_contour(
     db.query(Contours).filter_by(id=old_contour_id).delete()
     save_contour_tree(db, new_contour_model, mask_id, parent_id,
                       author_username=author_username)
+
+    (db.query(Contours).filter_by(id=old_contour_id)
+     .update({getattr(Contours, key): value for key, value in kept.items()},
+             synchronize_session=False))
 
     if rejection_ids:
         # The contour keeps its id (set above), so the FK is valid again.
