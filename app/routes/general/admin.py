@@ -24,6 +24,7 @@ from app.schemas.review import AdminUserCreate, GlobalRoleUpdate, SettingsUpdate
 from app.services import settings as settings_service
 from app.services.ai_services import ai_config
 from app.services.auth import get_password_hash
+from app.services.database_access.organizations import join_default_organization
 from app.services.permissions import ensure_global_permission, require_global
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -96,6 +97,7 @@ async def create_user(
     )
     db.add(account)
     try:
+        join_default_organization(account.username, db)
         db.commit()
     except IntegrityError:
         # Checked by letting the unique constraints answer rather than by a prior

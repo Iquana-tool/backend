@@ -209,6 +209,36 @@ toolbox release and re-pin.
   (provenance such as `updated_by`, `masks.fully_annotated_by`, the activity log) do not
   follow such a change.
 
+### Organisations and teams
+
+An **organisation** groups accounts (an institute, a lab). **Teams** sit inside one
+organisation and nest through `parent_team_id`; a department is simply a team with child
+teams. Routes live in `app/routes/general/organizations.py`, rules in
+`app/services/database_access/organizations.py`.
+
+- **Membership grants nothing by itself.** Data access still comes only from a dataset
+  role. A dataset can give a **team** a role (`PUT /datasets/{id}/teams/{team_id}`, at most
+  `curator`, only teams of the dataset's own organisation). That role then reaches the
+  team's members *and the members of every team below it*, so a grant to a department covers
+  its teams.
+- **Roles add up.** `AuthenticatedUser.from_query` merges direct and team grants: the
+  highest role is reported, and the permissions are the union of each grant's own. A denial
+  therefore only applies to the grant it is on. `memberships[id].via_teams` says where
+  access came from.
+- **Who runs what.** Platform admins (`organization.manage`) create and delete
+  organisations and choose the default one. An organisation's admins manage its members and
+  teams. A team's maintainers manage who is in that team, among the organisation's members.
+- **Organisation admins cannot read data.** The one thing they can do to a dataset is hand
+  it to a new owner in the organisation
+  (`POST /organizations/{id}/datasets/{dataset_id}/transfer_ownership`), so a dataset whose
+  owner has left is not stranded.
+- **Datasets belong to an organisation.** A new dataset lands in the one asked for, else in
+  the creator's only organisation, else in their default one; otherwise it is personal.
+  `PUT /datasets/{id}/organization` moves it, which drops its team grants.
+- **The default organisation.** New accounts join the organisation marked `is_default`.
+  Migration `0004` created one, named after the instance, and put every existing account and
+  dataset in it.
+
 ---
 
 ## Database migrations

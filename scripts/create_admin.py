@@ -29,6 +29,7 @@ from app.database import get_context_session, init_db
 from app.database.users import Users
 from app.schemas.permissions import GlobalRole
 from app.services.auth import get_password_hash
+from app.services.database_access.organizations import join_default_organization
 
 
 def main() -> int:
@@ -54,6 +55,7 @@ def main() -> int:
                 global_role=GlobalRole.ADMIN.value,
                 is_active=True,
             ))
+            join_default_organization(args.username, db)
             db.commit()
             print(f"Created {args.username!r} as a platform admin.")
             return 0

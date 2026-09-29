@@ -168,6 +168,26 @@ def test_deleting_a_user_never_deletes_their_datasets(pg_engine):
         assert connection.execute(text("SELECT count(*) FROM datasets")).scalar() == 1
 
 
+def test_existing_accounts_and_datasets_land_in_one_default_organisation(pg_engine):
+    with pg_engine.begin() as connection:
+        command.upgrade(alembic_config(connection), "0003")
+        _seed_alice_with_a_dataset(connection)
+        connection.execute(text(
+            "INSERT INTO users (username, hashed_password, global_role, is_active) "
+            "VALUES ('bob', 'x', 'member', true)"))
+
+    init_db(target_engine=pg_engine)
+
+    with pg_engine.connect() as connection:
+        organization_id, name = connection.execute(text(
+            "SELECT id, name FROM organizations WHERE is_default")).one()
+        assert name  # named after the instance, or generically
+        assert connection.execute(text(
+            "SELECT username, role FROM organization_members ORDER BY username")).all() == [
+            ("alice", "admin"), ("bob", "member")]
+        assert connection.execute(text("SELECT organization_id FROM datasets")).scalar() == organization_id
+
+
 def test_refuses_a_database_that_needs_the_roles_migration(pg_engine):
     with pg_engine.begin() as connection:
         connection.execute(text(

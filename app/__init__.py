@@ -22,6 +22,7 @@ from app.routes.general.labels import router as label_router
 from app.routes.general.masks import router as mask_router
 from app.routes.general.members import invite_router, router as member_router
 from app.routes.general.model_favorites import router as model_favorites_router
+from app.routes.general.organizations import router as organizations_router
 from app.routes.general.reviews import router as review_router
 from app.routes.general.pixel_scale import router as scale_router
 from app.routes.general.status import router as status_router
@@ -142,6 +143,7 @@ def create_app():
     # Shares the /datasets prefix with the dataset router; the paths do not overlap.
     app.include_router(member_router)
     app.include_router(invite_router)
+    app.include_router(organizations_router)
     app.include_router(review_router)
     app.include_router(annotation_queue_router)
     app.include_router(image_router)

@@ -28,6 +28,11 @@ class Datasets(database):
     # turn it on for multi-annotator work where "finished" has to mean "checked by
     # someone else".
     require_independent_review = Column(Boolean, nullable=False, default=False)
+    # The organisation the dataset belongs to; NULL for a personal dataset. Decides
+    # which teams it can be shared with and whose admins can reassign its owner.
+    # RESTRICT: an organisation is only deleted once its datasets have moved.
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="RESTRICT"),
+                             nullable=True, index=True)
 
     owner = relationship("Users", back_populates="owned_datasets", foreign_keys=[created_by])
     memberships = relationship("DatasetMembers",

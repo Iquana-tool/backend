@@ -11,6 +11,7 @@ from app.database.users import Users, utc_now
 from app.schemas.account import MAX_PREFERENCES_BYTES, PasswordChange, ProfileUpdate
 from app.schemas.auth_user import AuthenticatedUser
 from app.services.auth import create_access_token, get_current_user, verify_password, get_password_hash
+from app.services.database_access.organizations import join_default_organization
 from app.services.instance import get_instance_config
 from app.services.activity_log.emit import emit_navigation
 
@@ -42,6 +43,7 @@ def register_user(name, password, db: Session = Depends(get_session)):
     # Create new user
     new_user = Users(username=name, hashed_password=get_password_hash(password))
     db.add(new_user)
+    join_default_organization(new_user.username, db)
     db.commit()
     db.refresh(new_user)
     return {

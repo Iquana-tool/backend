@@ -1148,6 +1148,7 @@ def import_iquana_dataset_archive(
     override_name: str | None,
     importer_username: str,
     content_length: int | None = None,
+    organization_id: int | None = None,
 ) -> dict[str, Any]:
     """Import a dataset from an IQUANA archive ZIP (format v1).
 
@@ -1162,6 +1163,7 @@ def import_iquana_dataset_archive(
         override_name: Optional override name for the imported dataset.
         importer_username: Username of the authenticated importing user (dataset owner).
         content_length: Optional claimed compressed size in bytes.
+        organization_id: Organisation the imported dataset belongs to, or None.
 
     Returns:
         dict[str, Any]: Result payload with success status, new dataset ID/name,
@@ -1740,6 +1742,7 @@ def import_iquana_dataset_archive(
                 dataset_type="image",
                 created_by=importer_username,
                 require_independent_review=config_doc.dataset.require_independent_review if config_doc else False,
+                organization_id=organization_id,
             )
             db.add(new_dataset)
             db.flush()
