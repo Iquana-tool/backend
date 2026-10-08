@@ -37,6 +37,7 @@ from app.routes.websockets.image_annotation_session import router as image_annot
 from app.services.activity_log.config import get_config as get_activity_log_config
 from app.services.activity_log.middleware import ActivityLogMiddleware
 from app.services.activity_log.recorder import recorder as activity_recorder
+from app.services.settings import encrypt_stored_secrets
 from config import *
 
 logger = getLogger(__name__)
@@ -70,6 +71,8 @@ def create_app():
     os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 
     init_db()
+    # Secrets saved before they were encrypted at rest; a no-op once none are left.
+    encrypt_stored_secrets()
 
     root_path = os.getenv("FASTAPI_ROOT_PATH", "").strip()
 

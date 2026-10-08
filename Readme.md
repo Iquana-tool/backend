@@ -149,6 +149,8 @@ list and `config.py` the defaults. The ones that matter most:
 | `AI_SERVICE_URL` | `http://localhost:8004` | The unified ai-service. Per-task URLs are derived as `<AI_SERVICE_URL>/<task>` |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | CORS allow-list |
 | `SECRET_KEY` | — | JWT signing key. **Set this.** |
+| `IQUANA_SECRETS_KEY` | — | Fernet key(s) encrypting the API keys stored in the database; comma-separated to rotate. Unset: a key file is used |
+| `IQUANA_SECRETS_KEY_FILE` | `data/secrets.key` | That key file, generated on first use. **Back it up apart from the database** |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `480` | There is no refresh flow, so this is the whole session |
 | `INSTANCE_NAME` / `_ORG` / `_CONTACT` / `_NOTICE` | empty | Shown on the sign-in page, served from `GET /instance/` |
 | `INSTANCE_ALLOW_REGISTRATION` | `false` | Self-registration, enforced by the API rather than merely hidden in the UI |
@@ -208,6 +210,30 @@ toolbox release and re-pin.
   a username can be changed in place. Columns that hold a username *without* a foreign key
   (provenance such as `updated_by`, `masks.fully_annotated_by`, the activity log) do not
   follow such a change.
+
+### API keys
+
+The label-space assistant calls an LLM with the first key that applies:
+
+1. the caller's **personal** key (`PUT /auth/credentials/llm`), unless the organisation the
+   work belongs to has switched personal keys off (`allow_personal_keys`), because the key
+   decides where prompts go;
+2. that **organisation's** key (`PUT /organizations/{id}/credentials/llm`, its admins);
+3. the **instance's** key (Admin -> Settings, defaulting to `LABEL_SPACE_LLM_API_KEY`).
+
+The organisation is the dataset's when the work is for one (`dataset_id`); otherwise it is the
+organisation a new dataset of the caller's would land in. `GET /label_space/config` reports
+which key a caller would use. Each key is stored together with its model id, since a key only
+works for the provider that issued it. There are no team keys: someone in several teams has
+no single team to bill.
+
+Every stored key is **encrypted** with Fernet (`app/services/secrets.py`), including the
+instance's own secrets in `instance_settings`. Any left in plaintext from before are rewritten
+at startup. The encryption key lives outside the database (`IQUANA_SECRETS_KEY`, else
+`data/secrets.key`), so a database dump alone leaks no API keys. Keys are write-only: the API
+shows the model and the last four characters, never the key. Changing a key's base URL needs
+the key to be entered again, since the new URL would otherwise receive the stored key. **If the
+encryption key is lost, the stored API keys read as unset** and have to be entered again.
 
 ### Organisations and teams
 

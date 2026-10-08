@@ -10,6 +10,8 @@ from app.database import get_session
 from app.database.users import Users, utc_now
 from app.schemas.account import MAX_PREFERENCES_BYTES, PasswordChange, ProfileUpdate
 from app.schemas.auth_user import AuthenticatedUser
+from app.schemas.credentials import CredentialKind, LlmCredentialSet
+from app.services import credentials as credentials_service
 from app.services.auth import create_access_token, get_current_user, verify_password, get_password_hash
 from app.services.database_access.organizations import join_default_organization
 from app.services.instance import get_instance_config
@@ -145,3 +147,34 @@ def change_password(body: PasswordChange,
         "access_token": create_access_token(data={"sub": account.username}),
         "token_type": "bearer",
     }
+
+
+# -- Personal API keys ---------------------------------------------------------------
+
+@router.get("/credentials")
+def list_personal_credentials(current_user: AuthenticatedUser = Depends(get_current_user),
+                              db: Session = Depends(get_session)):
+    """One's own API keys: which model, the last characters, when last used. Never the key."""
+    return {"success": True,
+            "credentials": credentials_service.list_credentials(db, username=current_user.username)}
+
+
+@router.put("/credentials/llm")
+def set_personal_llm_key(body: LlmCredentialSet,
+                         current_user: AuthenticatedUser = Depends(get_current_user),
+                         db: Session = Depends(get_session)):
+    """Set one's own LLM key, used ahead of the organisation's and the instance's.
+
+    Not used for work in an organisation that has switched personal keys off.
+    """
+    row = credentials_service.set_llm_credential(db, body, current_user.username,
+                                                 username=current_user.username)
+    return {"success": True, "credential": credentials_service.describe(row)}
+
+
+@router.delete("/credentials/llm")
+def delete_personal_llm_key(current_user: AuthenticatedUser = Depends(get_current_user),
+                            db: Session = Depends(get_session)):
+    if not credentials_service.delete_credential(db, CredentialKind.LLM, username=current_user.username):
+        raise HTTPException(status_code=404, detail="You have no personal LLM key.")
+    return {"success": True, "message": "Personal LLM key removed."}

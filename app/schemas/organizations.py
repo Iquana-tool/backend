@@ -35,6 +35,8 @@ class OrganizationUpdate(BaseModel):
 
     name: str | None = Field(None, min_length=1, max_length=100)
     is_default: bool | None = None
+    allow_personal_keys: bool | None = Field(
+        None, description="Whether members' personal API keys are used for the organisation's work.")
 
     _strip_name = field_validator("name", mode="before")(_strip)
 

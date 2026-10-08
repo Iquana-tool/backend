@@ -7,16 +7,19 @@ Who may do what:
 * an organisation's admins run it: its name, its members, its teams, and handing
   one of its datasets to a new owner when the owner has left;
 * a team's maintainers decide who is in that team;
-* any member of an organisation can see its members and teams.
+* any member of an organisation can see its members and teams;
+* an organisation's admins set its shared API keys, and whether members' personal
+  keys may be used for its work.
 
 None of these roles reaches into a dataset. Access to data comes only from a
 dataset role, held directly or through a team (see ``/datasets/{id}/teams``).
 """
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.schemas.auth_user import AuthenticatedUser
+from app.schemas.credentials import CredentialKind, LlmCredentialSet
 from app.schemas.organizations import (
     OrganizationCreate,
     OrganizationMemberSet,
@@ -26,6 +29,7 @@ from app.schemas.organizations import (
     TeamUpdate,
 )
 from app.schemas.permissions import Permission
+from app.services import credentials as credentials_service
 from app.services.auth import get_current_user
 from app.services.database_access import organizations as organizations_db
 from app.services.permissions import require_global
@@ -56,11 +60,12 @@ async def update_organization(organization_id: int,
                               body: OrganizationUpdate,
                               db: Session = Depends(get_session),
                               user: AuthenticatedUser = Depends(get_current_user)):
-    """Rename an organisation, or make it the default that new accounts join."""
+    """Rename an organisation, make it the default, or switch members' personal keys off."""
     organization = organizations_db.get_organization(organization_id, db)
     organizations_db.update_organization(organization, body, user, db)
     return {"success": True, "organization": {"id": organization.id, "name": organization.name,
-                                              "is_default": bool(organization.is_default)}}
+                                              "is_default": bool(organization.is_default),
+                                              "allow_personal_keys": bool(organization.allow_personal_keys)}}
 
 
 @router.delete("/organizations/{organization_id}")
@@ -215,3 +220,39 @@ async def reassign_dataset_owner(organization_id: int,
     organizations_db.ensure_organization_admin(user, organization_id)
     organizations_db.reassign_owner(organization_id, dataset_id, new_owner, db)
     return {"success": True, "message": f"{new_owner} now owns dataset {dataset_id}."}
+
+
+# -- The organisation's API keys -------------------------------------------------
+
+@router.get("/organizations/{organization_id}/credentials")
+async def list_organization_credentials(organization_id: int,
+                                        db: Session = Depends(get_session),
+                                        user: AuthenticatedUser = Depends(get_current_user)):
+    """The organisation's API keys: which model, the last characters. Never the key."""
+    organizations_db.ensure_organization_admin(user, organization_id)
+    organizations_db.get_organization(organization_id, db)
+    return {"success": True,
+            "credentials": credentials_service.list_credentials(db, organization_id=organization_id)}
+
+
+@router.put("/organizations/{organization_id}/credentials/llm")
+async def set_organization_llm_key(organization_id: int,
+                                   body: LlmCredentialSet,
+                                   db: Session = Depends(get_session),
+                                   user: AuthenticatedUser = Depends(get_current_user)):
+    """Set the LLM key used for the organisation's work when no personal key applies."""
+    organizations_db.ensure_organization_admin(user, organization_id)
+    organizations_db.get_organization(organization_id, db)
+    row = credentials_service.set_llm_credential(db, body, user.username, organization_id=organization_id)
+    return {"success": True, "credential": credentials_service.describe(row)}
+
+
+@router.delete("/organizations/{organization_id}/credentials/llm")
+async def delete_organization_llm_key(organization_id: int,
+                                      db: Session = Depends(get_session),
+                                      user: AuthenticatedUser = Depends(get_current_user)):
+    organizations_db.ensure_organization_admin(user, organization_id)
+    if not credentials_service.delete_credential(db, CredentialKind.LLM, organization_id=organization_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="The organisation has no LLM key.")
+    return {"success": True, "message": "Organisation LLM key removed."}

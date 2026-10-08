@@ -23,6 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     text,
+    true,
 )
 from sqlalchemy.orm import Session
 
@@ -42,6 +43,10 @@ class Organizations(database):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100), nullable=False, unique=True)
     is_default = Column(Boolean, nullable=False, default=False, server_default=false())
+    # Whether members' personal API keys are used for work in this organisation. Off
+    # when the organisation needs its data to reach only a provider it chose -- the
+    # key decides where prompts are sent.
+    allow_personal_keys = Column(Boolean, nullable=False, default=True, server_default=true())
     created_at = Column(DateTime, nullable=False, default=utc_now)
 
 

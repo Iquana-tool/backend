@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_context_session
 from app.database.instance_settings import InstanceSettings
+from app.services import secrets
 
 logger = getLogger(__name__)
 
@@ -216,9 +217,15 @@ def _env_default(spec: SettingSpec) -> str | None:
     return _ENV_SNAPSHOT[spec.env_var]
 
 
+def _is_secret(key: str) -> bool:
+    spec = BY_KEY.get(key)
+    return spec is not None and spec.kind == KIND_SECRET
+
+
 def _overrides(db: Session) -> dict[str, str | None]:
-    """Every stored override, as ``{key: value}``."""
-    return {row.key: row.value for row in db.query(InstanceSettings).all()}
+    """Every stored override, as ``{key: value}``, with secrets decrypted."""
+    return {row.key: secrets.decrypt(row.value) if _is_secret(row.key) else row.value
+            for row in db.query(InstanceSettings).all()}
 
 
 def _resolve(spec: SettingSpec, overrides: dict[str, str | None]) -> str | None:
@@ -260,13 +267,6 @@ def get_many(*keys: str, db: Session | None = None) -> dict[str, str | None]:
         return {key: _resolve(BY_KEY[key], overrides) for key in keys}
 
 
-def _mask(value: str | None) -> str | None:
-    """A hint at a secret: enough to tell two keys apart, not enough to use one."""
-    if not value:
-        return None
-    return f"…{value[-4:]}" if len(value) > 4 else "…"
-
-
 def describe(db: Session) -> list[dict]:
     """Describe every setting for the admin page.
 
@@ -292,7 +292,7 @@ def describe(db: Session) -> list[dict]:
             # be edited rather than retyped.
             "value": None if spec.kind == KIND_SECRET else (value or ""),
             "is_set": bool(value),
-            "hint": _mask(value) if spec.kind == KIND_SECRET else None,
+            "hint": secrets.hint(value) if spec.kind == KIND_SECRET else None,
             # Lets the page say "overriding the environment" rather than leaving
             # an operator to wonder why .env no longer matches what they see.
             "overridden": spec.key in overrides,
@@ -334,7 +334,8 @@ def apply(db: Session, updates: dict[str, str | None], username: str) -> list[Se
         if row is None:
             row = InstanceSettings(key=spec.key)
             db.add(row)
-        row.value = value
+        # Encrypted at rest; see app.services.secrets.
+        row.value = secrets.encrypt(value) if spec.kind == KIND_SECRET and value else value
         row.updated_by = username
         row.updated_at = datetime.now()
 
@@ -370,3 +371,21 @@ def clear(db: Session, key: str, username: str) -> SettingSpec:
     logger.info("Setting %r cleared by %r; falling back to %s.",
                 spec.key, username, spec.env_var)
     return spec
+
+
+def encrypt_stored_secrets() -> int:
+    """Encrypt stored secrets still held as plaintext; returns how many were rewritten.
+
+    Run when the backend starts. Secrets saved before encryption existed are read
+    fine as they are, but should not stay readable in the database.
+    """
+    rewritten = 0
+    with get_context_session() as db:
+        for row in db.query(InstanceSettings).all():
+            if _is_secret(row.key) and row.value and not secrets.is_encrypted(row.value):
+                row.value = secrets.encrypt(row.value)
+                rewritten += 1
+        db.commit()
+    if rewritten:
+        logger.info("Encrypted %d stored secret setting(s) that were still plaintext.", rewritten)
+    return rewritten

@@ -70,6 +70,7 @@ def import_models():
         annotation_queues,
         contour_metrics,
         contours,
+        credentials,
         dataset_calibration_defaults,
         dataset_members,
         dataset_metadata_keys,

@@ -95,6 +95,7 @@ def list_organizations(user: AuthenticatedUser, db: Session) -> list[dict]:
             "id": organization.id,
             "name": organization.name,
             "is_default": bool(organization.is_default),
+            "allow_personal_keys": bool(organization.allow_personal_keys),
             "created_at": _iso(organization.created_at),
             "my_role": user.organizations[organization.id].value
             if organization.id in user.organizations else None,
@@ -135,6 +136,9 @@ def update_organization(organization: Organizations, body: OrganizationUpdate,
     if "name" in sent and body.name is not None:
         ensure_organization_admin(user, organization.id)
         organization.name = body.name
+    if "allow_personal_keys" in sent and body.allow_personal_keys is not None:
+        ensure_organization_admin(user, organization.id)
+        organization.allow_personal_keys = body.allow_personal_keys
     if "is_default" in sent and body.is_default is not None:
         if not manages_organizations(user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
