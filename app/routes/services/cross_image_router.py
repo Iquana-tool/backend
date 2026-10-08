@@ -21,6 +21,7 @@ from app.schemas.permissions import Permission
 from app.services.auth import get_current_user
 from app.services.cross_image_orchestration import build_cross_image_request
 from app.services.exemplar_retrieval import strategy_options
+from app.services.ai_tools import AiTool, ensure_tool_enabled
 from app.services.permissions import ensure_permission
 
 logger = getLogger(__name__)
@@ -57,6 +58,7 @@ async def suggest(
         from fastapi import HTTPException, status
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Target image {body.target_image_id} not found.")
     ensure_permission(user, dataset_id, Permission.AI_INTERACTIVE)
+    ensure_tool_enabled(dataset_id, AiTool.CROSS_IMAGE, db)
 
     request, matches = build_cross_image_request(
         db,

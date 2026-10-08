@@ -262,7 +262,7 @@ teams. Routes live in `app/routes/general/organizations.py`, rules in
   the creator's only organisation, else in their default one; otherwise it is personal.
   `PUT /datasets/{id}/organization` moves it, which drops its team grants.
 - **The default organisation.** New accounts join the organisation marked `is_default`.
-  Migration `0004` created one, named after the instance, and put every existing account and
+  Migration `0005` created one, named after the instance, and put every existing account and
   dataset in it.
 
 ---

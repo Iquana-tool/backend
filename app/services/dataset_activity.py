@@ -62,8 +62,15 @@ def get_dataset_activity(dataset_id: int, since: datetime | None, db: Session) -
         .where(Images.dataset_id == dataset_id)
     )
 
-    # Annotated: surviving, non-temporary contours authored by the user.
-    ai_flag = case((func.coalesce(Contours.added_by, "").in_(MANUAL_SOURCES), 0), else_=1)
+    # Annotated: surviving, non-temporary contours authored by the user. "With AI" comes
+    # from the recorded origin; objects created before origins were recorded fall back
+    # to `added_by`, which names the model for most (but not all) AI tools.
+    ai_flag = case(
+        (Contours.origin.in_(("manual", "import")), 0),
+        (Contours.origin.is_not(None), 1),
+        (func.coalesce(Contours.added_by, "").in_(MANUAL_SOURCES), 0),
+        else_=1,
+    )
     for username, total, ai, last in db.execute(
         select(Contours.author_username, func.count(), func.sum(ai_flag), func.max(Contours.created_at))
         .where(Contours.mask_id.in_(dataset_masks), Contours.temporary.is_(False),

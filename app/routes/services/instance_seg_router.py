@@ -19,6 +19,7 @@ from app.database.images import Images
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
 from app.services.ai_services.instance_segmentation import InstanceSegmentationService
+from app.services.ai_tools import AiTool, ensure_tool_enabled
 from app.services.auth import get_current_user
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import labels as labels_db
@@ -228,6 +229,7 @@ async def start_training(
     # The dataset id only exists after the body is parsed, so this is the
     # imperative form of the require() dependency used elsewhere.
     ensure_permission(user, body.dataset_id, Permission.AI_TRAIN)
+    ensure_tool_enabled(body.dataset_id, AiTool.TRAINING, db)
 
     dataset = await datasets_db.get_dataset(body.dataset_id, db=db)
     if not dataset:

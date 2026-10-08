@@ -128,7 +128,7 @@ def test_adopts_a_database_from_before_alembic(pg_engine, through):
 def _seed_alice_with_a_dataset(connection):
     """An account that created a dataset and granted itself on it -- rows in several
     tables that point back at the username. The new users columns are left to their
-    server defaults, as a row written before 0003 would have them."""
+    server defaults, as a row written before 0004 would have them."""
     connection.execute(text(
         "INSERT INTO users (username, hashed_password, global_role, is_active) "
         "VALUES ('alice', 'x', 'admin', true)"))
@@ -170,7 +170,7 @@ def test_deleting_a_user_never_deletes_their_datasets(pg_engine):
 
 def test_existing_accounts_and_datasets_land_in_one_default_organisation(pg_engine):
     with pg_engine.begin() as connection:
-        command.upgrade(alembic_config(connection), "0003")
+        command.upgrade(alembic_config(connection), "0004")
         _seed_alice_with_a_dataset(connection)
         connection.execute(text(
             "INSERT INTO users (username, hashed_password, global_role, is_active) "

@@ -20,8 +20,8 @@ Columns that hold a username without a foreign key (``masks.fully_annotated_by``
 not follow a rename. That is deliberate for study data and provenance, and has to
 be handled by whatever performs the rename.
 
-Revision ID: 0003
-Revises: 0002
+Revision ID: 0004
+Revises: 0003
 Create Date: 2026-09-25 14:47:29.525429
 
 """
@@ -31,8 +31,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0003"
-down_revision: Union[str, Sequence[str], None] = "0002"
+revision: str = "0004"
+down_revision: Union[str, Sequence[str], None] = "0003"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
