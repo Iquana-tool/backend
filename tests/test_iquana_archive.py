@@ -1600,7 +1600,9 @@ def test_dataset_name_uniqueness_migration_and_creation():
     test_db_file = os.path.join(tmp, "test_legacy_dup.db")
     test_engine = create_engine(f"sqlite:///{test_db_file}")
 
-    # 1. Create a legacy table without UNIQUE constraint
+    # 1. Create a legacy table without UNIQUE constraint. It carries the columns
+    # added since (organization_id): a SQLite database is never ALTERed to catch up
+    # with the models, so the dedupe is exercised on today's shape of the table.
     with test_engine.begin() as conn:
         conn.execute(text(
             "CREATE TABLE datasets ("
@@ -1613,6 +1615,7 @@ def test_dataset_name_uniqueness_migration_and_creation():
             "require_independent_review BOOLEAN NOT NULL DEFAULT 0, "
             # SQLite databases no longer get new columns patched in (see init_db), so
             # the hand-built table carries every column the model has since gained.
+            "organization_id INTEGER, "
             "disabled_ai_tools VARCHAR(255))"
         ))
         conn.execute(text("CREATE TABLE users (username VARCHAR PRIMARY KEY, hashed_password VARCHAR, global_role VARCHAR)"))

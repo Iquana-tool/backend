@@ -24,7 +24,7 @@ from app.database import get_session
 from app.database.user_events import UserEvents
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
-from app.services.auth import _username_from_token, load_user
+from app.services.auth import user_for_token
 from app.services.permissions import require_global
 from app.services.activity_log import config as activity_log_config
 from app.services.activity_log.export import build_query, stream_csv, stream_jsonl
@@ -50,10 +50,7 @@ async def optional_user(request: Request,
     header = request.headers.get("authorization", "")
     if not header.lower().startswith("bearer "):
         return None
-    username = _username_from_token(header[len("bearer "):].strip())
-    if username is None:
-        return None
-    return load_user(username, db)
+    return user_for_token(header[len("bearer "):].strip(), db)
 
 
 @router.get("/config")

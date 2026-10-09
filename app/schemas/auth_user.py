@@ -12,12 +12,20 @@ from typing import Iterable
 
 from iquana_toolbox.schemas.user import User
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import object_session
 
+# Imported here rather than inside from_query so the organisation tables are on the
+# metadata wherever the caller is built -- test fixtures create their schema from
+# whatever models happen to be imported.
+from app.database.organizations import OrganizationMembers, team_grants_for
 from app.schemas.permissions import (
+    DATASET_ROLE_ORDER,
     DatasetRole,
     GLOBAL_PERMISSIONS,
     GlobalRole,
+    OrganizationRole,
     Permission,
+    TEAM_GRANT_MAX_ROLE,
     permissions_for_dataset_role,
     permissions_for_global_role,
 )
@@ -55,6 +63,35 @@ class MembershipInfo(BaseModel):
 
     role: DatasetRole
     permissions: frozenset[Permission] = Field(default_factory=frozenset)
+    via_teams: list[int] = Field(
+        default_factory=list,
+        description="Teams this access comes through; empty when it is a direct grant only.",
+    )
+
+
+def _with_team_grant(current: MembershipInfo | None, grant) -> MembershipInfo:
+    """Fold one team grant into what the caller already holds on that dataset.
+
+    Grants add up. The higher role is the one reported, and the permissions are the
+    union of each grant's own (role bundle, plus its extras, minus its denials) -- so
+    a denial on one grant does not take away what another grant gives.
+    """
+    try:
+        role = DatasetRole(grant.role)
+    except ValueError:
+        logger.warning("Unknown dataset role %r on team %s's grant; treating as viewer.",
+                       grant.role, grant.team_id)
+        role = DatasetRole.VIEWER
+    if DATASET_ROLE_ORDER[role] > DATASET_ROLE_ORDER[TEAM_GRANT_MAX_ROLE]:
+        role = TEAM_GRANT_MAX_ROLE
+    permissions = effective_permissions(role, grant.extra_permissions, grant.denied_permissions)
+    if current is None:
+        return MembershipInfo(role=role, permissions=permissions, via_teams=[grant.team_id])
+    return MembershipInfo(
+        role=max(role, current.role, key=DATASET_ROLE_ORDER.__getitem__),
+        permissions=current.permissions | permissions,
+        via_teams=[*current.via_teams, grant.team_id],
+    )
 
 
 class AuthenticatedUser(User):
@@ -71,10 +108,19 @@ class AuthenticatedUser(User):
         default_factory=dict,
         description="Dataset id -> the caller's role and permissions on it.",
     )
+    display_name: str | None = Field(None, description="How to show the person; the username when unset.")
+    email: str | None = Field(None, description="Contact address, lower-cased.")
+    must_change_password: bool = Field(
+        False, description="The password was chosen by an admin and should be replaced.")
+    preferences: dict = Field(default_factory=dict, description="UI choices kept per account.")
+    organizations: dict[int, OrganizationRole] = Field(
+        default_factory=dict,
+        description="Organisation id -> the caller's role in it. Grants nothing on datasets.",
+    )
 
     @classmethod
     def from_query(cls, user_db) -> "AuthenticatedUser":
-        """Build the caller from a `Users` row and its membership rows."""
+        """Build the caller from a `Users` row, its membership rows and its teams' grants."""
         memberships: dict[int, MembershipInfo] = {}
         for membership in user_db.memberships:
             try:
@@ -99,6 +145,20 @@ class AuthenticatedUser(User):
                     permissions=permissions_for_dataset_role(DatasetRole.OWNER),
                 )
 
+        organizations: dict[int, OrganizationRole] = {}
+        db = object_session(user_db)
+        if db is not None:
+            for grant in team_grants_for(user_db.username, db):
+                memberships[grant.dataset_id] = _with_team_grant(
+                    memberships.get(grant.dataset_id), grant)
+            for organization_id, role in (db.query(OrganizationMembers.organization_id,
+                                                   OrganizationMembers.role)
+                                          .filter_by(username=user_db.username)):
+                try:
+                    organizations[organization_id] = OrganizationRole(role)
+                except ValueError:
+                    organizations[organization_id] = OrganizationRole.MEMBER
+
         try:
             global_role = GlobalRole(user_db.global_role)
         except ValueError:
@@ -117,6 +177,11 @@ class AuthenticatedUser(User):
             owned_datasets=owned,
             accessible_datasets=accessible,
             memberships=memberships,
+            display_name=getattr(user_db, "display_name", None),
+            email=getattr(user_db, "email", None),
+            must_change_password=bool(getattr(user_db, "must_change_password", False)),
+            preferences=getattr(user_db, "preferences", None) or {},
+            organizations=organizations,
         )
 
     def role_for(self, dataset_id: int) -> DatasetRole | None:

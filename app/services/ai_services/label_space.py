@@ -6,14 +6,14 @@ selected by the ``LABEL_SPACE_LLM_MODEL`` prefix, e.g. ``anthropic/...``,
 the model output into a validated :class:`LabelSpaceDraft` and retries on
 schema-validation errors.
 
-Configuration is read through :mod:`app.services.settings` on every call, so an
-admin rotating the key from the admin page takes effect on the next generation
-rather than on the next restart. The environment variables below still supply the
-defaults (see ``config.py`` / ``.env``):
+Which key and model a call uses is decided per caller by
+:func:`app.services.credentials.resolve_llm` -- a personal key, the organisation's,
+or the instance's -- and handed in as an :class:`LlmConfig`. It is resolved on
+every call, so a key rotated anywhere takes effect on the next generation. The
+instance's key still defaults to the environment (see ``config.py`` / ``.env``):
 
     LABEL_SPACE_LLM_MODEL     LiteLLM model id, default ``anthropic/claude-opus-4-8``.
-    LABEL_SPACE_LLM_API_KEY   API key for the matching provider. Generation is
-                              disabled until this is set.
+    LABEL_SPACE_LLM_API_KEY   API key for the matching provider.
     LABEL_SPACE_LLM_API_BASE  Optional base URL (self-hosted / Azure / Ollama).
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ from logging import getLogger
 from fastapi import HTTPException
 
 from app.schemas.label_space import DraftLabel, LabelSpaceDraft
-from app.services import settings as settings_service
+from app.services.credentials import LlmConfig
 
 logger = getLogger(__name__)
 
@@ -65,14 +65,6 @@ def _depth(labels: list[DraftLabel], current: int = 1) -> int:
 class LabelSpaceService:
     """Generates and refines draft label hierarchies via an LLM."""
 
-    @staticmethod
-    def is_enabled() -> bool:
-        return bool(settings_service.get("llm_api_key"))
-
-    @staticmethod
-    def model() -> str:
-        return settings_service.get("llm_model") or ""
-
     def _client(self):
         # Imported lazily so the rest of the app runs without the optional deps installed.
         try:
@@ -85,26 +77,19 @@ class LabelSpaceService:
             ) from exc
         return instructor.from_litellm(litellm.completion)
 
-    def _create(self, messages: list[dict], model: str | None, max_depth: int, max_labels: int) -> LabelSpaceDraft:
-        if not self.is_enabled():
-            raise HTTPException(
-                status_code=503,
-                detail="Label-space generation is not configured. An admin can set the LLM API key under Admin -> Settings.",
-            )
+    def _create(self, config: LlmConfig, messages: list[dict], model: str | None,
+                max_depth: int, max_labels: int) -> LabelSpaceDraft:
         client = self._client()
-        # One read for the whole call, so a rotation landing mid-request cannot
-        # pair a new key with the old model id.
-        config = settings_service.get_many("llm_model", "llm_api_key", "llm_api_base")
         kwargs = dict(
-            model=model or config["llm_model"],
+            model=model or config.model,
             response_model=LabelSpaceDraft,
             messages=messages,
-            api_key=config["llm_api_key"],
+            api_key=config.api_key,
             max_retries=2,
             temperature=0.2,
         )
-        if config["llm_api_base"]:
-            kwargs["api_base"] = config["llm_api_base"]
+        if config.api_base:
+            kwargs["api_base"] = config.api_base
         try:
             draft: LabelSpaceDraft = client.chat.completions.create(**kwargs)
         except HTTPException:
@@ -149,7 +134,8 @@ class LabelSpaceService:
             )
         return draft
 
-    def generate(self, description: str, max_depth: int, max_labels: int, model: str | None = None) -> LabelSpaceDraft:
+    def generate(self, config: LlmConfig, description: str, max_depth: int, max_labels: int,
+                 model: str | None = None) -> LabelSpaceDraft:
         user = (
             f"Description of what to segment:\n{description}\n\n"
             f"Constraints: maximum depth {max_depth}, maximum {max_labels} labels total."
@@ -158,10 +144,11 @@ class LabelSpaceService:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ]
-        return self._create(messages, model, max_depth, max_labels)
+        return self._create(config, messages, model, max_depth, max_labels)
 
     def refine(
         self,
+        config: LlmConfig,
         current_draft: LabelSpaceDraft,
         message: str,
         description: str | None,
@@ -181,4 +168,4 @@ class LabelSpaceService:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ]
-        return self._create(messages, model, max_depth, max_labels)
+        return self._create(config, messages, model, max_depth, max_labels)

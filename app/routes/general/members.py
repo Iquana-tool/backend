@@ -1,4 +1,4 @@
-"""Dataset collaborator management: roles, invite links and ownership transfer."""
+"""Dataset collaborator management: roles, team grants, invite links and ownership."""
 from logging import getLogger
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,9 +12,11 @@ from app.schemas.permissions import (
     GLOBAL_PERMISSIONS,
     Permission,
 )
+from app.schemas.organizations import DatasetOrganizationSet, TeamGrant
 from app.schemas.review import InviteCreate, MemberGrant
 from app.services.auth import get_current_user
 from app.services.database_access import members as members_db
+from app.services.database_access import organizations as organizations_db
 from app.services.permissions import require
 
 router = APIRouter(prefix="/datasets", tags=["members"])
@@ -110,6 +112,72 @@ async def transfer_dataset_ownership(
     return {
         "success": True,
         "message": f"{new_owner} now owns dataset {dataset_id}. You are a curator on it.",
+    }
+
+
+# -- Teams and the dataset's organisation ----------------------------------
+
+@router.get("/{dataset_id}/teams")
+async def list_team_grants(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.MEMBER_LIST)),
+):
+    """List the teams with a role on this dataset.
+
+    Each grant reaches the team's members and the members of every team below it.
+    """
+    return {"success": True, "teams": organizations_db.list_team_grants(dataset_id, db)}
+
+
+@router.put("/{dataset_id}/teams/{team_id}")
+async def grant_team_role(
+        dataset_id: int,
+        team_id: int,
+        body: TeamGrant,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.MEMBER_GRANT)),
+):
+    """Give a team of the dataset's organisation a role on it (at most curator)."""
+    grant = organizations_db.grant_team(dataset_id, team_id, body, granted_by=user.username, db=db)
+    return {
+        "success": True,
+        "message": f"Team {team_id} is now {grant.role} on dataset {dataset_id}.",
+        "team": {"team_id": grant.team_id, "role": grant.role},
+    }
+
+
+@router.delete("/{dataset_id}/teams/{team_id}")
+async def revoke_team_role(
+        dataset_id: int,
+        team_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.MEMBER_REVOKE)),
+):
+    """Take a team's role away. Members who also hold a direct role keep that."""
+    if not organizations_db.revoke_team(dataset_id, team_id, db):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"Team {team_id} has no role on dataset {dataset_id}.")
+    return {"success": True, "message": f"Removed team {team_id} from dataset {dataset_id}."}
+
+
+@router.put("/{dataset_id}/organization")
+async def set_dataset_organization(
+        dataset_id: int,
+        body: DatasetOrganizationSet,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_TRANSFER_OWNERSHIP)),
+):
+    """Move the dataset into one of the caller's organisations, or make it personal.
+
+    Its team grants belong to the old organisation and are removed.
+    """
+    dropped = organizations_db.set_dataset_organization(dataset_id, body.organization_id, user, db)
+    return {
+        "success": True,
+        "message": f"Dataset {dataset_id} moved; {dropped} team grant(s) removed.",
+        "organization_id": body.organization_id,
+        "team_grants_removed": dropped,
     }
 
 

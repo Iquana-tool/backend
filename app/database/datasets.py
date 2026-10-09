@@ -19,13 +19,20 @@ class Datasets(database):
     dataset_type = Column(String(20), nullable=False)  # Type of dataset, e.g., "image", "scan", "DICOM"
     folder_path = Column(String(255), nullable=False)  # Path to the dataset folder on disk
     # Immutable provenance: who created the dataset. Control over it lives on the
-    # membership row with role "owner", so ownership can be transferred.
-    created_by = Column(String, ForeignKey("users.username", ondelete="CASCADE"), nullable=False)
+    # membership row with role "owner", so ownership can be transferred. RESTRICT
+    # rather than CASCADE: deleting an account must never take its datasets with it
+    # -- deactivate the account instead.
+    created_by = Column(String, ForeignKey("users.username", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
     # When on, a contour cannot be approved by the person who authored it. Off by
     # default so a single owner working alone can still finish their own dataset;
     # turn it on for multi-annotator work where "finished" has to mean "checked by
     # someone else".
     require_independent_review = Column(Boolean, nullable=False, default=False)
+    # The organisation the dataset belongs to; NULL for a personal dataset. Decides
+    # which teams it can be shared with and whose admins can reassign its owner.
+    # RESTRICT: an organisation is only deleted once its datasets have moved.
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="RESTRICT"),
+                             nullable=True, index=True)
     # AI tools switched off for this dataset, comma-separated (see app.services.ai_tools).
     # Empty or NULL means every tool is available.
     disabled_ai_tools = Column(String(255), nullable=True)

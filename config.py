@@ -53,6 +53,10 @@ EMBEDDING_MODEL_ID = os.environ.get("EMBEDDING_MODEL_ID", "facebook/dinov3-vitb1
 CROSS_IMAGE_BACKEND_URL = os.environ.get("CROSS_IMAGE_BACKEND_URL", f"{AI_SERVICE_URL}/cross-image-suggestion")
 CROSS_IMAGE_MODEL_KEY = os.environ.get("CROSS_IMAGE_MODEL_KEY", "sam3")
 SECRET_KEY = os.environ.get("SECRET_KEY", "supersecretkey")
+# Where the key that encrypts stored API keys is kept when IQUANA_SECRETS_KEY is not
+# set; generated on first use. See app/services/secrets.py. Deliberately separate
+# from SECRET_KEY, which signs logins and has a guessable default.
+SECRETS_KEY_FILE = os.environ.get("IQUANA_SECRETS_KEY_FILE", os.path.join(DATA_DIR, "secrets.key"))
 # How long a login stays valid. There is no refresh flow -- the frontend drops the
 # token and logs the user out on the first 401 -- so this is the whole session, and
 # a short value interrupts annotation work mid-task. Defaults to a working day.

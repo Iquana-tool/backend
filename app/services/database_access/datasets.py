@@ -40,7 +40,8 @@ async def create_new_dataset(
         name: str,
         description: str,
         owner_username: str,
-        db: Session
+        db: Session,
+        organization_id: int | None = None,
 ):
     # Check if dataset with the same name already exists
     existing_dataset = db.query(Datasets).filter_by(name=name.strip()).first()
@@ -59,6 +60,7 @@ async def create_new_dataset(
         folder_path=dataset_path,
         dataset_type="image",
         created_by=owner_username,
+        organization_id=organization_id,
     )
     db.add(new_dataset)
     try:

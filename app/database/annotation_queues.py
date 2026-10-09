@@ -43,7 +43,7 @@ class AnnotationQueues(database):
     dataset_id = Column(
         Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    username = Column(String, ForeignKey("users.username", ondelete="CASCADE"), nullable=False)
+    username = Column(String, ForeignKey("users.username", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     # Key of the strategy the order was built with (see app.services.annotation_queue).
     strategy = Column(String(32), nullable=False)
     # Frozen list of image ids in queue order — a JSON array.

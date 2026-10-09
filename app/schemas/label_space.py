@@ -41,6 +41,8 @@ class GenerateLabelSpaceRequest(BaseModel):
         description="Optional override of the configured LLM model (e.g. 'openai/gpt-4o'). "
                     "Server-side only; the API key is never accepted from the client.",
     )
+    dataset_id: int | None = Field(
+        None, description="The dataset the labels are for, when it exists; its organisation's key applies.")
 
 
 class RefineLabelSpaceRequest(BaseModel):
@@ -51,6 +53,7 @@ class RefineLabelSpaceRequest(BaseModel):
     max_depth: int = Field(3, ge=1, le=5)
     max_labels: int = Field(50, ge=1, le=200)
     model: str | None = Field(None)
+    dataset_id: int | None = Field(None)
 
 
 class GenerateLabelSpaceResponse(BaseModel):
@@ -62,3 +65,5 @@ class LabelSpaceConfigResponse(BaseModel):
     """Tells the frontend whether generation is available and which model is used."""
     enabled: bool
     model: str | None = None
+    source: str | None = Field(
+        None, description="Whose key would be used: 'personal', 'organization' or 'instance'.")

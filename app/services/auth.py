@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.database.users import Users
+from app.database.users import Users, as_utc
 from app.schemas.auth_user import AuthenticatedUser
 from config import ACCESS_TOKEN_EXPIRE_MINUTES, SECRET_KEY
 
@@ -34,23 +34,62 @@ def get_password_hash(password):
 
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
+    now = datetime.now(timezone.utc)
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    # `iat` is what lets an account be signed out everywhere: see _revoked().
+    to_encode.update({
+        "iat": now,
+        "exp": now + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)),
+    })
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
 
-def _username_from_token(token: str) -> str | None:
-    """Decode a bearer token and return its subject, or None if it is not usable."""
+def _decode_token(token: str) -> dict | None:
+    """Decode a bearer token, or None if it is malformed, forged or expired."""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except InvalidTokenError:
         return None
-    return payload.get("sub")
+
+
+def _username_from_token(token: str) -> str | None:
+    """Decode a bearer token and return its subject, or None if it is not usable.
+
+    Does not look at the account, so a token revoked by `sign_out_everywhere` still
+    names its subject here. Only for attributing activity; anything that grants
+    access goes through `user_for_token`.
+    """
+    payload = _decode_token(token)
+    return payload.get("sub") if payload else None
+
+
+def _revoked(payload: dict, user_db: Users) -> bool:
+    """Whether the token was issued before the account was last signed out everywhere.
+
+    `iat` has whole-second precision, so the cut-off is compared at that precision
+    too: the token handed out right after a password change is issued in the same
+    second as the cut-off and has to survive it. Tokens without `iat` predate this
+    check and cannot show their age, so they fall at the first revocation.
+    """
+    cutoff = user_db.tokens_valid_after
+    if cutoff is None:
+        return False
+    issued_at = payload.get("iat")
+    if issued_at is None:
+        return True
+    return int(issued_at) < int(as_utc(cutoff).timestamp())
+
+
+def user_for_token(token: str, db: Session) -> AuthenticatedUser | None:
+    """The caller a token signs in, with their permissions, or None if it no longer does."""
+    payload = _decode_token(token)
+    if payload is None or payload.get("sub") is None:
+        return None
+    user_db = db.query(Users).filter_by(username=payload["sub"]).first()
+    if user_db is None or _revoked(payload, user_db):
+        return None
+    return AuthenticatedUser.from_query(user_db)
 
 
 def load_user(username: str, db: Session) -> AuthenticatedUser | None:
@@ -68,10 +107,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme),
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    username = _username_from_token(token)
-    if username is None:
-        raise credentials_exception
-    user = load_user(username, db)
+    user = user_for_token(token, db)
     if user is None:
         raise credentials_exception
     if not user.is_active:
@@ -97,10 +133,7 @@ async def authenticate_websocket(websocket: WebSocket, db: Session) -> Authentic
     if not token:
         return None
 
-    username = _username_from_token(token)
-    if username is None:
-        return None
-    user = load_user(username, db)
+    user = user_for_token(token, db)
     if user is None or not user.is_active:
         return None
     return user

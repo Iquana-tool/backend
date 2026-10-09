@@ -43,6 +43,7 @@ from app.services.database_access import datasets as datasets_db
 from app.services.database_access import image_metadata as metadata_db
 from app.services.database_access import labels as labels_db
 from app.services.database_access import members as members_db
+from app.services.database_access import organizations as organizations_db
 from app.services.database_access import quantification_profiles as profiles_db
 from app.services.database_access.datasets import (
     ContourSelection,
@@ -150,6 +151,7 @@ def _resolve_profile_scoping(
 async def create_dataset(name: str,
                          description: str,
                          dataset_type: Literal["image", "scan", "DICOM"],
+                         organization_id: int | None = None,
                          db: Session = Depends(get_session),
                          current_user: AuthenticatedUser = Depends(
                              require_global(Permission.DATASET_CREATE))):
@@ -159,6 +161,9 @@ async def create_dataset(name: str,
         name (str): The name of the dataset.
         description (str): A brief description of the dataset.
         dataset_type (Literal["image", "scan", "DICOM"]): The type of dataset.
+        organization_id (int | None): Organisation the dataset belongs to. Defaults to
+            the caller's only organisation, else their default one; see
+            `organization_for_new_dataset`.
         current_user (AuthenticatedUser): Caller, who must be allowed to create datasets.
 
     Returns:
@@ -168,7 +173,8 @@ async def create_dataset(name: str,
         name=name,
         description=description,
         owner_username=current_user.username,
-        db=db
+        db=db,
+        organization_id=organizations_db.organization_for_new_dataset(current_user, organization_id, db),
     )
     if isinstance(dataset, dict):
         return dataset
@@ -239,6 +245,7 @@ async def get_all_datasets(
             "dataset_type": ds.dataset_type,
             "folder_path": ds.folder_path,
             "created_by": ds.created_by,
+            "organization_id": ds.organization_id,
             "shared_with": [u.username for u in ds.shared_with],
             # The workspace and menus read AI tool switches from this list.
             "disabled_ai_tools": ds.disabled_ai_tools,
@@ -1379,6 +1386,7 @@ async def import_iquana_dataset(
             override_name=name,
             importer_username=current_user.username,
             content_length=file.size,
+            organization_id=organizations_db.organization_for_new_dataset(current_user, None, db),
         )
     except DatasetArchiveNameConflictError as exc:
         raise HTTPException(

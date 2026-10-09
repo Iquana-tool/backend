@@ -16,7 +16,7 @@ class UserModelFavorites(database):
 
     username = Column(
         String,
-        ForeignKey("users.username", ondelete="CASCADE"),
+        ForeignKey("users.username", ondelete="CASCADE", onupdate="CASCADE"),
         primary_key=True,
     )
     # The task tag, e.g. "prompted-segmentation" / "instance-suggestion" /

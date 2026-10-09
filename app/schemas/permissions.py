@@ -101,6 +101,10 @@ class Permission(StrEnum):
     # Global rather than dataset-scoped: a study run spans datasets, and the event
     # log records who did what across all of them.
     ACTIVITY_LOG_MANAGE = "activity_log.manage"
+    # Creating and deleting organisations, and choosing the one new accounts join.
+    # Running an organisation -- its members and teams -- is its own admins' job
+    # and needs no global permission.
+    ORGANIZATION_MANAGE = "organization.manage"
 
 
 #: Permissions that are meaningless per dataset and are answered by the global role.
@@ -111,6 +115,7 @@ GLOBAL_PERMISSIONS: frozenset[Permission] = frozenset({
     Permission.SYSTEM_MANAGE_MODELS,
     Permission.SYSTEM_MANAGE_SETTINGS,
     Permission.ACTIVITY_LOG_MANAGE,
+    Permission.ORGANIZATION_MANAGE,
 })
 
 
@@ -143,6 +148,34 @@ DATASET_ROLE_ORDER: dict[DatasetRole, int] = {
     DatasetRole.CURATOR: 3,
     DatasetRole.OWNER: 4,
 }
+
+#: The highest role a team can hold on a dataset. The owner is always one person,
+#: so that somebody is accountable for every dataset.
+TEAM_GRANT_MAX_ROLE = DatasetRole.CURATOR
+
+
+class OrganizationRole(StrEnum):
+    """Role within an organisation, stored on ``organization_members.role``.
+
+    Neither role grants anything on datasets. An organisation admin runs people and
+    teams, and can hand an organisation's dataset to a new owner when its owner has
+    left -- but reads no data by being an admin.
+    """
+
+    ADMIN = "admin"
+    MEMBER = "member"
+
+
+class TeamRole(StrEnum):
+    """Role within a team, stored on ``team_members.role``.
+
+    A maintainer decides who is in the team (among the organisation's members),
+    which lets a department or group lead run their own team without being an
+    organisation admin.
+    """
+
+    MAINTAINER = "maintainer"
+    MEMBER = "member"
 
 
 _VIEWER: frozenset[Permission] = frozenset({
