@@ -92,6 +92,16 @@ async def get_stack(
     return stacks_db.get_stack_details(db, stack_id)
 
 
+@router.get("/{stack_id}/objects")
+async def get_stack_objects(
+        stack_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ, "stack_id")),
+):
+    """Every object on every frame of the stack, with its outline and frame index."""
+    return {"objects": stacks_db.get_stack_objects(db, stack_id)}
+
+
 @router.get("/{stack_id}/overview")
 async def get_stack_overview(
         stack_id: int,

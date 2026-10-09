@@ -210,6 +210,8 @@ def test_gallery_lists_images_not_frames(ctx):
     with_frames = asyncio.run(get_image_and_mask_ids_of_dataset(ctx["dataset_id"], db=db,
                                                                 include_frames=True))
     assert len(with_frames) == 5
+    frames = [entry for entry in with_frames if entry["stack_id"] == ctx["stack_id"]]
+    assert sorted(entry["frame_index"] for entry in frames) == [0, 1, 2, 3]
 
     stacks = stacks_db.list_stacks_of_dataset(db, ctx["dataset_id"])
     assert [(s["stack_id"], s["frame_count"], s["metadata"]["Eye"]) for s in stacks] \
@@ -223,6 +225,24 @@ def test_stack_details_list_frames_in_order(ctx):
     assert details["frames"][0]["phases"]["annotate"] == "not_started"
     assert details["frames"][3]["metadata"] == {"B-scan quality": "33"}
     assert details["metadata"]["Eye"] == "OD" and details["has_overview"]
+
+
+def test_stack_objects_list_every_frame_in_order(ctx):
+    from app.database.contours import Contours
+    db = ctx["db"]
+    frame_ids = _frame_ids(db, ctx["stack_id"])
+    masks = {m.image_id: m.id for m in db.query(Masks).filter(Masks.image_id.in_(frame_ids))}
+
+    def contour(image_id, temporary=False):
+        return Contours(mask_id=masks[image_id], added_by="User", origin="manual", temporary=temporary,
+                        confidence_score=1, area=1, perimeter=1, circularity=1, diameter=1,
+                        x=[1, 2, 2], y=[1, 1, 2])
+
+    db.add_all([contour(frame_ids[2]), contour(frame_ids[0]), contour(frame_ids[1], temporary=True)])
+    db.commit()
+    objects = stacks_db.get_stack_objects(db, ctx["stack_id"])
+    assert [o["frame_index"] for o in objects] == [0, 2]
+    assert objects[0]["x"] == [1, 2, 2] and objects[0]["reviewed"] is False
 
 
 # -- deletion --------------------------------------------------------------------
@@ -292,6 +312,7 @@ def test_stack_routes(ctx, client):
     stack_id = ctx["stack_id"]
     assert client.get(f"/stacks/dataset/{ctx['dataset_id']}").json()["stacks"][0]["stack_id"] == stack_id
     assert len(client.get(f"/stacks/{stack_id}").json()["frames"]) == 4
+    assert client.get(f"/stacks/{stack_id}/objects").json() == {"objects": []}
     assert client.get(f"/stacks/{stack_id}/overview").headers["content-type"] == "image/png"
     updated = client.put(f"/stacks/{stack_id}/metadata", json={"entries": {"Eye": "OS"}}).json()
     assert updated["metadata"]["Eye"] == "OS"

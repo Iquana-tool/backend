@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
+from app.database.contours import Contours, reviewer_contour_association
 from app.database.image_metadata import ImageMetadata
 from app.database.images import Frames
 from app.database.masks import Masks
@@ -282,6 +283,45 @@ def get_stack_details(db: Session, stack_id: int) -> dict:
         for frame in frames
     ]
     return details
+
+
+def get_stack_objects(db: Session, stack_id: int) -> list[dict]:
+    """Every object of every frame, with its outline, in frame order.
+
+    What the stack-aware views need in one request: the object timeline marks which
+    slices each label appears on, and the canvas draws the selected object's label
+    from the neighbouring slices dashed. Temporary contours (an unconfirmed preview)
+    are left out, as everywhere else that lists objects.
+    """
+    get_stack(db, stack_id)
+    rows = (
+        db.query(Contours, Frames.id, Frames.frame_index)
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Frames, Frames.id == Masks.image_id)
+        .filter(Frames.stack_id == stack_id, Contours.temporary.is_(False))
+        .order_by(Frames.frame_index, Contours.id)
+        .all()
+    )
+    contour_ids = [contour.id for contour, _, _ in rows]
+    reviewed = {
+        contour_id for (contour_id,) in db.query(reviewer_contour_association.c.contour_id)
+        .filter(reviewer_contour_association.c.contour_id.in_(contour_ids)).distinct()
+    } if contour_ids else set()
+    return [
+        {
+            "contour_id": contour.id,
+            "image_id": image_id,
+            "frame_index": frame_index,
+            "label_id": contour.label_id,
+            "parent_id": contour.parent_id,
+            "origin": contour.origin,
+            "added_by": contour.added_by,
+            "reviewed": contour.id in reviewed,
+            "x": contour.x,
+            "y": contour.y,
+        }
+        for contour, image_id, frame_index in rows
+    ]
 
 
 # ---------------------------------------------------------------------------

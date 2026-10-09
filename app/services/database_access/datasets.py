@@ -227,6 +227,10 @@ async def get_image_and_mask_ids_of_dataset(
         image_data.append({
             "image_id": image.id,
             "file_name": image.file_name,
+            # Only set for a stack's frames (``include_frames``), so the workspace can
+            # fold them back into one navigator entry per stack.
+            "stack_id": image.stack_id,
+            "frame_index": image.frame_index,
             "mask_id": entry["mask_id"],
             "status": entry["status"],
             "phases": entry["phases"],
