@@ -15,7 +15,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from app.database.contour_metrics import ContourMetrics
-from app.database.images import Images
+from app.database.images import KIND_FRAME, Images
 from app.database.masks import Masks
 from app.database.contours import Contours
 from app.exceptions import DatasetNotFoundError, ImageNotFoundError, InvalidScaleError
@@ -190,6 +190,20 @@ def set_scale_from_drawn_line(
 # Write — bulk apply to dataset
 # ---------------------------------------------------------------------------
 
+def scale_targets(images: list[Images]) -> list[Images]:
+    """The images a dataset-wide scale may overwrite.
+
+    A stack frame read from a file that states its pixel size (an OCT ``.vol``)
+    already carries the exact physical scale, which differs per axis and per
+    volume; one number typed for a dataset of photos must not replace it. Frames
+    whose file gave no scale (still ``px``) are calibrated like any image.
+    """
+    return [
+        image for image in images
+        if not (image.kind == KIND_FRAME and (image.unit or "px") != "px")
+    ]
+
+
 def apply_scale_to_dataset(
         db: Session,
         dataset_id: int,
@@ -233,7 +247,7 @@ def apply_scale_to_dataset(
         )
 
     updated = 0
-    for image in images:
+    for image in scale_targets(images):
         if image.scale_x != scale_x or image.scale_y != scale_y or image.unit != unit:
             image.scale_x = scale_x
             image.scale_y = scale_y

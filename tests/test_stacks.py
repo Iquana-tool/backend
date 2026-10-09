@@ -333,3 +333,13 @@ def test_real_vol_file():
     assert stack.metadata["Eye"] in {"OD", "OS"}
     assert stack.frames[0].overview_geometry["type"] == "line"
     assert not any(key.lower().startswith(("patient", "name", "birth")) for key in stack.metadata)
+
+
+def test_dataset_wide_scale_leaves_file_scaled_frames_alone(ctx):
+    from app.services.scale_computation import apply_scale_to_dataset
+    db = ctx["db"]
+    result = apply_scale_to_dataset(db, ctx["dataset_id"], 0.5, 0.5, "mm")
+    assert result["images_updated"] == 1
+    db.expire_all()
+    assert db.get(Images, ctx["image_id"]).scale_x == 0.5
+    assert {f.scale_x for f in db.query(Frames).filter_by(stack_id=ctx["stack_id"])} == {0.0113}

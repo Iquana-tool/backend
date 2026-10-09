@@ -369,6 +369,11 @@ def apply_to_dataset(
             f"Dataset {dataset_id} not found or contains no images."
         )
 
+    if kind_key == "scale":
+        # Frames with a scale from their file keep it; see scale_targets.
+        from app.services.scale_computation import scale_targets
+        images = scale_targets(images)
+
     invalidated = 0
     for image in images:
         if kind.persist is not None:
