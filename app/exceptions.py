@@ -16,6 +16,17 @@ class ImageNotFoundError(IQuanaBaseError):
     pass
 
 
+class StackNotFoundError(IQuanaBaseError):
+    """Raised when a stack_id does not match any row in the stacks table."""
+    pass
+
+
+class UnsupportedStackFileError(IQuanaBaseError):
+    """Raised when an uploaded file is not a stack format the backend can read,
+    or holds nothing it can import (e.g. only circle scans)."""
+    pass
+
+
 class InvalidScaleError(IQuanaBaseError):
     """Raised when scale inputs are logically invalid (e.g. non-positive values,
     zero-length drawn line, or missing unit)."""

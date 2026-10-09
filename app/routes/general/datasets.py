@@ -449,6 +449,7 @@ async def list_images(
         dataset_id: int,
         filter_for_status: Literal["blocked", "not_started", "in_progress", "finished"] | None = None,
         filter_for_phase: Literal["calibrate", "annotate", "review"] | None = None,
+        include_frames: bool = False,
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ))
 ):
@@ -460,6 +461,8 @@ async def list_images(
         filter_for_phase: Which phase ``filter_for_status`` applies to
             (``calibrate`` / ``annotate`` / ``review``). Omit it to filter on the
             overall status.
+        include_frames: Also list the frames of the dataset's stacks, which are
+            otherwise listed as stacks by ``GET /stacks/dataset/{dataset_id}``.
         db: Database session dependency.
         user (AuthenticatedUser): The current authenticated user.
 
@@ -473,6 +476,7 @@ async def list_images(
         dataset_id,
         filter_for_status=filter_for_status,
         filter_for_phase=filter_for_phase,
+        include_frames=include_frames,
         db=db,
     )
     return {

@@ -9,14 +9,21 @@ Keys carry a type, declared per dataset in ``dataset_metadata_keys``. A key that
 has never been declared is created on first write as ``categorical``, so a
 dataset never has to be set up before it can be tagged and behaviour from before
 types existed is unchanged.
+
+**Inheritance.** Metadata can belong to an image or to a stack. A frame of a stack
+inherits the stack's keys, and its own row for a key overrides the inherited one.
+Every read here goes through :func:`effective_metadata`, which resolves that once
+in SQL, so filters, facets, the gallery and quantification grouping all see a
+frame with its inherited keys. Writes and key administration work on the stored
+rows, whichever owner they belong to.
 """
 from __future__ import annotations
 
 import re
 from logging import getLogger
 
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, func, or_, select, union_all
+from sqlalchemy.orm import Session, aliased
 
 from app.database.dataset_metadata_keys import DatasetMetadataKeys
 from app.database.image_metadata import (
@@ -25,7 +32,13 @@ from app.database.image_metadata import (
     ImageMetadata,
 )
 from app.database.images import Images
-from app.exceptions import DatasetNotFoundError, ImageNotFoundError, InvalidMetadataError
+from app.database.stacks import Stacks
+from app.exceptions import (
+    DatasetNotFoundError,
+    ImageNotFoundError,
+    InvalidMetadataError,
+    StackNotFoundError,
+)
 from app.services.metadata_types import (
     DEFAULT_TYPE,
     GROUPABLE_TYPES,
@@ -92,6 +105,47 @@ def _normalize_entries(entries: dict[str, str]) -> dict[str, str]:
             raise InvalidMetadataError(f"Duplicate metadata key '{key}' in the request.")
         normalized[key] = normalize_value(raw_value)
     return normalized
+
+
+# ---------------------------------------------------------------------------
+# Effective metadata: own rows plus what a frame inherits from its stack
+# ---------------------------------------------------------------------------
+
+def effective_metadata():
+    """Every image's effective metadata, as a subquery of ``(image_id, key, value, value_num)``.
+
+    An image's own rows, plus -- for a frame -- its stack's rows for every key the
+    frame does not set itself. Join it like a table:
+    ``.join(eff, eff.c.image_id == Images.id)``.
+    """
+    own = (
+        select(ImageMetadata.image_id.label("image_id"), ImageMetadata.key,
+               ImageMetadata.value, ImageMetadata.value_num)
+        .where(ImageMetadata.image_id.is_not(None))
+    )
+    stack_row = aliased(ImageMetadata)
+    own_row = aliased(ImageMetadata)
+    inherited = (
+        select(Images.id.label("image_id"), stack_row.key, stack_row.value, stack_row.value_num)
+        .join(stack_row, stack_row.stack_id == Images.stack_id)
+        .where(~exists().where(own_row.image_id == Images.id, own_row.key == stack_row.key))
+    )
+    return union_all(own, inherited).subquery("effective_metadata")
+
+
+def _stored_rows_in_dataset(db: Session, dataset_id: int, key: str):
+    """Query for the stored rows of one key in a dataset, on images and on stacks."""
+    return (
+        db.query(ImageMetadata)
+        .outerjoin(Images, Images.id == ImageMetadata.image_id)
+        .outerjoin(Stacks, Stacks.id == ImageMetadata.stack_id)
+        .filter(or_(Images.dataset_id == dataset_id, Stacks.dataset_id == dataset_id),
+                ImageMetadata.key == key)
+    )
+
+
+def _owner(row: ImageMetadata) -> tuple[int | None, int | None]:
+    return row.image_id, row.stack_id
 
 
 # ---------------------------------------------------------------------------
@@ -220,12 +274,7 @@ def update_key(
     new_type = MetadataValueType(value_type) if value_type else MetadataValueType(descriptor.value_type)
     new_options = options if options is not None else list(descriptor.options or [])
 
-    rows = (
-        db.query(ImageMetadata)
-        .join(Images, Images.id == ImageMetadata.image_id)
-        .filter(Images.dataset_id == dataset_id, ImageMetadata.key == descriptor.key)
-        .all()
-    )
+    rows = _stored_rows_in_dataset(db, dataset_id, descriptor.key).all()
 
     coerced: list[tuple[ImageMetadata, str, float | None]] = []
     rejected: list[str] = []
@@ -291,20 +340,13 @@ def rename_key(
             f"'{target_name}' already exists. Rename with merge to combine them."
         )
 
-    rows = (
-        db.query(ImageMetadata)
-        .join(Images, Images.id == ImageMetadata.image_id)
-        .filter(Images.dataset_id == dataset_id, ImageMetadata.key == descriptor.key)
-        .all()
-    )
-    # Rows already under the target key on the same image: the source replaces
-    # them, so they are deleted rather than left to violate the unique constraint.
+    rows = _stored_rows_in_dataset(db, dataset_id, descriptor.key).all()
+    # Rows already under the target key on the same image (or stack): the source
+    # replaces them, so they are deleted rather than left to violate the unique
+    # constraint.
     clashing = {
-        row.image_id: row for row in
-        db.query(ImageMetadata)
-        .join(Images, Images.id == ImageMetadata.image_id)
-        .filter(Images.dataset_id == dataset_id, ImageMetadata.key == target_name)
-        .all()
+        _owner(row): row for row in
+        _stored_rows_in_dataset(db, dataset_id, target_name).all()
     }
 
     # Delete the clashing rows and flush BEFORE renaming: SQLAlchemy's unit of
@@ -312,7 +354,7 @@ def rename_key(
     # two rows on the same (image_id, key) and trip the unique constraint.
     merged = 0
     for row in rows:
-        existing = clashing.get(row.image_id)
+        existing = clashing.get(_owner(row))
         if existing is not None:
             db.delete(existing)
             merged += 1
@@ -339,12 +381,7 @@ def delete_key_from_dataset(db: Session, dataset_id: int, key: str) -> int:
     """Drop a key and every value of it in the dataset. Returns rows removed."""
     descriptor = get_key(db, dataset_id, key)
     normalized = normalize_key(key)
-    rows = (
-        db.query(ImageMetadata)
-        .join(Images, Images.id == ImageMetadata.image_id)
-        .filter(Images.dataset_id == dataset_id, ImageMetadata.key == normalized)
-        .all()
-    )
+    rows = _stored_rows_in_dataset(db, dataset_id, normalized).all()
     for row in rows:
         db.delete(row)
     if descriptor is not None:
@@ -358,9 +395,13 @@ def delete_key_from_dataset(db: Session, dataset_id: int, key: str) -> int:
 # ---------------------------------------------------------------------------
 
 def get_metadata(db: Session, image_id: int) -> dict[str, str]:
-    """Every metadata pair of one image, as a plain ``{key: value}`` dict."""
-    rows = db.query(ImageMetadata).filter_by(image_id=image_id).all()
-    return {row.key: row.value for row in sorted(rows, key=lambda r: r.key.lower())}
+    """Every effective metadata pair of one image, as a plain ``{key: value}`` dict.
+
+    For a frame this includes the keys it inherits from its stack.
+    """
+    eff = effective_metadata()
+    rows = db.query(eff.c.key, eff.c.value).filter(eff.c.image_id == image_id).all()
+    return {key: value for key, value in sorted(rows, key=lambda r: r.key.lower())}
 
 
 def get_metadata_for_images(db: Session, image_ids: list[int]) -> dict[int, dict[str, str]]:
@@ -372,29 +413,53 @@ def get_metadata_for_images(db: Session, image_ids: list[int]) -> dict[int, dict
     result: dict[int, dict[str, str]] = {image_id: {} for image_id in image_ids}
     if not image_ids:
         return result
+    eff = effective_metadata()
     rows = (
-        db.query(ImageMetadata)
-        .filter(ImageMetadata.image_id.in_(image_ids))
-        .order_by(ImageMetadata.key)
+        db.query(eff.c.image_id, eff.c.key, eff.c.value)
+        .filter(eff.c.image_id.in_(image_ids))
+        .order_by(eff.c.key)
         .all()
     )
-    for row in rows:
-        result[row.image_id][row.key] = row.value
+    for image_id, key, value in rows:
+        result[image_id][key] = value
     return result
 
 
 def get_metadata_for_dataset(db: Session, dataset_id: int) -> dict[int, dict[str, str]]:
     """``{image_id: {key: value}}`` for every image of a dataset."""
+    eff = effective_metadata()
     rows = (
-        db.query(ImageMetadata, Images.id)
-        .join(Images, Images.id == ImageMetadata.image_id)
+        db.query(eff.c.image_id, eff.c.key, eff.c.value)
+        .join(Images, Images.id == eff.c.image_id)
         .filter(Images.dataset_id == dataset_id)
-        .order_by(ImageMetadata.key)
+        .order_by(eff.c.key)
         .all()
     )
     result: dict[int, dict[str, str]] = {}
-    for row, image_id in rows:
-        result.setdefault(image_id, {})[row.key] = row.value
+    for image_id, key, value in rows:
+        result.setdefault(image_id, {})[key] = value
+    return result
+
+
+def get_metadata_for_stack(db: Session, stack_id: int) -> dict[str, str]:
+    """The metadata stored on a stack itself, which its frames inherit."""
+    rows = db.query(ImageMetadata).filter_by(stack_id=stack_id).all()
+    return {row.key: row.value for row in sorted(rows, key=lambda r: r.key.lower())}
+
+
+def get_metadata_for_stacks(db: Session, stack_ids: list[int]) -> dict[int, dict[str, str]]:
+    """``{stack_id: {key: value}}`` of the stacks' own metadata, in one query."""
+    result: dict[int, dict[str, str]] = {stack_id: {} for stack_id in stack_ids}
+    if not stack_ids:
+        return result
+    rows = (
+        db.query(ImageMetadata)
+        .filter(ImageMetadata.stack_id.in_(stack_ids))
+        .order_by(ImageMetadata.key)
+        .all()
+    )
+    for row in rows:
+        result[row.stack_id][row.key] = row.value
     return result
 
 
@@ -448,13 +513,73 @@ def set_metadata_for_images(
         raise ImageNotFoundError(
             f"Image(s) {', '.join(str(i) for i in missing)} were not found."
         )
+    dataset_id = _dataset_id_for_images(db, image_ids) if to_write else None
+    return _write_metadata(db, ImageMetadata.image_id, image_ids, dataset_id,
+                           to_write, to_remove, username, replace, key_types)
+
+
+def set_metadata_for_stacks(
+        db: Session,
+        stack_ids: list[int],
+        entries: dict[str, str],
+        username: str | None = None,
+        replace: bool = False,
+        remove_keys: list[str] | None = None,
+        key_types: dict[str, str] | None = None,
+) -> dict:
+    """Apply one set of metadata edits to one or many stacks; their frames inherit them.
+
+    Same contract as :func:`set_metadata_for_images`, with stacks as the owners.
+    Returns ``{"updated_stacks": [...], "written": n, "removed": n}``.
+
+    :raises StackNotFoundError: if any id does not exist.
+    :raises InvalidMetadataError: if a key or value fails its type's validation,
+        or the stacks span several datasets.
+    """
+    normalized = _normalize_entries(entries)
+    to_remove = {normalize_key(k) for k in (remove_keys or [])}
+    to_remove |= {key for key, value in normalized.items() if not value}
+    to_write = {key: value for key, value in normalized.items() if value}
+
+    if not stack_ids:
+        return {"updated_stacks": [], "written": 0, "removed": 0}
+
+    rows = db.query(Stacks.id, Stacks.dataset_id).filter(Stacks.id.in_(stack_ids)).all()
+    missing = sorted(set(stack_ids) - {row.id for row in rows})
+    if missing:
+        raise StackNotFoundError(
+            f"Stack(s) {', '.join(str(i) for i in missing)} were not found."
+        )
+    dataset_ids = {row.dataset_id for row in rows}
+    if len(dataset_ids) > 1:
+        raise InvalidMetadataError(
+            "Cannot write metadata across datasets in one request: "
+            "keys are declared per dataset."
+        )
+    result = _write_metadata(db, ImageMetadata.stack_id, stack_ids, dataset_ids.pop(),
+                             to_write, to_remove, username, replace, key_types)
+    return {"updated_stacks": result.pop("updated_images"), **result}
+
+
+def _write_metadata(
+        db: Session,
+        owner_column,
+        owner_ids: list[int],
+        dataset_id: int | None,
+        to_write: dict[str, str],
+        to_remove: set[str],
+        username: str | None,
+        replace: bool,
+        key_types: dict[str, str] | None,
+) -> dict:
+    """Upsert/delete normalised entries on images or stacks (``owner_column``)."""
+    owner_attr = owner_column.key
 
     # Coerce once, before touching anything: a value that fails its key's type
     # must not leave half the batch tagged. Also creates descriptors for keys
     # seen for the first time.
     coerced: dict[str, tuple[str, float | None]] = {}
     if to_write:
-        dataset_id = _dataset_id_for_images(db, image_ids)
         for key, value in to_write.items():
             descriptor = ensure_key(db, dataset_id, key,
                                     value_type=(key_types or {}).get(key),
@@ -465,16 +590,14 @@ def set_metadata_for_images(
             except InvalidMetadataError as exc:
                 raise InvalidMetadataError(f"{key}: {exc}") from exc
 
-    existing_rows = (
-        db.query(ImageMetadata).filter(ImageMetadata.image_id.in_(image_ids)).all()
-    )
-    by_image: dict[int, dict[str, ImageMetadata]] = {}
+    existing_rows = db.query(ImageMetadata).filter(owner_column.in_(owner_ids)).all()
+    by_owner: dict[int, dict[str, ImageMetadata]] = {}
     for row in existing_rows:
-        by_image.setdefault(row.image_id, {})[row.key] = row
+        by_owner.setdefault(getattr(row, owner_attr), {})[row.key] = row
 
     written = removed = 0
-    for image_id in image_ids:
-        current = by_image.get(image_id, {})
+    for owner_id in owner_ids:
+        current = by_owner.get(owner_id, {})
 
         drop = set(to_remove)
         if replace:
@@ -489,7 +612,7 @@ def set_metadata_for_images(
             value, numeric = coerced[key]
             row = current.get(key)
             if row is None:
-                db.add(ImageMetadata(image_id=image_id, key=key, value=value,
+                db.add(ImageMetadata(**{owner_attr: owner_id}, key=key, value=value,
                                      value_num=numeric, created_by=username))
                 written += 1
             elif row.value != value:
@@ -499,9 +622,9 @@ def set_metadata_for_images(
                 written += 1
 
     db.commit()
-    logger.info("Metadata on %s image(s): %s written, %s removed.",
-                len(image_ids), written, removed)
-    return {"updated_images": list(image_ids), "written": written, "removed": removed}
+    logger.info("Metadata on %s %s(s): %s written, %s removed.",
+                len(owner_ids), owner_attr.removesuffix("_id"), written, removed)
+    return {"updated_images": list(owner_ids), "written": written, "removed": removed}
 
 
 def delete_key(db: Session, image_id: int, key: str) -> bool:
@@ -541,17 +664,20 @@ def get_dataset_facets(db: Session, dataset_id: int) -> list[dict]:
               "groupable": True, "options": [], "image_count": 40, "range": None,
               "values": [{"value": "reef_a", "count": 22}, ...]}, ...]
     """
+    # Counted over effective metadata, so a stack key counts once per frame: the
+    # counts answer "how many images carry this", which is what grouping is over.
+    eff = effective_metadata()
     rows = (
         db.query(
-            ImageMetadata.key,
-            ImageMetadata.value,
-            func.count(ImageMetadata.id),
-            func.min(ImageMetadata.value_num),
-            func.max(ImageMetadata.value_num),
+            eff.c.key,
+            eff.c.value,
+            func.count(eff.c.image_id),
+            func.min(eff.c.value_num),
+            func.max(eff.c.value_num),
         )
-        .join(Images, Images.id == ImageMetadata.image_id)
+        .join(Images, Images.id == eff.c.image_id)
         .filter(Images.dataset_id == dataset_id)
-        .group_by(ImageMetadata.key, ImageMetadata.value)
+        .group_by(eff.c.key, eff.c.value)
         .all()
     )
 
@@ -632,21 +758,22 @@ def filter_image_ids(
     query = db.query(Images.id).filter(Images.dataset_id == dataset_id)
     for raw_key, condition in (filters or {}).items():
         key = normalize_key(raw_key)
-        subquery = db.query(ImageMetadata.image_id).filter(ImageMetadata.key == key)
+        eff = effective_metadata()
+        subquery = db.query(eff.c.image_id).filter(eff.c.key == key)
 
         if isinstance(condition, dict):
             low, high = condition.get("min"), condition.get("max")
             if low is not None:
-                subquery = subquery.filter(ImageMetadata.value_num >= float(low))
+                subquery = subquery.filter(eff.c.value_num >= float(low))
             if high is not None:
-                subquery = subquery.filter(ImageMetadata.value_num <= float(high))
+                subquery = subquery.filter(eff.c.value_num <= float(high))
             contains = normalize_value(condition.get("contains", ""))
             if contains:
-                subquery = subquery.filter(ImageMetadata.value.ilike(f"%{contains}%"))
+                subquery = subquery.filter(eff.c.value.ilike(f"%{contains}%"))
         else:
             cleaned = [normalize_value(v) for v in (condition or []) if normalize_value(v)]
             if cleaned:
-                subquery = subquery.filter(ImageMetadata.value.in_(cleaned))
+                subquery = subquery.filter(eff.c.value.in_(cleaned))
 
         query = query.filter(Images.id.in_(subquery))
     return [row.id for row in query.all()]

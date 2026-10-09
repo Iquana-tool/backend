@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, aliased
 from app.database.contour_metrics import ContourMetrics
 from app.database.contours import Contours
 from app.database.datasets import Datasets
-from app.database.images import Images
+from app.database.images import KIND_IMAGE, Images
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
@@ -177,6 +177,7 @@ async def get_image_and_mask_ids_of_dataset(
         db: Session,
         filter_for_status: Literal["blocked", "not_started", "in_progress", "finished"] | None = None,
         filter_for_phase: Literal["calibrate", "annotate", "review"] | None = None,
+        include_frames: bool = False,
 ):
     """Every image of a dataset with its mask id and its three phase statuses.
 
@@ -188,6 +189,9 @@ async def get_image_and_mask_ids_of_dataset(
             only ever matches the review phase.
         filter_for_phase: Which phase ``filter_for_status`` refers to. Without it
             the filter is on the overall status.
+        include_frames: Also list the frames of the dataset's stacks. Off by
+            default: the gallery shows a stack as one item (``GET /stacks/dataset/{id}``),
+            not as its 50-odd frames.
 
     Returns:
         A list of ``{image_id, file_name, mask_id, status, phases, metadata}``
@@ -199,12 +203,14 @@ async def get_image_and_mask_ids_of_dataset(
     """
     # LEFT join: an image with no mask row is not started, not absent. The old
     # inner join hid every untouched image from the gallery's status filters.
-    rows = (
+    query = (
         db.query(Images, Masks)
         .outerjoin(Masks, Images.id == Masks.image_id)
         .filter(Images.dataset_id == dataset_id)
-        .all()
     )
+    if not include_frames:
+        query = query.filter(Images.kind == KIND_IMAGE)
+    rows = query.all()
     images = [image for image, _ in rows]
     masks_by_image = {image.id: mask for image, mask in rows if mask is not None}
     statuses = image_status.status_for_images(db, images, masks_by_image=masks_by_image)
@@ -632,14 +638,18 @@ def _group_value_expression(group_by_key: str):
     ``image_metadata`` restricted to one key. Outer, because an image with no
     value for the key still has contours: an inner join would silently drop them
     and every group would sum to less than the dataset.
-    """
-    from app.database.image_metadata import ImageMetadata
 
+    Joins the *effective* metadata, so a frame groups by the keys it inherits
+    from its stack (an OCT volume's eye, say) as well as its own.
+    """
+    from app.services.database_access.image_metadata import effective_metadata
+
+    eff = effective_metadata()
     condition = and_(
-        ImageMetadata.image_id == Images.id,
-        ImageMetadata.key == group_by_key,
+        eff.c.image_id == Images.id,
+        eff.c.key == group_by_key,
     )
-    return ImageMetadata, condition, ImageMetadata.value
+    return eff, condition, eff.c.value
 
 
 def _sort_group_values(values: Iterable[str]) -> list[str]:

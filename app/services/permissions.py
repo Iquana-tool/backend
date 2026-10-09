@@ -31,7 +31,7 @@ from app.services.auth import get_current_user
 logger = getLogger(__name__)
 
 #: Which id a route carries, and therefore how to find its dataset.
-IdSource = Literal["dataset_id", "mask_id", "contour_id", "image_id", "label_id"]
+IdSource = Literal["dataset_id", "mask_id", "contour_id", "image_id", "label_id", "stack_id"]
 
 
 # -- Dataset resolution ----------------------------------------------------
@@ -63,11 +63,17 @@ def dataset_id_for_label(label_id: int, db: Session) -> int | None:
     return db.query(Labels.dataset_id).filter(Labels.id == label_id).scalar()
 
 
+def dataset_id_for_stack(stack_id: int, db: Session) -> int | None:
+    from app.database.stacks import Stacks
+    return db.query(Stacks.dataset_id).filter(Stacks.id == stack_id).scalar()
+
+
 _RESOLVERS = {
     "mask_id": dataset_id_for_mask,
     "contour_id": dataset_id_for_contour,
     "image_id": dataset_id_for_image,
     "label_id": dataset_id_for_label,
+    "stack_id": dataset_id_for_stack,
 }
 
 
