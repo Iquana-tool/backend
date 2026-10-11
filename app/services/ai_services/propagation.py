@@ -5,7 +5,8 @@ appears in an annotation, never imported at module load.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, AsyncIterator
 
 import httpx
 
@@ -29,3 +30,19 @@ class PropagationService(BaseService):
             response = await client.post(f"{self.backend_url}/inference", json=request.model_dump())
             response.raise_for_status()
             return response.json()
+
+    async def stream(self, request: "PropagationRequest") -> AsyncIterator[dict]:
+        """POST to ``/stream`` and yield each frame's result as the service sends it.
+
+        Leaving the loop early closes the connection, which stops the service after
+        the frame it is working on.
+        """
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            async with client.stream("POST", f"{self.backend_url}/stream",
+                                     json=request.model_dump()) as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.strip():
+                        yield json.loads(line)

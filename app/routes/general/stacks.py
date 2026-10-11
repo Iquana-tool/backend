@@ -4,17 +4,19 @@ The frames of a stack are images, so everything else -- serving a frame's pixels
 annotating it, reviewing it -- goes through the image, mask and contour routes
 with the frame's ``image_id``.
 """
+import json
 import logging
 from typing import Literal
 
 import httpx
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.database import get_session
+from app.database import get_context_session, get_session
+from app.database.contours import Contours
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
 from app.exceptions import InvalidMetadataError, StackNotFoundError, UnsupportedStackFileError
@@ -53,6 +55,28 @@ class PropagateBody(BaseModel):
     #: The ai-service model to use; the instance default when omitted.
     model_registry_key: str | None = None
     parameters: dict = Field(default_factory=dict)
+    #: An earlier run's suggestions to remove first ("update from my corrections").
+    #: Reviewed or edited ones are kept; they belong in ``objects`` instead.
+    replace_contour_ids: list[int] = Field(default_factory=list)
+
+
+async def _prepare_propagation(stack_id: int, body: PropagateBody, db: Session, user: AuthenticatedUser):
+    """Check access, remove superseded suggestions, build the ai-service request."""
+    stack = stacks_db.get_stack(db, stack_id)
+    ensure_permission(user, stack.dataset_id, Permission.AI_INTERACTIVE)
+    ensure_tool_enabled(stack.dataset_id, AiTool.PROPAGATION, db)
+    model_key = body.model_registry_key or PROPAGATION_MODEL_KEY
+    # Built before anything is removed, so a bad request changes nothing.
+    request, seeds = propagation.build_propagation_request(
+        db, stack_id=stack_id, objects=body.objects, model_key=model_key,
+        user_id=str(user.username), start_frame=body.start_frame, end_frame=body.end_frame,
+        direction=body.direction, parameters=body.parameters,
+    )
+    replaced = []
+    if body.replace_contour_ids:
+        replaced = await propagation.replace_suggestions(
+            db, stack_id=stack_id, contour_ids=body.replace_contour_ids)
+    return request, seeds, model_key, replaced
 
 
 @router.get("/formats")
@@ -161,16 +185,7 @@ async def propagate_objects(
     Returns the new objects per slice, the slices to check first (low confidence)
     and the slices where the object ended.
     """
-    stack = stacks_db.get_stack(db, stack_id)
-    ensure_permission(user, stack.dataset_id, Permission.AI_INTERACTIVE)
-    ensure_tool_enabled(stack.dataset_id, AiTool.PROPAGATION, db)
-
-    model_key = body.model_registry_key or PROPAGATION_MODEL_KEY
-    request, seeds = propagation.build_propagation_request(
-        db, stack_id=stack_id, objects=body.objects, model_key=model_key,
-        user_id=str(user.username), start_frame=body.start_frame, end_frame=body.end_frame,
-        direction=body.direction, parameters=body.parameters,
-    )
+    request, seeds, model_key, replaced = await _prepare_propagation(stack_id, body, db, user)
     # Local import keeps the client (and its schema) off the module import path.
     from app.services.ai_services.propagation import PropagationService
     try:
@@ -188,14 +203,67 @@ async def propagate_objects(
     return {
         "success": True,
         "message": f"Added {summary.created} object(s) on {len(summary.frames)} slice(s).",
-        "created": summary.created,
-        "contour_ids": summary.contour_ids,
-        "frames": summary.frames,
-        "to_check": summary.to_check,
-        "absent": summary.absent,
-        "duplicates": summary.duplicates,
-        "unparented": summary.unparented,
+        "replaced": replaced,
+        **summary.as_dict(),
     }
+
+
+@router.post("/{stack_id}/propagate/stream")
+async def propagate_objects_stream(
+        stack_id: int,
+        body: PropagateBody,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_CREATE, "stack_id")),
+):
+    """Propagate as :func:`propagate_objects`, reporting each slice as it is saved.
+
+    NDJSON, one event per line: ``{"type": "frame", object_id, frame_index,
+    presence, contour_id, label_id, x, y}`` for every slice the AI service
+    finishes (``contour_id`` null where nothing was written), then ``{"type":
+    "done", ...summary}``, or ``{"type": "error", "detail"}``. Closing the
+    connection stops the run; what was saved so far stays.
+    """
+    request, seeds, model_key, replaced = await _prepare_propagation(stack_id, body, db, user)
+    seed_ids = list(seeds)
+    username = user.username
+    from app.services.ai_services.propagation import PropagationService
+
+    async def events():
+        # The request's session closes once the response starts; the writer needs
+        # one that lives as long as the stream.
+        with get_context_session() as session:
+            own_seeds = {seed.id: seed for seed in
+                         session.query(Contours).filter(Contours.id.in_(seed_ids)).all()}
+            writer = propagation.PropagationWriter(session, stack_id=stack_id, seeds=own_seeds,
+                                                   model_key=model_key, username=username)
+            try:
+                async for entry in PropagationService().stream(request):
+                    if "error" in entry:
+                        yield json.dumps({"type": "error", "detail": entry["error"]}) + "\n"
+                        break
+                    contour_id = writer.add(entry)
+                    contour = entry.get("contour") or {}
+                    seed = own_seeds.get(entry.get("object_id"))
+                    yield json.dumps({
+                        "type": "frame",
+                        "object_id": entry.get("object_id"),
+                        "frame_index": entry.get("frame_index"),
+                        "presence": entry.get("presence"),
+                        "contour_id": contour_id,
+                        "skipped": writer.last_skip,
+                        "label_id": seed.label_id if seed else None,
+                        "x": contour.get("x") if contour_id else None,
+                        "y": contour.get("y") if contour_id else None,
+                    }) + "\n"
+            except httpx.HTTPStatusError as exc:
+                yield json.dumps({"type": "error", "detail": f"The AI service could not propagate: "
+                                                             f"{exc.response.text[:300]}"}) + "\n"
+            except httpx.HTTPError:
+                yield json.dumps({"type": "error", "detail": "The AI service is not reachable."}) + "\n"
+            summary = writer.finish()
+            yield json.dumps({"type": "done", "replaced": replaced, **summary.as_dict()}) + "\n"
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 @router.put("/{stack_id}/metadata")

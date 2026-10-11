@@ -451,3 +451,66 @@ def test_propagate_route(ctx, client, monkeypatch):
     assert response.status_code == 200, response.text
     assert response.json()["created"] == 1 and response.json()["frames"] == {"1": 1}
     assert sent["request"].end_frame == 2 and sent["request"].direction == "forward"
+
+
+def test_propagate_stream_saves_each_slice_and_reports_it(ctx, client, monkeypatch):
+    import json
+    from contextlib import contextmanager
+    from app.routes.general import stacks as stacks_routes
+    from app.services.ai_services import propagation as client_module
+    db = ctx["db"]
+    frames = _frame_ids(db, ctx["stack_id"])
+    seed = _seed(db, frames[1])
+
+    async def fake_stream(self, request):
+        yield {"object_id": seed.id, "frame_index": 2, "presence": 0.95, "contour": _square()}
+        yield {"object_id": seed.id, "frame_index": 3, "presence": 0.2, "contour": None}
+
+    @contextmanager
+    def test_session():
+        session = ctx["Session"]()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    monkeypatch.setattr(client_module.PropagationService, "stream", fake_stream)
+    monkeypatch.setattr(stacks_routes, "get_context_session", test_session)
+    response = client.post(f"/stacks/{ctx['stack_id']}/propagate/stream", json={"objects": [[seed.id]]})
+    assert response.status_code == 200, response.text
+    events = [json.loads(line) for line in response.text.splitlines() if line]
+    assert [event["type"] for event in events] == ["frame", "frame", "done"]
+    assert events[0]["contour_id"] and events[0]["x"] and events[0]["skipped"] is None
+    assert events[1]["contour_id"] is None and events[1]["skipped"] == "absent"
+    done = events[-1]
+    assert done["created"] == 1 and done["absent"] == [3]
+    assert done["objects"] == {str(seed.id): {"2": events[0]["contour_id"]}}
+
+
+def test_update_from_corrections_replaces_only_untouched_suggestions(ctx):
+    import asyncio
+    from datetime import datetime, timezone
+    from app.database.ai_suggestions import AiSuggestions
+    from app.database.contours import Contours
+    from app.services import propagation
+    db = ctx["db"]
+    frames = _frame_ids(db, ctx["stack_id"])
+    seed = _seed(db, frames[0])
+    first = propagation.save_propagated(
+        db, stack_id=ctx["stack_id"], seeds={seed.id: seed}, model_key="sam2-1-tiny", username="curator",
+        results=[{"object_id": seed.id, "frame_index": i, "presence": 0.9, "contour": _square()}
+                 for i in (1, 2, 3)])
+    run = first.objects[seed.id]
+    corrected = db.get(Contours, run[2])
+    corrected.geometry_edited_at = datetime.now(timezone.utc)
+    db.commit()
+
+    removed = asyncio.run(propagation.replace_suggestions(
+        db, stack_id=ctx["stack_id"], contour_ids=list(run.values())))
+    assert sorted(removed) == sorted([run[1], run[3]])
+    assert db.get(Contours, run[2]) is not None
+    logged = {row.contour_id: row for row in db.query(AiSuggestions).all()}
+    assert logged[run[1]].superseded_at is not None and logged[run[1]].deleted_at is None
+
+    objects = stacks_db.get_stack_objects(db, ctx["stack_id"])
+    assert [o["edited"] for o in objects if o["contour_id"] == run[2]] == [True]

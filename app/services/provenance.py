@@ -180,6 +180,20 @@ def record_deletion(db: Session, contour_ids: Iterable[int], commit: bool = True
         db.commit()
 
 
+@_safely("superseded")
+def record_superseded(db: Session, contour_ids: Iterable[int], commit: bool = True) -> None:
+    """Suggestions replaced by a newer run of the same tool: superseded, not rejected."""
+    ids = [cid for cid in contour_ids if cid is not None]
+    if not ids:
+        return
+    (db.query(AiSuggestions).filter(AiSuggestions.contour_id.in_(ids),
+                                    AiSuggestions.deleted_at.is_(None),
+                                    AiSuggestions.superseded_at.is_(None))
+     .update({AiSuggestions.superseded_at: _now()}, synchronize_session=False))
+    if commit:
+        db.commit()
+
+
 @_safely("restore")
 def record_restore(db: Session, contour_ids: Iterable[int], commit: bool = True) -> None:
     """An undo brought deleted objects back: their suggestions are no longer rejected."""

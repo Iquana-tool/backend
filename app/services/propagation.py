@@ -22,7 +22,6 @@ pin includes them, and this module is on the app's import path.
 """
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import TYPE_CHECKING
@@ -68,6 +67,21 @@ class PropagationSummary:
     duplicates: int = 0
     #: Outlines of child objects with no parent object on their slice to nest under.
     unparented: int = 0
+    #: Object id -> {frame index: contour id written there}. What "update from my
+    #: corrections" needs to tell this run's suggestions from everything else.
+    objects: dict[int, dict[int, int]] = field(default_factory=dict)
+
+    def as_dict(self) -> dict:
+        return {
+            "created": self.created,
+            "contour_ids": self.contour_ids,
+            "frames": self.frames,
+            "to_check": self.to_check,
+            "absent": self.absent,
+            "duplicates": self.duplicates,
+            "unparented": self.unparented,
+            "objects": self.objects,
+        }
 
 
 def _frames_of(db: Session, stack_id: int) -> list[Frames]:
@@ -162,6 +176,106 @@ def _shape(row: Contours) -> Contour:
                    x=list(row.x or []), y=list(row.y or []), confidence=row.confidence_score)
 
 
+class PropagationWriter:
+    """Writes propagated outlines onto their frames, one result at a time.
+
+    One result per call so a streamed run is saved -- and visible to anyone
+    opening that slice -- as it arrives, and a run stopped part-way keeps what it
+    has. Each :meth:`add` commits.
+    """
+
+    def __init__(self, db: Session, *, stack_id: int, seeds: dict[int, Contours],
+                 model_key: str, username: str):
+        self.db = db
+        self.seeds = seeds
+        self.model_key = model_key
+        self.username = username
+        self.run_id = provenance.new_run_id()
+        self.frames = _frames_of(db, stack_id)
+        self.masks = {mask.image_id: mask for mask in db.query(Masks).filter(
+            Masks.image_id.in_([frame.id for frame in self.frames])).all()}
+        self.seed_parent_labels = {
+            object_id: db.query(Contours.label_id).filter(Contours.id == seed.parent_id).scalar()
+            for object_id, seed in seeds.items() if seed.parent_id is not None
+        }
+        self.summary = PropagationSummary()
+        self._to_check: set[int] = set()
+        self._absent: set[int] = set()
+        #: Why the last :meth:`add` wrote nothing: ``absent``, ``duplicate`` or
+        #: ``unparented`` (None after a write). Streamed with each slice.
+        self.last_skip: str | None = None
+
+    def add(self, entry: dict) -> int | None:
+        """Write one ``{object_id, frame_index, presence, contour}`` result.
+
+        Returns the new contour's id, or None when nothing was written (the object
+        is absent there, already drawn there, or has no parent to nest under).
+        """
+        self.last_skip = None
+        index = entry.get("frame_index")
+        seed = self.seeds.get(entry.get("object_id"))
+        if seed is None or index is None or not 0 <= index < len(self.frames):
+            return None
+        if entry.get("contour") is None:
+            self._absent.add(index)
+            self.last_skip = "absent"
+            return None
+        mask = self.masks.get(self.frames[index].id)
+        if mask is None:
+            return None
+
+        contour = Contour.model_validate(entry["contour"])
+        contour.label_id = seed.label_id
+        contour.confidence = float(entry.get("presence", contour.confidence or 0))
+        contour.added_by = self.model_key
+        contour.parent_id = None
+        contour.children = []
+
+        existing = self.db.query(Contours).filter(Contours.mask_id == mask.id,
+                                                  Contours.temporary.is_(False)).all()
+        decision = nms([contour], iou_threshold=DUPLICATE_IOU, existing=[_shape(row) for row in existing])
+        if not decision.kept:
+            self.summary.duplicates += 1
+            self.last_skip = "duplicate"
+            return None
+
+        parent_id = None
+        object_id = entry["object_id"]
+        if object_id in self.seed_parent_labels:
+            # A child object nests under the parent object it falls inside on this
+            # slice; with none there it is dropped, as batch inference does.
+            parents = [row for row in existing if row.label_id == self.seed_parent_labels[object_id]]
+            winner = best_parent(contour, [_shape(row) for row in parents])
+            if winner is None:
+                self.summary.unparented += 1
+                self.last_skip = "unparented"
+                return None
+            parent_id = parents[winner].id
+
+        saved = save_contour_tree(self.db, contour, mask.id, parent_id=parent_id,
+                                  author_username=self.username, invalidate_metrics=False)
+        invalidate_metrics_for_new_contours(self.db, [saved])
+        provenance.record_suggestions(
+            self.db, [saved.id], source=SuggestionSource.PROPAGATION, model_key=self.model_key,
+            username=self.username, run_id=self.run_id, commit=False,
+        )
+        self.db.commit()
+
+        self.summary.contour_ids.append(saved.id)
+        self.summary.frames[index] = self.summary.frames.get(index, 0) + 1
+        self.summary.objects.setdefault(object_id, {})[index] = saved.id
+        if contour.confidence < CHECK_BELOW:
+            self._to_check.add(index)
+        return saved.id
+
+    def finish(self) -> PropagationSummary:
+        summary = self.summary
+        summary.created = len(summary.contour_ids)
+        summary.to_check = sorted(self._to_check)
+        summary.absent = sorted(self._absent - set(summary.frames))
+        return summary
+
+
 def save_propagated(
     db: Session,
     *,
@@ -171,77 +285,29 @@ def save_propagated(
     model_key: str,
     username: str,
 ) -> PropagationSummary:
-    """Write the ai-service's propagated outlines onto their frames. Commits.
-
-    Args:
-        results: The ``/propagation/inference`` ``result`` entries,
-            ``{object_id, frame_index, presence, contour}``.
-    """
-    frames = _frames_of(db, stack_id)
-    masks = {mask.image_id: mask for mask in
-             db.query(Masks).filter(Masks.image_id.in_([frame.id for frame in frames])).all()}
-    seed_parent_labels = {
-        object_id: db.query(Contours.label_id).filter(Contours.id == seed.parent_id).scalar()
-        for object_id, seed in seeds.items() if seed.parent_id is not None
-    }
-
-    summary = PropagationSummary()
-    to_check: set[int] = set()
-    absent: set[int] = set()
-    by_frame: dict[int, list[tuple[Contour, int]]] = defaultdict(list)
+    """Write a whole run's results at once (the non-streaming route). Commits."""
+    writer = PropagationWriter(db, stack_id=stack_id, seeds=seeds, model_key=model_key, username=username)
     for entry in results:
-        index = entry["frame_index"]
-        seed = seeds.get(entry["object_id"])
-        if seed is None or not 0 <= index < len(frames):
-            continue
-        if entry.get("contour") is None:
-            absent.add(index)
-            continue
-        contour = Contour.model_validate(entry["contour"])
-        contour.label_id = seed.label_id
-        contour.confidence = float(entry.get("presence", contour.confidence or 0))
-        contour.added_by = model_key
-        contour.parent_id = None
-        contour.children = []
-        by_frame[index].append((contour, entry["object_id"]))
+        writer.add(entry)
+    return writer.finish()
 
-    saved_rows: list[Contours] = []
-    for index, candidates in sorted(by_frame.items()):
-        mask = masks.get(frames[index].id)
-        if mask is None:
-            continue
-        existing = db.query(Contours).filter(Contours.mask_id == mask.id,
-                                             Contours.temporary.is_(False)).all()
-        shapes = [contour for contour, _ in candidates]
-        decision = nms(shapes, iou_threshold=DUPLICATE_IOU, existing=[_shape(row) for row in existing])
-        summary.duplicates += len(decision.suppressed)
-        for position in decision.kept:
-            contour, object_id = candidates[position]
-            parent_id = None
-            if object_id in seed_parent_labels:
-                # A child object nests under the parent object it falls inside on
-                # this slice; with none there it is dropped, as batch inference does.
-                parents = [row for row in existing if row.label_id == seed_parent_labels[object_id]]
-                winner = best_parent(contour, [_shape(row) for row in parents])
-                if winner is None:
-                    summary.unparented += 1
-                    continue
-                parent_id = parents[winner].id
-            saved = save_contour_tree(db, contour, mask.id, parent_id=parent_id,
-                                      author_username=username, invalidate_metrics=False)
-            saved_rows.append(saved)
-            summary.contour_ids.append(saved.id)
-            summary.frames[index] = summary.frames.get(index, 0) + 1
-            if contour.confidence < CHECK_BELOW:
-                to_check.add(index)
 
-    invalidate_metrics_for_new_contours(db, saved_rows)
-    provenance.record_suggestions(
-        db, summary.contour_ids, source=SuggestionSource.PROPAGATION,
-        model_key=model_key, username=username, commit=False,
-    )
+async def replace_suggestions(db: Session, *, stack_id: int, contour_ids: list[int]) -> list[int]:
+    """Remove an earlier run's suggestions before propagating again from corrections.
+
+    Only unreviewed objects on this stack's slices whose outline nobody edited are
+    removed -- anything a person confirmed or fixed is kept, and should be among
+    the new run's seeds. Their suggestions count as superseded, not rejected: a
+    newer run replaced them, nobody turned them down. Returns the removed ids.
+    """
+    from app.services.database_access import contours as contours_db
+
+    frame_ids = [frame.id for frame in _frames_of(db, stack_id)]
+    rows = (db.query(Contours).join(Masks, Masks.id == Contours.mask_id)
+            .filter(Contours.id.in_(contour_ids), Masks.image_id.in_(frame_ids)).all())
+    removable = [row.id for row in rows if not row.reviewed_by and row.geometry_edited_at is None]
+    provenance.record_superseded(db, removable)
+    for contour_id in removable:
+        await contours_db.delete_contour(contour_id, db)
     db.commit()
-    summary.created = len(summary.contour_ids)
-    summary.to_check = sorted(to_check)
-    summary.absent = sorted(absent - set(summary.frames))
-    return summary
+    return removable

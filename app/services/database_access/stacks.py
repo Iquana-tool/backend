@@ -317,6 +317,9 @@ def get_stack_objects(db: Session, stack_id: int) -> list[dict]:
             "origin": contour.origin,
             "added_by": contour.added_by,
             "reviewed": contour.id in reviewed,
+            # A person changed the outline after it was created -- for a propagated
+            # suggestion, a correction the next run should learn from.
+            "edited": contour.geometry_edited_at is not None,
             "x": contour.x,
             "y": contour.y,
         }
