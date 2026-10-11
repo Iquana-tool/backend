@@ -32,6 +32,8 @@ class SuggestionSource:
     INSTANCE_SEGMENTATION = "instance_segmentation"
     CROSS_IMAGE = "cross_image"
     BATCH_INFERENCE = "batch_inference"
+    #: Carried from slices a person drew on to the other slices of a stack (#121).
+    PROPAGATION = "propagation"
 
 
 class AiSuggestions(database):

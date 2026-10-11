@@ -52,6 +52,9 @@ EMBEDDING_MODEL_ID = os.environ.get("EMBEDDING_MODEL_ID", "facebook/dinov3-vitb1
 # Cross-image concept suggestion surface + the model (ai-service registry key) that serves it.
 CROSS_IMAGE_BACKEND_URL = os.environ.get("CROSS_IMAGE_BACKEND_URL", f"{AI_SERVICE_URL}/cross-image-suggestion")
 CROSS_IMAGE_MODEL_KEY = os.environ.get("CROSS_IMAGE_MODEL_KEY", "sam3")
+# Propagation through a stack's slices (#121) + the model used when the request names none.
+PROPAGATION_BACKEND_URL = os.environ.get("PROPAGATION_BACKEND_URL", f"{AI_SERVICE_URL}/propagation")
+PROPAGATION_MODEL_KEY = os.environ.get("PROPAGATION_MODEL_KEY", "sam2-1-tiny")
 SECRET_KEY = os.environ.get("SECRET_KEY", "supersecretkey")
 # Where the key that encrypts stored API keys is kept when IQUANA_SECRETS_KEY is not
 # set; generated on first use. See app/services/secrets.py. Deliberately separate

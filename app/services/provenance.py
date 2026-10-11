@@ -39,7 +39,7 @@ IMPORT = "import"
 AI_SOURCES = {
     SuggestionSource.PROMPTED, SuggestionSource.REFINE, SuggestionSource.INSTANCE_SUGGESTION,
     SuggestionSource.INSTANCE_SEGMENTATION, SuggestionSource.CROSS_IMAGE,
-    SuggestionSource.BATCH_INFERENCE,
+    SuggestionSource.BATCH_INFERENCE, SuggestionSource.PROPAGATION,
 }
 
 

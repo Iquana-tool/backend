@@ -364,3 +364,90 @@ def test_dataset_wide_scale_leaves_file_scaled_frames_alone(ctx):
     db.expire_all()
     assert db.get(Images, ctx["image_id"]).scale_x == 0.5
     assert {f.scale_x for f in db.query(Frames).filter_by(stack_id=ctx["stack_id"])} == {0.0113}
+
+
+# -- propagation (#121) ------------------------------------------------------------
+
+def _seed(db, image_id, x=(0.2, 0.6, 0.6, 0.2), y=(0.2, 0.2, 0.6, 0.6), added_by="User"):
+    from app.database.contours import Contours
+    mask = db.query(Masks).filter(Masks.image_id == image_id).one()
+    contour = Contours(mask_id=mask.id, added_by=added_by, origin="manual", confidence_score=1,
+                       area=1, perimeter=1, circularity=1, diameter=1, x=list(x), y=list(y))
+    db.add(contour)
+    db.commit()
+    return contour
+
+
+def _square(x0=0.2, x1=0.6):
+    return {"x": [x0, x1, x1, x0], "y": [0.2, 0.2, 0.6, 0.6], "confidence": 1.0, "added_by": "sam2-1-tiny"}
+
+
+def test_propagation_request_carries_every_frame_and_the_seed_mask(ctx):
+    from app.services import propagation
+    db = ctx["db"]
+    frames = _frame_ids(db, ctx["stack_id"])
+    seed = _seed(db, frames[1])
+    request, seeds = propagation.build_propagation_request(
+        db, stack_id=ctx["stack_id"], objects=[[seed.id]], model_key="sam2-1-tiny", user_id="curator")
+    assert len(request.frame_urls) == 4 and request.image_url == request.frame_urls[1]
+    frame_mask = request.objects[0].frame_masks[0]
+    assert frame_mask.frame_index == 1
+    assert frame_mask.mask.mask.shape == (20, 30) and frame_mask.mask.mask.sum() > 0
+    assert seeds == {seed.id: seed}
+
+
+def test_propagation_refuses_objects_off_the_stack(ctx):
+    from fastapi import HTTPException
+    from app.services import propagation
+    db = ctx["db"]
+    db.add(Masks(image_id=ctx["image_id"], file_path=str(ctx["tmp"] / "plain_mask.png")))
+    db.commit()
+    plain = _seed(db, ctx["image_id"])
+    with pytest.raises(HTTPException) as caught:
+        propagation.build_propagation_request(
+            db, stack_id=ctx["stack_id"], objects=[[plain.id]], model_key="m", user_id="curator")
+    assert caught.value.status_code == 400
+
+
+def test_propagated_outlines_land_as_suggestions_and_skip_duplicates(ctx):
+    from app.database.ai_suggestions import AiSuggestions
+    from app.database.contours import Contours
+    from app.services import propagation
+    db = ctx["db"]
+    frames = _frame_ids(db, ctx["stack_id"])
+    seed = _seed(db, frames[1])
+    _seed(db, frames[2])  # someone already drew it on slice 3
+    results = [
+        {"object_id": seed.id, "frame_index": 0, "presence": 0.6, "contour": _square()},
+        {"object_id": seed.id, "frame_index": 2, "presence": 0.95, "contour": _square()},
+        {"object_id": seed.id, "frame_index": 3, "presence": 0.1, "contour": None},
+    ]
+    summary = propagation.save_propagated(
+        db, stack_id=ctx["stack_id"], results=results, seeds={seed.id: seed},
+        model_key="sam2-1-tiny", username="curator")
+
+    assert (summary.created, summary.frames, summary.duplicates) == (1, {0: 1}, 1)
+    assert summary.to_check == [0] and summary.absent == [3]
+    written = db.get(Contours, summary.contour_ids[0])
+    assert written.origin == "propagation" and written.confidence_score == pytest.approx(0.6)
+    assert written.added_by == "sam2-1-tiny" and not written.reviewed_by
+    assert db.query(AiSuggestions).filter_by(contour_id=written.id).one().source == "propagation"
+
+
+def test_propagate_route(ctx, client, monkeypatch):
+    from app.services.ai_services import propagation as client_module
+    db = ctx["db"]
+    frames = _frame_ids(db, ctx["stack_id"])
+    seed = _seed(db, frames[0])
+    sent = {}
+
+    async def fake_inference(self, request):
+        sent["request"] = request
+        return {"result": [{"object_id": seed.id, "frame_index": 1, "presence": 0.9, "contour": _square()}]}
+
+    monkeypatch.setattr(client_module.PropagationService, "inference", fake_inference)
+    response = client.post(f"/stacks/{ctx['stack_id']}/propagate",
+                           json={"objects": [[seed.id]], "end_frame": 2, "direction": "forward"})
+    assert response.status_code == 200, response.text
+    assert response.json()["created"] == 1 and response.json()["frames"] == {"1": 1}
+    assert sent["request"].end_frame == 2 and sent["request"].direction == "forward"
