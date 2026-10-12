@@ -34,6 +34,8 @@ class AiTool(StrEnum):
     TRAINING = "training"
     #: Run models over the whole dataset.
     BATCH_INFERENCE = "batch_inference"
+    #: Carry an object from the slices it is drawn on to the rest of a stack.
+    PROPAGATION = "propagation"
 
 
 def parse(raw: str | None) -> frozenset[AiTool]:

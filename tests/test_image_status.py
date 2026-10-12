@@ -364,6 +364,9 @@ class TestDatasetProgress:
         assert rows == [{
             "image_id": image.id,
             "file_name": image.file_name,
+            # A plain image belongs to no stack.
+            "stack_id": None,
+            "frame_index": None,
             "mask_id": None,
             "status": NOT_STARTED,
             "phases": {"calibrate": NOT_STARTED, "annotate": NOT_STARTED,

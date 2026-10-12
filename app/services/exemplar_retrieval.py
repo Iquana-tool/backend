@@ -186,7 +186,7 @@ def _concept_annotations(session: Session, query: RetrievalQuery, model_id: str)
         # and feeding its existing objects back would bias the model toward what is already
         # there instead of transferring the concept from elsewhere.
         .filter(Images.id != query.target_image_id)
-        .order_by(Contours.reviewed_by.any().desc(), Contours.created_at.desc())
+        .order_by(Contours.reviewed_by.any().desc(), Contours.created_at.desc(), Contours.id.desc())
         .limit(query.top_k)
         .all()
     )

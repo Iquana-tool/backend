@@ -39,7 +39,7 @@ IMPORT = "import"
 AI_SOURCES = {
     SuggestionSource.PROMPTED, SuggestionSource.REFINE, SuggestionSource.INSTANCE_SUGGESTION,
     SuggestionSource.INSTANCE_SEGMENTATION, SuggestionSource.CROSS_IMAGE,
-    SuggestionSource.BATCH_INFERENCE,
+    SuggestionSource.BATCH_INFERENCE, SuggestionSource.PROPAGATION,
 }
 
 
@@ -176,6 +176,20 @@ def record_deletion(db: Session, contour_ids: Iterable[int], commit: bool = True
                                     AiSuggestions.deleted_at.is_(None),
                                     AiSuggestions.superseded_at.is_(None))
      .update({AiSuggestions.deleted_at: _now()}, synchronize_session=False))
+    if commit:
+        db.commit()
+
+
+@_safely("superseded")
+def record_superseded(db: Session, contour_ids: Iterable[int], commit: bool = True) -> None:
+    """Suggestions replaced by a newer run of the same tool: superseded, not rejected."""
+    ids = [cid for cid in contour_ids if cid is not None]
+    if not ids:
+        return
+    (db.query(AiSuggestions).filter(AiSuggestions.contour_id.in_(ids),
+                                    AiSuggestions.deleted_at.is_(None),
+                                    AiSuggestions.superseded_at.is_(None))
+     .update({AiSuggestions.superseded_at: _now()}, synchronize_session=False))
     if commit:
         db.commit()
 

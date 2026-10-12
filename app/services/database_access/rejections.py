@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database.contours import Contours
+from app.database.images import Frames
 from app.database.masks import Masks
 from app.database.rejections import AnnotationRejections
 from app.schemas.review import (
@@ -153,6 +154,47 @@ async def list_for_mask(mask_id: int, db: Session, open_only: bool = False) -> l
         query = query.filter(AnnotationRejections.resolved_at.is_(None))
     rejections = query.order_by(AnnotationRejections.created_at.desc()).all()
     return [to_read(rejection) for rejection in rejections]
+
+
+def _stack_rejections_query(stack_id: int, db: Session, open_only: bool):
+    query = (
+        db.query(AnnotationRejections, Frames.id, Frames.frame_index)
+        .join(Masks, Masks.id == AnnotationRejections.mask_id)
+        .join(Frames, Frames.id == Masks.image_id)
+        .filter(Frames.stack_id == stack_id)
+    )
+    if open_only:
+        query = query.filter(AnnotationRejections.resolved_at.is_(None))
+    return query
+
+
+async def list_for_stack(stack_id: int, db: Session, open_only: bool = False) -> list[dict]:
+    """Rejections on any frame of a stack, in frame order, newest first within a frame.
+
+    Each carries the frame's ``image_id`` and ``frame_index``, so a scan can show its
+    feedback once instead of per slice, and say which slice each point is about.
+    """
+    rows = (
+        _stack_rejections_query(stack_id, db, open_only)
+        .order_by(Frames.frame_index, AnnotationRejections.created_at.desc())
+        .all()
+    )
+    return [
+        {**to_read(rejection).model_dump(mode="json"), "image_id": image_id, "frame_index": frame_index}
+        for rejection, image_id, frame_index in rows
+    ]
+
+
+async def resolve_all_for_stack(stack_id: int, username: str, db: Session) -> int:
+    """Clear every open rejection on every frame of a stack; returns how many were resolved."""
+    open_rejections = [rejection for rejection, _, _ in _stack_rejections_query(stack_id, db, open_only=True)]
+    now = _utcnow()
+    for rejection in open_rejections:
+        rejection.resolved_at = now
+        rejection.resolved_by = username
+    if open_rejections:
+        db.commit()
+    return len(open_rejections)
 
 
 async def count_open_for_mask(mask_id: int, db: Session) -> int:

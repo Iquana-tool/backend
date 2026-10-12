@@ -2,10 +2,11 @@ import json
 import logging
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.database.images import Images
+from app.database.images import KIND_FRAME, Images
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
 from app.services import image_status
@@ -119,6 +120,11 @@ async def delete_image(
     Returns:
         A dictionary indicating success and a message.
     """
+    if db.query(Images.kind).filter(Images.id == image_id).scalar() == KIND_FRAME:
+        # A stack's frames are numbered contiguously; removing one would leave a
+        # gap that the slice viewer and the overview lines cannot represent.
+        raise HTTPException(status_code=409,
+                            detail=f"Image {image_id} is a frame of a stack. Delete the stack instead.")
     await images_db.delete_image(image_id, db=db)
     return {"success": True,
             "message": f"Deleted image {image_id}."}
@@ -180,6 +186,24 @@ async def get_base64_image(
         "message": f"Successfully retrieved image {image_id}.",
         image_id: await images_db.get_image_data(image_id, as_thumbnail=False, as_base64=True, db=db)
     }
+
+
+@router.get("/{image_id}/file")
+async def get_image_file(
+        image_id: int,
+        thumbnail: bool = False,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.IMAGE_READ, "image_id"))
+):
+    """The image file itself (or its thumbnail), as raw bytes the browser can cache.
+
+    Unlike ``/b64`` this is not wrapped in JSON, so it is a third smaller and the
+    browser keeps it: stored image files never change after upload. Scrolling
+    through a stack's frames relies on that.
+    """
+    row = db.query(Images.file_path, Images.thumbnail_file_path).filter(Images.id == image_id).first()
+    path = row.thumbnail_file_path if thumbnail else row.file_path
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 
 @router.get("/{image_id}/thumbnail")

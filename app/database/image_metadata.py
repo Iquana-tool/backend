@@ -21,10 +21,17 @@ consistency is cheap to enforce.
 ``UniqueConstraint(image_id, key)`` makes a row *the* current value of that key
 for that image — setting a key again overwrites it. Rows go with the image
 (ON DELETE CASCADE).
+
+**Owners.** A row belongs to exactly one image *or* one stack. Stack rows hold
+what is true of the whole stack (an OCT volume's eye and visit date) and every
+frame of the stack inherits them; a frame's own row for the same key wins. Reads
+go through the effective view in ``app.services.database_access.image_metadata``,
+so a frame reports its inherited keys like any image reports its own.
 """
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -53,7 +60,12 @@ class ImageMetadata(database):
 
     id: Mapped[int] = Column(Integer, primary_key=True, autoincrement=True)
     image_id: Mapped[int] = Column(
-        Integer, ForeignKey("images.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("images.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    #: Set instead of ``image_id`` for metadata of a whole stack, which its frames
+    #: inherit.
+    stack_id: Mapped[int] = Column(
+        Integer, ForeignKey("stacks.id", ondelete="CASCADE"), nullable=True, index=True
     )
 
     #: Normalised by :func:`app.services.database_access.image_metadata.normalize_key`
@@ -84,11 +96,14 @@ class ImageMetadata(database):
 
     __table_args__ = (
         UniqueConstraint("image_id", "key", name="uq_image_metadata_image_key"),
+        UniqueConstraint("stack_id", "key", name="uq_image_metadata_stack_key"),
+        CheckConstraint("(image_id IS NULL) <> (stack_id IS NULL)",
+                        name="ck_image_metadata_one_owner"),
         # The facet query ("which keys/values does this dataset use") groups by
         # key and value across every image of a dataset.
         Index("ix_image_metadata_key_value", "key", "value"),
     )
 
     def __repr__(self) -> str:
-        return (f"<ImageMetadata(image_id={self.image_id}, "
+        return (f"<ImageMetadata(image_id={self.image_id}, stack_id={self.stack_id}, "
                 f"key='{self.key}', value='{self.value}')>")
