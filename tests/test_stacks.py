@@ -243,7 +243,33 @@ def test_stack_objects_list_every_frame_in_order(ctx):
     objects = stacks_db.get_stack_objects(db, ctx["stack_id"])
     assert [o["frame_index"] for o in objects] == [0, 2]
     assert objects[0]["x"] == [1, 2, 2] and objects[0]["reviewed"] is False
+    assert objects[0]["reviewed_by"] == []
 
+
+
+def test_stack_rejections_are_listed_and_resolved_for_the_whole_scan(ctx, client):
+    from app.database.rejections import AnnotationRejections
+    db = ctx["db"]
+    frame_ids = _frame_ids(db, ctx["stack_id"])
+    masks = {m.image_id: m.id for m in db.query(Masks).filter(Masks.image_id.in_(frame_ids))}
+    plain_mask = Masks(image_id=ctx["image_id"], file_path=str(ctx["tmp"] / "plain_mask.png"))
+    db.add(plain_mask)
+    db.flush()
+    db.add_all([
+        AnnotationRejections(mask_id=masks[frame_ids[2]], reason="bad_outline", created_by="curator"),
+        AnnotationRejections(mask_id=masks[frame_ids[0]], reason="missing_objects", created_by="curator"),
+        AnnotationRejections(mask_id=plain_mask.id, reason="other", note="not on the scan", created_by="curator"),
+    ])
+    db.commit()
+
+    rejections = client.get(f"/stacks/{ctx['stack_id']}/rejections?open_only=true").json()["rejections"]
+    assert [(r["frame_index"], r["image_id"], r["reason"]) for r in rejections] == [
+        (0, frame_ids[0], "missing_objects"), (2, frame_ids[2], "bad_outline")]
+
+    assert client.patch(f"/stacks/{ctx['stack_id']}/rejections/resolve").json() == {"resolved_count": 2}
+    assert client.get(f"/stacks/{ctx['stack_id']}/rejections?open_only=true").json() == {"rejections": []}
+    db.expire_all()
+    assert db.query(AnnotationRejections).filter_by(mask_id=plain_mask.id).one().resolved_at is None
 
 # -- deletion --------------------------------------------------------------------
 

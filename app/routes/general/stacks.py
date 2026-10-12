@@ -22,6 +22,7 @@ from app.schemas.permissions import Permission
 from app.exceptions import InvalidMetadataError, StackNotFoundError, UnsupportedStackFileError
 from app.services.database_access import datasets as datasets_db
 from app.services.database_access import image_metadata as metadata_db
+from app.services.database_access import rejections as rejections_db
 from app.services.database_access import stacks as stacks_db
 from app.services import propagation
 from app.services.ai_tools import AiTool, ensure_tool_enabled
@@ -144,6 +145,34 @@ async def get_stack_objects(
 ):
     """Every object on every frame of the stack, with its outline and frame index."""
     return {"objects": stacks_db.get_stack_objects(db, stack_id)}
+
+
+@router.get("/{stack_id}/rejections")
+async def list_stack_rejections(
+        stack_id: int,
+        open_only: bool = False,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ, "stack_id")),
+):
+    """Review rejections on any frame of the stack, each with its frame's image id and index.
+
+    A scan is reviewed as a whole, so its feedback is shown once for the scan rather
+    than per slice; the per-mask route still serves single images.
+    """
+    stacks_db.get_stack(db, stack_id)
+    return {"rejections": await rejections_db.list_for_stack(stack_id, db, open_only=open_only)}
+
+
+@router.patch("/{stack_id}/rejections/resolve")
+async def resolve_stack_rejections(
+        stack_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_EDIT_OWN, "stack_id")),
+):
+    """Clear every open rejection on every frame of the stack."""
+    stacks_db.get_stack(db, stack_id)
+    count = await rejections_db.resolve_all_for_stack(stack_id, username=user.username, db=db)
+    return {"resolved_count": count}
 
 
 @router.get("/{stack_id}/overview")

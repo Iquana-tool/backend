@@ -289,9 +289,10 @@ def get_stack_objects(db: Session, stack_id: int) -> list[dict]:
     """Every object of every frame, with its outline, in frame order.
 
     What the stack-aware views need in one request: the object timeline marks which
-    slices each label appears on, and the canvas draws the selected object's label
-    from the neighbouring slices dashed. Temporary contours (an unconfirmed preview)
-    are left out, as everywhere else that lists objects.
+    slices each label appears on, and the canvas paints a slice's objects from this
+    the moment the reader steps onto it, before the session's own copy arrives.
+    Temporary contours (an unconfirmed preview) are left out, as everywhere else that
+    lists objects.
     """
     get_stack(db, stack_id)
     rows = (
@@ -303,10 +304,13 @@ def get_stack_objects(db: Session, stack_id: int) -> list[dict]:
         .all()
     )
     contour_ids = [contour.id for contour, _, _ in rows]
-    reviewed = {
-        contour_id for (contour_id,) in db.query(reviewer_contour_association.c.contour_id)
-        .filter(reviewer_contour_association.c.contour_id.in_(contour_ids)).distinct()
-    } if contour_ids else set()
+    reviewers: dict[int, list[str]] = {}
+    if contour_ids:
+        for contour_id, reviewer in (
+            db.query(reviewer_contour_association.c.contour_id, reviewer_contour_association.c.reviewer_id)
+            .filter(reviewer_contour_association.c.contour_id.in_(contour_ids))
+        ):
+            reviewers.setdefault(contour_id, []).append(reviewer)
     return [
         {
             "contour_id": contour.id,
@@ -316,7 +320,8 @@ def get_stack_objects(db: Session, stack_id: int) -> list[dict]:
             "parent_id": contour.parent_id,
             "origin": contour.origin,
             "added_by": contour.added_by,
-            "reviewed": contour.id in reviewed,
+            "reviewed": contour.id in reviewers,
+            "reviewed_by": reviewers.get(contour.id, []),
             # A person changed the outline after it was created -- for a propagated
             # suggestion, a correction the next run should learn from.
             "edited": contour.geometry_edited_at is not None,
