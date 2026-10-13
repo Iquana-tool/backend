@@ -255,7 +255,9 @@ async def add_contour_to_mask(
                               author_username=author_username)
     db.commit()
     hierarchy_cache.invalidate(mask_id)
-    contour_to_add.id = entry.id
+    # Callers log and announce the whole saved tree, so every node needs its new id,
+    # not just the root (nested model output such as vessels inside a choroid).
+    _copy_saved_ids(db, contour_to_add, entry.id)
 
     # SVG path computation for the frontend
     # Get image dimensions and compute path
@@ -265,6 +267,21 @@ async def add_contour_to_mask(
         image_height=size["height"],
     )
     return contour_to_add
+
+
+def _copy_saved_ids(db: Session, contour_schema: Contour, contour_id: int):
+    """Give each node of a just-saved schema tree the id of its row.
+
+    ``save_contour_tree`` saves children in order, so a node's child rows sorted by id
+    line up with its schema children.
+    """
+    contour_schema.id = contour_id
+    if not contour_schema.children:
+        return
+    child_ids = [row.id for row in db.query(Contours.id).filter(Contours.parent_id == contour_id)
+                 .order_by(Contours.id)]
+    for child_schema, child_id in zip(contour_schema.children, child_ids):
+        _copy_saved_ids(db, child_schema, child_id)
 
 
 async def delete_all_contours_of_mask(
