@@ -90,6 +90,7 @@ def import_models():
         organizations,
         quantification_profiles,
         rejections,
+        scene_graph,
         stacks,
         activity_log_settings,
         user_events,

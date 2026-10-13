@@ -83,6 +83,8 @@ def resolve(
             resolved.append(ClassMappingRead(
                 model_class=model_class, action=action,
                 label_id=row.label_id if action == MAP else None, source="saved",
+                attribute_id=row.attribute_id if action == MAP else None,
+                attribute_value=row.attribute_value if action == MAP and row.attribute_id else None,
             ))
             continue
         suggested = label_by_name.get(model_class.name.strip().lower())
@@ -230,6 +232,8 @@ def save_mapping(
             db.add(row)
         row.action = DISCARD if change.action == DISCARD else MAP
         row.label_id = label_id
+        row.attribute_id, row.attribute_value = _attribute_for(
+            db, dataset_id, change, classes[change.model_class], label_id)
         row.updated_by = username
         if label_id is None:
             current.pop(change.model_class, None)
@@ -237,6 +241,76 @@ def save_mapping(
             current[change.model_class] = label_id
     db.commit()
     return get_mapping(db, dataset_id, registry_key)
+
+
+def _attribute_for(db: Session, dataset_id: int, change: ClassMappingWrite,
+                   model_class: ModelClass, label_id: Optional[int]) -> tuple[Optional[int], Optional[str]]:
+    """Validate the attribute value a class mapping sets, by the attribute's own rules."""
+    if change.attribute_id is None:
+        return None, None
+    from app.exceptions import InvalidSceneGraphError, SceneGraphNotFoundError
+    from app.services.database_access import scene_graph as graph_db
+    try:
+        definition = graph_db.get_attribute(db, dataset_id, change.attribute_id)
+        if not definition.applies_to(label_id):
+            raise InvalidSceneGraphError(
+                f"Attribute '{definition.name}' does not apply to the label class "
+                f"'{model_class.key}' is mapped to.")
+        value, _ = graph_db.coerce_value(definition, change.attribute_value or model_class.name)
+    except (InvalidSceneGraphError, SceneGraphNotFoundError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    return definition.id, value
+
+
+def apply_class_attributes(db: Session, dataset_id: int, registry_key: str, contour_ids) -> int:
+    """Give freshly saved model output the attribute values its classes are mapped to.
+
+    Runs after the objects are saved (it needs their ids), reading the class each one
+    was predicted as from ``contours.model_class``. Values arrive as *suggestions*
+    carrying the model and its confidence, and never overwrite a value that is already
+    there. Does not commit. Returns how many values were written.
+    """
+    from app.database.contours import Contours
+    from app.database.scene_graph import (
+        SOURCE_MODEL,
+        STATUS_SUGGESTED,
+        ObjectAttributeDefinitions,
+        ObjectAttributes,
+    )
+    from app.services.metadata_types import coerce
+
+    ids = list(contour_ids)
+    if not ids:
+        return 0
+    mapped = {
+        row.model_class: row
+        for row in db.query(ModelLabelMappings).filter(
+            ModelLabelMappings.dataset_id == dataset_id,
+            ModelLabelMappings.model_registry_key == registry_key,
+            ModelLabelMappings.attribute_id.is_not(None),
+        )
+    }
+    if not mapped:
+        return 0
+    written = 0
+    for contour in db.query(Contours).filter(Contours.id.in_(ids), Contours.model_class.in_(mapped)):
+        row = mapped[contour.model_class]
+        if contour.label_id != row.label_id:
+            continue  # moved by hierarchy fitting or a person; the class no longer applies
+        if db.query(ObjectAttributes.id).filter_by(contour_id=contour.id,
+                                                   attribute_id=row.attribute_id).first():
+            continue
+        definition = db.get(ObjectAttributeDefinitions, row.attribute_id)
+        _, number = coerce(row.attribute_value, definition.value_type)
+        db.add(ObjectAttributes(
+            contour_id=contour.id, attribute_id=row.attribute_id, value=row.attribute_value,
+            value_num=number, source=SOURCE_MODEL, status=STATUS_SUGGESTED,
+            model_key=registry_key, confidence=contour.confidence_score,
+            author_username=contour.author_username,
+        ))
+        written += 1
+    db.flush()
+    return written
 
 
 def _depth(classes: dict[str, ModelClass], key: str) -> int:

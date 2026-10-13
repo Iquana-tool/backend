@@ -85,3 +85,14 @@ class DatasetArchiveNameConflictError(DatasetArchiveImportError):
 class DatasetArchiveSizeLimitError(DatasetArchiveImportError):
     """Raised when an archive exceeds compressed or uncompressed size/member limits (HTTP 413)."""
     pass
+
+
+class InvalidSceneGraphError(IQuanaBaseError):
+    """Raised when an attribute, attribute value or relationship is not valid."""
+    pass
+
+
+class SceneGraphNotFoundError(IQuanaBaseError):
+    """Raised when an attribute, relationship type, relationship or object does not exist
+    in the dataset it was asked for."""
+    pass

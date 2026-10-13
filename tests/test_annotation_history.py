@@ -260,6 +260,26 @@ def test_label_change_round_trips(session, world):
     assert session.query(Contours).filter_by(id=contour.id).one().label_id == world["algae"].id
 
 
+def test_redo_after_several_undos_replays_in_original_order(session, world):
+    """Add, then relabel; undo both; redo must re-add before it relabels."""
+    mask = world["mask"]
+    contour = _add(session, mask, label_id=world["coral"].id)
+    contour_id = contour.id
+    history_db.record_create(session, mask.id, ANNOTATOR, contour_id)
+    contour.label_id = world["algae"].id
+    session.commit()
+    history_db.record_label_change(session, mask.id, ANNOTATOR, contour_id,
+                                   world["coral"].id, world["algae"].id)
+
+    history_db.undo(mask.id, ANNOTATOR, session)
+    history_db.undo(mask.id, ANNOTATOR, session)
+    assert contour_id not in _ids(session, mask)
+
+    history_db.redo(mask.id, ANNOTATOR, session)
+    history_db.redo(mask.id, ANNOTATOR, session)
+    assert session.query(Contours).filter_by(id=contour_id).one().label_id == world["algae"].id
+
+
 def test_a_label_change_that_changes_nothing_is_not_recorded(session, world):
     mask = world["mask"]
     contour = _add(session, mask, label_id=world["coral"].id)

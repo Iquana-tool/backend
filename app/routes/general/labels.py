@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.schemas.auth_user import AuthenticatedUser
+from app.exceptions import InvalidSceneGraphError
 from app.schemas.label_space import LabelSpaceDraft
 from app.schemas.labels import LabelMoveRequest, LabelUpdate
 from app.schemas.permissions import Permission
@@ -71,7 +72,7 @@ async def bulk_create_labels(
     """
     try:
         created_count = await labels_db.bulk_create_labels(dataset_id, draft.labels, db)
-    except ValueError as exc:
+    except (ValueError, InvalidSceneGraphError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {
         "success": True,

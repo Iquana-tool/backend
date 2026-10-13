@@ -28,6 +28,7 @@ from app.exceptions import (
     DatasetNotFoundError,
     InvalidLabelFilterError,
     InvalidMetadataError,
+    InvalidSceneGraphError,
 )
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.dataset_archive import DatasetArchiveImportResponse
@@ -45,6 +46,7 @@ from app.services.database_access import labels as labels_db
 from app.services.database_access import members as members_db
 from app.services.database_access import organizations as organizations_db
 from app.services.database_access import quantification_profiles as profiles_db
+from app.services.database_access import scene_graph as graph_db
 from app.services.database_access.datasets import (
     ContourSelection,
     export_dataset_contours_to_coco,
@@ -682,7 +684,8 @@ async def get_dataset_quantification_summary(
             down by, so the page can compare the same label across sites / treatments
             rather than only across labels. Metadata is effectively an image-wide label
             that every object on the image inherits, which is why this is a grouping key
-            on the existing aggregation rather than a new kind of metric.
+            on the existing aggregation rather than a new kind of metric. ``attr:<name>``
+            groups by a given object attribute instead (e.g. ``attr:species``).
 
             Only *groupable* key types are accepted (category, yes/no); a number or a
             date is near-unique per image and would draw one band per image, so it is
@@ -727,8 +730,13 @@ async def get_dataset_quantification_summary(
     group_by_key = None
     if group_by:
         try:
-            group_by_key = metadata_db.assert_groupable(db, dataset_id, group_by)
-        except InvalidMetadataError as exc:
+            if group_by.startswith(graph_db.ATTRIBUTE_GROUP_PREFIX):
+                name = group_by[len(graph_db.ATTRIBUTE_GROUP_PREFIX):]
+                group_by_key = (graph_db.ATTRIBUTE_GROUP_PREFIX
+                                + graph_db.assert_groupable_attribute(db, dataset_id, name))
+            else:
+                group_by_key = metadata_db.assert_groupable(db, dataset_id, group_by)
+        except (InvalidMetadataError, InvalidSceneGraphError) as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail=str(exc))
 

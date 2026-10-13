@@ -808,6 +808,13 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
             db, added_ids, source=SuggestionSource.INSTANCE_SEGMENTATION,
             model_key=model_registry_key, username=state.user_id,
         )
+        # Classes mapped to a label *and* an attribute value (species) set that value too.
+        if any(getattr(contour, "model_class", None) for contour in contours_to_add):
+            model_label_mapping.apply_class_attributes(
+                db, getattr(state.image_db, "dataset_id", None) or getattr(state, "dataset_id", None),
+                model_registry_key, added_ids,
+            )
+            db.commit()
         hierarchy, payload = await masks_db.get_cached_contour_hierarchy_of_mask(state.mask_id, db)
     state.contour_hierarchy = hierarchy
 

@@ -30,6 +30,7 @@ from app.exceptions import InvalidLabelFilterError
 from app.services import image_status
 from app.services.database_access.image_metadata import get_metadata_for_dataset
 from app.services.database_access.labels import get_hierarchical_label_name
+from app.services.database_access import scene_graph as graph_db
 from app.services.database_access.members import ensure_owner_membership
 from config import DATASETS_DIR
 
@@ -308,6 +309,7 @@ async def get_dataset_as_df(
 
     metadata_by_image, metadata_keys = _metadata_columns(db, dataset_id)
     parent_labels = _parent_labels(db, dataset_id)
+    graph = _GraphColumns(db, dataset_id, [row[0].id for row in data])
 
     df_data = {}
     for row in data:
@@ -326,6 +328,7 @@ async def get_dataset_as_df(
         df_data.setdefault("contour_id", []).append(contour.id)
         df_data.setdefault("parent_id", []).append(contour.parent_id)
         df_data.setdefault("parent_label", []).append(parent_labels.get(contour.parent_id))
+        graph.append_row(df_data, contour.id)
         df_data.setdefault("area", []).append(contour.area)
         df_data.setdefault("perimeter", []).append(contour.perimeter)
         df_data.setdefault("circularity", []).append(contour.circularity)
@@ -369,6 +372,30 @@ def _metadata_columns(db: Session, dataset_id: int) -> tuple[dict[int, dict[str,
     keys = sorted({key for entries in metadata_by_image.values() for key in entries},
                   key=str.lower)
     return metadata_by_image, keys
+
+
+class _GraphColumns:
+    """The scene-graph columns of a flat export: given attributes and named relationships.
+
+    ``attr_<name>`` holds an object's confirmed value (``(cannot tell)`` when someone
+    looked and could not tell; empty when nobody set it). ``rel_<name>`` lists the ids
+    the object points to with that relationship, ``rel_<name>_of`` the ids pointing to
+    it. Every attribute and relationship of the dataset is a column, so the columns of
+    an export do not depend on which objects it contains.
+    """
+
+    def __init__(self, db: Session, dataset_id: int, contour_ids: list[int]):
+        self.attributes, self.attribute_names = graph_db.attribute_columns(db, dataset_id, contour_ids)
+        self.relationships, self.relationship_columns = graph_db.relationship_columns(
+            db, dataset_id, contour_ids)
+
+    def append_row(self, df_data: dict[str, list], contour_id: int) -> None:
+        values = self.attributes.get(contour_id, {})
+        for name in self.attribute_names:
+            df_data.setdefault(f"attr_{name}", []).append(values.get(name))
+        edges = self.relationships.get(contour_id, {})
+        for column in self.relationship_columns:
+            df_data.setdefault(f"rel_{column}", []).append(edges.get(column))
 
 
 def _metric_column_name(metric_key: str, component: int) -> str:
@@ -459,6 +486,7 @@ def _dataset_df_from_profile(
 
     metadata_by_image, metadata_keys = _metadata_columns(db, dataset_id)
     parent_labels = _parent_labels(db, dataset_id)
+    graph = _GraphColumns(db, dataset_id, contour_ids)
 
     df_data: dict[str, list] = {}
     for row in rows:
@@ -480,6 +508,7 @@ def _dataset_df_from_profile(
         # a flat per-contour table otherwise loses entirely.
         df_data.setdefault("parent_id", []).append(contour.parent_id)
         df_data.setdefault("parent_label", []).append(parent_labels.get(contour.parent_id))
+        graph.append_row(df_data, contour.id)
 
         for key in metric_keys:
             allowed_labels = metric_scoping.get(key)
@@ -638,14 +667,41 @@ UNTAGGED_GROUP = "(untagged)"
 def _group_value_expression(group_by_key: str):
     """The column to group metric rows by, and the join that produces it.
 
-    Returns a ``(join_condition, column)`` pair for an OUTER join to
-    ``image_metadata`` restricted to one key. Outer, because an image with no
-    value for the key still has contours: an inner join would silently drop them
-    and every group would sum to less than the dataset.
+    Returns a ``(selectable, join_condition, column)`` triple for an OUTER join.
+    Outer, because an object with no value still has metrics: an inner join would
+    silently drop it and every group would sum to less than the dataset.
 
-    Joins the *effective* metadata, so a frame groups by the keys it inherits
-    from its stack (an OCT volume's eye, say) as well as its own.
+    ``group_by_key`` is an image-metadata key, or ``attr:<name>`` for a given object
+    attribute (see ``scene_graph.ATTRIBUTE_GROUP_PREFIX``). Metadata is joined in its
+    *effective* form, so a frame groups by the keys it inherits from its stack (an OCT
+    volume's eye, say) as well as its own. An attribute's "cannot tell" is its own
+    group, apart from objects nobody set it on.
     """
+    if group_by_key.startswith(graph_db.ATTRIBUTE_GROUP_PREFIX):
+        from sqlalchemy import select
+        from app.database.scene_graph import (
+            STATUS_CONFIRMED,
+            ObjectAttributeDefinitions,
+            ObjectAttributes,
+        )
+        name = group_by_key[len(graph_db.ATTRIBUTE_GROUP_PREFIX):]
+        # Filtering by name alone is enough: the contours are already scoped to one
+        # dataset, and their values can only point at that dataset's definitions.
+        values = (
+            select(ObjectAttributes.contour_id, ObjectAttributes.value,
+                   ObjectAttributes.id.label("row_id"))
+            .join(ObjectAttributeDefinitions,
+                  ObjectAttributeDefinitions.id == ObjectAttributes.attribute_id)
+            .where(ObjectAttributeDefinitions.name == name,
+                   ObjectAttributes.status == STATUS_CONFIRMED)
+            .subquery("attribute_group")
+        )
+        column = case(
+            (and_(values.c.row_id.is_not(None), values.c.value.is_(None)), graph_db.CANNOT_TELL),
+            else_=values.c.value,
+        )
+        return values, values.c.contour_id == Contours.id, column
+
     from app.services.database_access.image_metadata import effective_metadata
 
     eff = effective_metadata()

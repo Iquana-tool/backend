@@ -35,9 +35,15 @@ Rules:
 - Nesting means PART OF, never "kind of". A child label must be a part or component of
   its parent: "Nucleus" under "Cell" means a nucleus is part of a cell. If you cannot say
   "an X is part of a Y", X must not be nested under Y.
-- Subtypes are NOT nested. "Acropora" is a kind of coral, not a part of one, so it belongs
-  at the top level alongside "Coral" rather than underneath it. The target system cannot
-  record "is a kind of" at all — never express one by nesting.
+- A label is what the OUTLINE is. Anything that would not change the outline is an
+  ATTRIBUTE of the object, not a label: species, brand, model, colour category, health
+  status, bleached yes/no. "Acropora" is a kind of coral, so the label is "Coral Fragment"
+  and "Acropora" is a value of its categorical attribute "species". Never express "is a
+  kind of" as a label, neither nested nor as a sibling.
+- Put attributes on the label whose objects they describe. Use `categorical` with the
+  values as `options` for kinds (species), `boolean` for yes/no questions, `number` with a
+  unit for a quantity a person reads off the object. Do not add attributes that are
+  measured from the outline or pixels (area, size, mean colour); the system computes those.
 - Whole objects go at the top level; their components go underneath them.
 - Sibling labels must be mutually exclusive: one object is one of them, never two.
 - Every label name MUST be unique across the ENTIRE hierarchy (not just among its siblings).
