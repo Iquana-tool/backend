@@ -89,6 +89,7 @@ class InferenceStepRequest(BaseModel):
 
 
 from iquana_toolbox.schemas.input_contract import ConditioningSpec, InputContract
+from iquana_toolbox.schemas.model_info import ModelClass
 from iquana_toolbox.schemas.training import HyperParameter
 
 
@@ -491,7 +492,14 @@ class ModelOption(BaseModel):
     label_ids: list[int] = Field(
         default_factory=list,
         description="Labels this model predicts. Empty means class-agnostic: it can be pointed "
-                    "at any label, and its output is labelled with whichever label it is bound to.",
+                    "at any label, and its output is labelled with whichever label it is bound to "
+                    "-- unless the model declares `classes`, in which case these are the labels "
+                    "its classes are mapped to in this dataset, and empty means none are yet.",
+    )
+    classes: list[ModelClass] = Field(
+        default_factory=list,
+        description="The model's fixed label space, if it has one. Its predictions are labelled "
+                    "through the dataset's model label mapping.",
     )
     trained_on_dataset: bool = Field(
         default=False,
@@ -506,6 +514,19 @@ class ModelOption(BaseModel):
         default="declared",
         description="Whether the contract was explicitly declared by the model or resolved from legacy task defaults.",
     )
+
+    def predicts(self, label_id: int) -> bool:
+        """Whether this model can be bound to ``label_id`` in its dataset."""
+        if self.classes or self.label_ids:
+            return label_id in self.label_ids
+        return True
+
+    def not_predicted_reason(self, label_name: str) -> str:
+        if self.classes:
+            return (f"No class of model {self.name!r} is mapped to label {label_name!r}; map its "
+                    f"classes to this dataset's labels on the Model Orchestration page.")
+        return (f"Model {self.name!r} does not predict label {label_name!r}; it predicts "
+                f"label ids {sorted(self.label_ids)}.")
 
 
 class ModelCatalog(BaseModel):

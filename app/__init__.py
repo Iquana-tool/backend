@@ -32,6 +32,7 @@ from app.routes.services.suggestion_router import router as suggestion_segmentat
 from app.routes.services.label_space_router import router as label_space_router
 from app.routes.services.prompted_router import router as prompted_segmentation_router
 from app.routes.services.instance_seg_router import router as instance_segmentation_router
+from app.routes.services.model_label_mapping_router import router as model_label_mapping_router
 from app.routes.services.inference_router import router as batch_inference_router
 from app.routes.services.cross_image_router import router as cross_image_router
 from app.routes.websockets.image_annotation_session import router as image_annotation_session_router
@@ -168,6 +169,7 @@ def create_app():
     app.include_router(prompted_segmentation_router)
     app.include_router(suggestion_segmentation_router)
     app.include_router(instance_segmentation_router)
+    app.include_router(model_label_mapping_router)
     app.include_router(label_space_router)
     app.include_router(cross_image_router)
     # Dataset-wide inference: orchestrates the services above over every image via Celery.

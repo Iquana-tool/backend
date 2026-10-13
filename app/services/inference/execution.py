@@ -42,7 +42,7 @@ from app.database.labels import Labels
 from app.database.masks import Masks
 from app.schemas.inference import InferenceOptions, ResolvedStep, UnparentedPolicy
 from app.database.ai_suggestions import SuggestionSource
-from app.services import provenance
+from app.services import model_label_mapping, provenance
 from app.services.database_access.contours import invalidate_metrics_for_new_contours
 
 logger = getLogger(__name__)
@@ -102,7 +102,13 @@ def _predict_instance_segmentation(
         embeddings=cond_result.get("vectors", {}),
     )
     response = asyncio.run(InstanceSegmentationService().inference(request))
-    return _as_contours(response)
+    # A model with a fixed label space names its classes; read them as this dataset's
+    # labels. Its objects may arrive nested (vessels in the choroid) -- flatten them, since
+    # each level's step nests its own objects under the level above (see attach_parents).
+    contours = model_label_mapping.apply_mapping(
+        db, image.dataset_id, step.model_registry_key, _as_contours(response)
+    )
+    return model_label_mapping.flatten(contours)
 
 
 def _predict_cross_image(
@@ -190,7 +196,9 @@ def filter_for_step(
     for contour in contours:
         if contour.confidence < min_confidence:
             continue
-        if step.model_label_ids:
+        # A prediction naming its model class was labelled through the dataset's mapping,
+        # so it is multiclass output even if this step's snapshot predates the mapping.
+        if step.model_label_ids or contour.model_class is not None:
             if contour.label_id != step.label_id:
                 continue
         else:
