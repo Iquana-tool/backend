@@ -76,6 +76,7 @@ def import_models():
         dataset_members,
         dataset_metadata_keys,
         datasets,
+        derived_metrics,
         embeddings,
         image_calibrations,
         image_metadata,

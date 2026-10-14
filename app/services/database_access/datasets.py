@@ -30,8 +30,19 @@ from app.exceptions import InvalidLabelFilterError
 from app.services import image_status
 from app.services.database_access.image_metadata import get_metadata_for_dataset
 from app.services.database_access.labels import get_hierarchical_label_name
+from app.services.database_access import derived_metrics as derived_db
 from app.services.database_access import scene_graph as graph_db
 from app.services.database_access.members import ensure_owner_membership
+from app.services.derived_metrics import (
+    DerivedMetricDefinition,
+    EvaluationFrame,
+    ResolvedDerivedMetric,
+    check_key_available,
+    direct_metric_inputs,
+    unit_for_exponent,
+)
+from app.services.derived_metrics import evaluate as evaluate_derived
+from app.services.derived_metrics import summarize as summarize_derived
 from config import DATASETS_DIR
 
 logger = getLogger(__name__)
@@ -487,6 +498,13 @@ def _dataset_df_from_profile(
     metadata_by_image, metadata_keys = _metadata_columns(db, dataset_id)
     parent_labels = _parent_labels(db, dataset_id)
     graph = _GraphColumns(db, dataset_id, contour_ids)
+    # The dataset's derived metrics, one column each after the direct ones, in the order
+    # they were defined. A definition with a problem has no column: the editor says why.
+    # Evaluated before the row loop below, which reuses the name ``image_id`` per row.
+    derived_everything, _, _, derived_values = _derived_metric_values(
+        db, dataset_id, exclude_not_fully_annotated, exclude_unreviewed, scale_display,
+        image_id=image_id,
+    )
 
     df_data: dict[str, list] = {}
     for row in rows:
@@ -517,6 +535,11 @@ def _dataset_df_from_profile(
                 col = _metric_column_name(key, component)
                 value = values_by_key.get((contour.id, key, component)) if in_scope else None
                 df_data.setdefault(col, []).append(value)
+
+    for item in derived_everything:
+        if item.ok and item.definition.key in derived_values:
+            column = derived_values[item.definition.key].reindex(contour_ids).to_numpy(dtype=float)
+            df_data[item.definition.key] = [None if np.isnan(v) else float(v) for v in column]
 
     return pd.DataFrame(df_data)
 
@@ -654,6 +677,196 @@ def _pixel_to_physical_factor(metric_key: str, scale_x: float, scale_y: float) -
     if metric_key in _LENGTH_METRIC_KEYS:
         return float(scale_x)
     return 1.0
+
+
+# --- Derived metrics ---------------------------------------------------------------
+
+def _derived_metric_values(
+        db: Session,
+        dataset_id: int,
+        exclude_not_fully_annotated: bool,
+        exclude_unreviewed: bool,
+        scale_display: dict[str, Any],
+        image_id: int | None = None,
+        candidate: DerivedMetricDefinition | None = None,
+        candidate_id: int | None = None,
+) -> tuple[list[ResolvedDerivedMetric], list[ResolvedDerivedMetric], pd.DataFrame | None,
+           dict[str, pd.Series]]:
+    """Evaluate a dataset's derived metrics over the objects a quantification covers.
+
+    The objects are exactly the summary's and the export's (same scope, same filters), so
+    a rollup only counts what the page counts: with unreviewed objects excluded, a choroid's
+    vascularity is computed from its reviewed vessels. Inputs are converted to the display
+    unit first, by the same factors the direct metrics use, so derived values come out in
+    the unit their inputs are reported in.
+
+    ``candidate`` / ``candidate_id`` evaluate an unsaved definition (see
+    ``derived_db.resolve_for_dataset``), which is what the editor's preview does.
+
+    :returns: ``(all, evaluation_order, objects, values)``; ``objects`` is None when the
+        dataset has no usable definition, so nothing was queried.
+    """
+    everything, order, _ = derived_db.resolve_for_dataset(db, dataset_id, candidate, candidate_id)
+    if not order:
+        return everything, order, None, {}
+
+    def scoped(query):
+        return _scope_contour_query(query, dataset_id, exclude_not_fully_annotated,
+                                    exclude_unreviewed, image_id=image_id)
+
+    object_rows = scoped(
+        db.query(Contours.id, Contours.label_id, Contours.parent_id, Contours.mask_id).select_from(Contours)
+    ).all()
+    objects = pd.DataFrame(
+        [tuple(row) for row in object_rows], columns=["contour_id", "label_id", "parent_id", "mask_id"]
+    ).set_index("contour_id")
+
+    inputs = direct_metric_inputs(item.definition for item in order)
+    buckets: dict[tuple[str, int], dict[int, float]] = defaultdict(dict)
+    if inputs and not objects.empty:
+        physical = scale_display["display_physical"]
+        metric_rows = scoped(
+            db.query(ContourMetrics.contour_id, ContourMetrics.metric_key, ContourMetrics.component,
+                     ContourMetrics.value, Images.scale_x, Images.scale_y)
+            .select_from(Contours)
+            .join(ContourMetrics, ContourMetrics.contour_id == Contours.id)
+        ).filter(ContourMetrics.metric_key.in_(sorted({key for key, _ in inputs}))).all()
+        for contour_id, key, component, value, scale_x, scale_y in metric_rows:
+            if (key, component) not in inputs or value is None:
+                continue
+            if physical:
+                value *= _pixel_to_physical_factor(key, scale_x or 1.0, scale_y or 1.0)
+            buckets[(key, component)][contour_id] = value
+
+    # The hierarchy of everything in scope, not only the filtered objects, so a descendant
+    # still reaches its grandparent through a parent the filters left out.
+    parent_query = (
+        db.query(Contours.id, Contours.parent_id)
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .filter(Images.dataset_id == dataset_id)
+    )
+    if image_id is not None:
+        parent_query = parent_query.filter(Images.id == image_id)
+
+    frame = EvaluationFrame(
+        objects=objects,
+        contour_parents=dict(parent_query.all()),
+        values={pair: pd.Series(values, dtype=float) for pair, values in buckets.items()},
+    )
+    return everything, order, objects, evaluate_derived(order, frame)
+
+
+def _derived_metrics_block(
+        items: list[ResolvedDerivedMetric],
+        objects: pd.DataFrame,
+        values: dict[str, pd.Series],
+        display_unit: str,
+        contour_ids: pd.Index,
+) -> dict[str, dict[str, Any]]:
+    """``label_id -> key -> {unit, components, derived}`` over ``contour_ids``.
+
+    The same entry shape as the direct metrics in the summary, with one component, so the
+    page renders a derived card like any other. Objects without a label are left out: a
+    derived metric is defined in terms of labels.
+    """
+    block: dict[str, dict[str, Any]] = {}
+    labels = objects["label_id"].reindex(contour_ids).to_numpy()
+    for item in items:
+        key = item.definition.key
+        series = values[key].reindex(contour_ids)
+        unit = unit_for_exponent(item.exponent, display_unit)
+        for label_id, group in series.groupby(labels):
+            stats = summarize_derived(group)
+            if stats is not None:
+                block.setdefault(str(int(label_id)), {})[key] = {
+                    "unit": unit, "components": [stats], "derived": True,
+                }
+    return block
+
+
+async def preview_derived_metric(
+        dataset_id: int,
+        definition: DerivedMetricDefinition,
+        definition_id: int | None,
+        exclude_not_fully_annotated: bool,
+        exclude_unreviewed: bool,
+        db: Session,
+        sample_size: int = 8,
+) -> dict[str, Any]:
+    """Check an unsaved definition and show what it would compute.
+
+    Evaluated together with the dataset's saved definitions (an edit replaces its row), over
+    the same objects the quantification page covers, so the preview is the number the page
+    will show once saved.
+
+    :returns: ``{ok, problems}``, plus when ``ok``: ``unit`` / ``unit_exponent``, the
+        ``summary`` statistics, ``per_label`` statistics, how many objects it applies to and
+        how many of those got no value, a few ``samples`` and the ``scale_status``.
+    """
+    # The key is checked first: definitions are resolved by key, so a new one reusing a saved
+    # key would silently stand in for it instead of being refused.
+    stored = {row.id: row.key for row in derived_db.list_rows(db, dataset_id)}
+    if definition_id is None:
+        key_problems = check_key_available(definition.key, stored.values())
+    elif stored.get(definition_id) != definition.key:
+        key_problems = [f"The key of a derived measurement cannot change (it is '{stored.get(definition_id)}')."]
+    else:
+        key_problems = []
+    if key_problems:
+        return {"ok": False, "problems": key_problems}
+
+    scale_display = _resolve_scale_display(dataset_id, exclude_not_fully_annotated, exclude_unreviewed, db)
+    everything, order, objects, values = _derived_metric_values(
+        db, dataset_id, exclude_not_fully_annotated, exclude_unreviewed, scale_display,
+        candidate=definition, candidate_id=definition_id,
+    )
+    item = next(i for i in everything if i.id == definition_id and i.definition.key == definition.key)
+    if not item.ok:
+        return {"ok": False, "problems": item.problems}
+
+    display_unit = scale_display["display_unit"]
+    series = values.get(definition.key, pd.Series(dtype=float))
+    if definition.label_ids is None:
+        scope_ids = objects.index
+    else:
+        scope_ids = objects.index[objects["label_id"].isin(definition.label_ids)]
+    in_scope = series.reindex(scope_ids)
+
+    per_label = {
+        label_key: entries[definition.key]["components"][0]
+        for label_key, entries in _derived_metrics_block([item], objects, values, display_unit, objects.index).items()
+    }
+
+    sample_ids = [int(cid) for cid in in_scope.dropna().index[:sample_size]]
+    names = {}
+    if sample_ids:
+        names = {
+            cid: (label, file_name)
+            for cid, label, file_name in db.query(Contours.id, Labels.name, Images.file_name)
+            .join(Masks, Masks.id == Contours.mask_id)
+            .join(Images, Images.id == Masks.image_id)
+            .outerjoin(Labels, Labels.id == Contours.label_id)
+            .filter(Contours.id.in_(sample_ids))
+            .all()
+        }
+    samples = [
+        {"contour_id": cid, "label": names.get(cid, (None, None))[0],
+         "file_name": names.get(cid, (None, None))[1], "value": float(in_scope[cid])}
+        for cid in sample_ids
+    ]
+    return {
+        "ok": True,
+        "problems": [],
+        "unit": unit_for_exponent(item.exponent, display_unit),
+        "unit_exponent": item.exponent,
+        "objects_in_scope": int(len(scope_ids)),
+        "objects_without_value": int(in_scope.isna().sum()),
+        "summary": summarize_derived(in_scope),
+        "per_label": per_label,
+        "samples": samples,
+        "scale_status": scale_display,
+    }
 
 
 #: Bucket label for images that carry no value for the grouping key. Comparing
@@ -876,15 +1089,50 @@ async def get_quantification_summary(
 
     # Profile scoping: restrict to the profile's metric keys up front so the aggregation
     # itself is cheaper, then honor each metric's per-label scoping row-by-row below.
+    # --- Derived metrics ----------------------------------------------------
+    # The dataset's own formulas (vascularity index, polyp density, ...). They are reported
+    # whatever the profile selects: defining one for the dataset is the selection.
+    _, derived_order, derived_objects, derived_values = _derived_metric_values(
+        db, dataset_id, exclude_not_fully_annotated, exclude_unreviewed, scale_display,
+        image_id=image_id,
+    )
+
+    def _merge_derived(result: dict[str, Any]) -> dict[str, Any]:
+        """Add the derived entries to ``metrics`` and, when grouping, to every group."""
+        if not derived_order or derived_objects is None or derived_objects.empty:
+            return result
+        block = _derived_metrics_block(derived_order, derived_objects, derived_values,
+                                       display_unit, derived_objects.index)
+        for label_key, entries in block.items():
+            result["metrics"].setdefault(label_key, {}).update(entries)
+        if group_by_key:
+            metadata_model, join_condition, group_column = _group_value_expression(group_by_key)
+            members: dict[str, list[int]] = defaultdict(list)
+            for row in _apply_filters(
+                db.query(group_column.label("group_value"), Contours.id.label("contour_id"))
+            ).outerjoin(metadata_model, join_condition).all():
+                if row.contour_id in derived_objects.index:
+                    members[row.group_value or UNTAGGED_GROUP].append(row.contour_id)
+            groups = result.setdefault("groups", {})
+            for group_value, ids in members.items():
+                group_block = _derived_metrics_block(derived_order, derived_objects, derived_values,
+                                                     display_unit, pd.Index(ids))
+                for label_key, entries in group_block.items():
+                    groups.setdefault(group_value, {}).setdefault(label_key, {}).update(entries)
+            result["groups"] = {key: value for key, value in groups.items() if value}
+            result["group_by"] = group_by_key
+            result["group_values"] = _sort_group_values(result["groups"])
+        return result
+
     if metric_scoping is not None:
         if not metric_scoping:
-            # A profile with no entries -> no metrics to report.
-            return {
+            # A profile with no entries -> no direct metrics to report.
+            return _merge_derived({
                 "metrics": {},
                 "child_counts_per_label_id": _compute_child_counts(),
                 "object_counts_per_label_id": _compute_object_counts(),
                 "scale_status": scale_display,
-            }
+            })
         metric_query = metric_query.filter(ContourMetrics.metric_key.in_(list(metric_scoping)))
 
     def _assemble(rows) -> dict[str, dict[str, Any]]:
@@ -983,7 +1231,7 @@ async def get_quantification_summary(
         result["group_by"] = group_by_key
         result["group_values"] = _sort_group_values(groups)
 
-    return result
+    return _merge_derived(result)
 
 
 # --- Distribution (box / violin) statistics ----------------------------------------
