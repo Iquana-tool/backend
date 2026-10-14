@@ -36,7 +36,7 @@ from app.services.annotation_session.operations import (
     run_prompted_segmentation,
 )
 from app.schemas.permissions import Permission
-from app.services import ai_tools, image_status, provenance
+from app.services import ai_tools, image_status, model_label_mapping, provenance
 from app.services.ai_tools import AiTool
 from app.services.annotation_session.state import AnnotationSessionState, Backends
 from app.services.auth import load_user
@@ -771,9 +771,15 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
         session_id=getattr(state, "activity_session", None),
     )
 
-    contours_to_add = result.contours
     suppressed_count = 0
     with get_context_session() as db:
+        # A model with a fixed label space names its classes; label them in this dataset's
+        # terms (mapped, discarded, or left unlabelled) before anything is written.
+        contours_to_add = model_label_mapping.apply_mapping(
+            db, getattr(state.image_db, "dataset_id", None) or getattr(state, "dataset_id", None),
+            model_registry_key, result.contours,
+        )
+        result.contours = contours_to_add
         if write_mode == "patch":
             existing_hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
             existing_contours = list(existing_hierarchy.id_to_contour.values())

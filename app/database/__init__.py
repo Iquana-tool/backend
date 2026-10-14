@@ -86,6 +86,7 @@ def import_models():
         labels,
         masks,
         model_favorites,
+        model_label_mappings,
         organizations,
         quantification_profiles,
         rejections,

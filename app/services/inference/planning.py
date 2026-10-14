@@ -46,6 +46,7 @@ from app.schemas.inference import (
 from app.services.exemplar_retrieval import strategy_options
 from app.services.inference.contract_resolver import resolve_input_contract
 from app.services.inference.input_validator import validate_and_normalize_inputs
+from app.services import model_label_mapping
 from app.services.model_registry import list_available_models
 
 logger = getLogger(__name__)
@@ -138,6 +139,12 @@ def model_catalog(
                 continue
 
             label_ids = [int(lid) for lid in info.get("label_ids") or []]
+            classes = model_label_mapping.classes_of(info)
+            if classes:
+                # A fixed label space reaches this dataset's labels through its mapping.
+                label_ids = model_label_mapping.mapped_label_ids(model_label_mapping.resolve(
+                    db, dataset_id, info.get("registry_key") or info.get("name"), classes,
+                ))
             options.append(ModelOption(
                 registry_key=info.get("registry_key") or info.get("name"),
                 name=info.get("name") or info.get("registry_key"),
@@ -147,8 +154,9 @@ def model_catalog(
                 badges=list(info.get("badges") or []),
                 architecture=info.get("architecture"),
                 label_ids=label_ids,
+                classes=classes,
                 # A model whose classes are labels of this dataset was fine-tuned on it.
-                trained_on_dataset=bool(label_ids) and bool(set(label_ids) & dataset_labels),
+                trained_on_dataset=not classes and bool(set(label_ids) & dataset_labels),
                 input_contract=contract,
                 provenance=provenance,
             ))
@@ -282,11 +290,9 @@ def resolve_steps(
             )
         # A model that declares its classes can only be asked for one of them. A model that
         # declares none is class-agnostic and may be bound to any label.
-        if option.label_ids and step.label_id not in option.label_ids:
+        if not option.predicts(step.label_id):
             raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                f"Model {option.name!r} does not predict label {label.name!r}; it predicts "
-                f"label ids {sorted(option.label_ids)}.",
+                status.HTTP_400_BAD_REQUEST, option.not_predicted_reason(label.name),
             )
         raw_inputs = step.inputs if step.inputs is not None else {"conditioning": {}, "parameters": {}}
         try:

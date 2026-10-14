@@ -139,15 +139,11 @@ def upsert_routing_policy(
                 detail=f"No ready '{task_str}' model named {binding.model_registry_key!r}.",
             )
 
-        if binding.label_id is not None and option.label_ids:
-            if binding.label_id not in option.label_ids:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"Model {option.name!r} does not predict label {label_name!r}; "
-                        f"it predicts label ids {sorted(option.label_ids)}."
-                    ),
-                )
+        if binding.label_id is not None and not option.predicts(binding.label_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=option.not_predicted_reason(label_name),
+            )
 
         normalized_inputs = None
         if binding.inputs is not None:
@@ -356,10 +352,10 @@ def execute_suggest_step(
             detail=f"Label {label_id} is not part of dataset {dataset_id}'s hierarchy.",
         )
 
-    if option.label_ids and label_id not in option.label_ids:
+    if not option.predicts(label_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Model {option.name!r} does not predict label {label.name!r}.",
+            detail=option.not_predicted_reason(label.name),
         )
 
     raw_inputs = binding.get("inputs") or {"conditioning": {}, "parameters": {}}

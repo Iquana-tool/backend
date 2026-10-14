@@ -158,7 +158,7 @@ def _full_model_info(registry_key: str) -> dict:
 
     ``register_model`` stores the full ``ModelInfo.model_dump()`` as the logged
     model's ``metadata`` (recorded in the MLmodel file, not the weights), and
-    synchronizes ``input_contracts`` and ``description`` into registered-model tags.
+    synchronizes ``input_contracts``, ``classes`` and ``description`` into registered-model tags.
     Merging registered-model tags ensures newly added/updated contracts are
     discovered immediately without requiring artifact re-logging.
 
@@ -204,6 +204,13 @@ def _full_model_info(registry_key: str) -> dict:
                             metadata.pop("input_contracts", None)
                     except Exception:
                         metadata.pop("input_contracts", None)
+                if "classes" in reg_model.tags:
+                    # The label space, authoritative for the same reason: a base model is
+                    # never re-logged, so its artifact metadata predates any change to it.
+                    try:
+                        metadata["classes"] = json.loads(reg_model.tags["classes"]) or []
+                    except (TypeError, ValueError):
+                        logger.warning("Model '%s' has a malformed classes tag.", registry_key)
                 if not metadata.get("name"):
                     metadata["name"] = reg_model.name
                 if not metadata.get("registry_key"):
@@ -216,6 +223,12 @@ def _full_model_info(registry_key: str) -> dict:
 
     logger.warning("Model '%s' has no artifact metadata; returning stub.", registry_key)
     return {"registry_key": registry_key, "name": registry_key}
+
+
+def get_model_info(registry_key: str) -> dict:
+    """One model's full ``model_info`` (artifact metadata), by registry key."""
+    mlflow.set_tracking_uri(MLFLOW_URL)
+    return _full_model_info(registry_key)
 
 
 def list_available_models(task: str) -> dict:

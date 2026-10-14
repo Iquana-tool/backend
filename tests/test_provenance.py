@@ -233,3 +233,30 @@ def test_an_unnamed_ai_object_gets_the_model_as_added_by(ctx):
     db.refresh(contour)
     assert contour.added_by == "sam3"
 
+
+
+def test_every_object_of_a_nested_prediction_is_logged(ctx, monkeypatch):
+    """Instance segmentation saves a whole tree at once (vessels inside a choroid)."""
+    from iquana_toolbox.schemas.database.contours import Contour
+    import app.database.contours as contours_table
+    from app.services.database_access import masks as masks_db
+
+    db, _, _, mask = ctx
+    monkeypatch.setattr(contours_table, "dual_write_geometry_metrics", lambda *a, **k: None)
+    region = Contour(x=[0.1, 0.9, 0.9, 0.1], y=[0.1, 0.1, 0.9, 0.9], added_by="choroidalyzer")
+    vessel = Contour(x=[0.2, 0.4, 0.4, 0.2], y=[0.2, 0.2, 0.4, 0.4], added_by="choroidalyzer")
+    vessel.children = [Contour(x=[0.25, 0.3, 0.3], y=[0.25, 0.25, 0.3], added_by="choroidalyzer")]
+    region.children = [vessel, Contour(x=[0.5, 0.7, 0.7], y=[0.5, 0.5, 0.7], added_by="choroidalyzer")]
+
+    saved = run(masks_db.add_contour_to_mask(mask.id, region, db=db, check_hierarchy=False,
+                                             author_username="ann"))
+    ids = provenance.contour_ids_of(saved)
+    provenance.record_suggestions(db, ids, source=SuggestionSource.INSTANCE_SEGMENTATION,
+                                  model_key="choroidalyzer", username="ann")
+
+    rows = db.query(Contours).filter_by(mask_id=mask.id).all()
+    assert sorted(ids) == sorted(row.id for row in rows) and len(rows) == 4
+    assert all(row.origin == "instance_segmentation" and row.suggestion_id for row in rows)
+    assert db.query(AiSuggestions).count() == 4
+    # The schema ids name the right rows, so the client is told the real ids too.
+    assert db.get(Contours, vessel.children[0].id).parent_id == vessel.id
