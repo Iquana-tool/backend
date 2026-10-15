@@ -118,6 +118,8 @@ async def bulk_create_labels(
         db.add(label)
         db.flush()  # assign label.id so children can reference it
         created_count += 1
+        for attribute in getattr(node, "attributes", []) or []:
+            _attach_draft_attribute(db, dataset_id, label, attribute)
         for child in getattr(node, "children", []) or []:
             insert(child, label.id)
 
@@ -130,6 +132,32 @@ async def bulk_create_labels(
         raise
 
     return created_count
+
+
+def _attach_draft_attribute(db: Session, dataset_id: int, label: Labels, attribute) -> None:
+    """Create a drafted attribute for ``label``'s objects, or widen an existing one.
+
+    Drafts may give the same attribute ("health") to several labels; that is one
+    attribute applying to all of them, with the union of their options.
+    """
+    # Local import: the scene-graph access module imports the database layer this one uses.
+    from app.services.database_access import scene_graph as graph_db
+
+    definition = graph_db.find_attribute(db, dataset_id, attribute.name)
+    if definition is None:
+        graph_db.create_attribute(
+            db, dataset_id, attribute.name, value_type=attribute.value_type, unit=attribute.unit,
+            options=list(attribute.options or []), description=attribute.description,
+            label_ids=[label.id])
+        return
+    if definition.labels and label not in definition.labels:
+        definition.labels = list(definition.labels) + [label]
+    if definition.options:
+        known = set(definition.option_values)
+        definition.options = list(definition.options) + [
+            {"value": value, "code": None, "description": None}
+            for value in attribute.options or [] if value not in known]
+    db.flush()
 
 
 #: Columns ``update_label`` will write. ``parent_id`` is excluded because moving a label
