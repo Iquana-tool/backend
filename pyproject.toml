@@ -38,7 +38,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-iquana-toolbox = { git = "https://github.com/Iquana-tool/iquana-toolbox.git", rev = "2910ce5a854d57f1642c8e224c7f53e60987ea16" }
+iquana-toolbox = { git = "https://github.com/Iquana-tool/iquana-toolbox.git", rev = "31a011c6da29f68136a69464f0c833711bee5db6" }
 # iquana-toolbox pulls in torch transitively. This backend never runs model
 # inference itself (that's the separate ai-service, over AI_SERVICE_URL) and
 # no code here imports torch directly, so the CUDA build is pure dead weight:
