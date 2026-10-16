@@ -66,6 +66,9 @@ class AiSuggestions(database):
     reviewed_at = Column(DateTime, nullable=True)
     #: A later AI refinement replaced this suggestion's outline.
     superseded_at = Column(DateTime, nullable=True)
+    #: IoU between the suggested outline and the object's current outline, set on
+    #: each hand edit (1.0 = unchanged, 0.0 = no overlap). NULL while never edited.
+    final_iou = Column(Float, nullable=True)
 
     __table_args__ = (
         Index("ix_ai_suggestions_mask_created", "mask_id", "created_at"),
@@ -77,7 +80,8 @@ class AiSuggestions(database):
             "model_key": self.model_key, "username": self.username,
             "dataset_id": self.dataset_id, "image_id": self.image_id, "mask_id": self.mask_id,
             "contour_id": self.contour_id, "label_id": self.label_id,
-            "confidence": self.confidence, "x": self.x, "y": self.y,
+            "confidence": self.confidence, "final_iou": self.final_iou,
+            "x": self.x, "y": self.y,
             **{field: (getattr(self, field).isoformat() if getattr(self, field) else None)
                for field in ("created_at", "edited_at", "deleted_at", "reviewed_at",
                              "superseded_at")},

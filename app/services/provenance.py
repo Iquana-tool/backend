@@ -23,6 +23,8 @@ from logging import getLogger
 from typing import Iterable
 from uuid import uuid4
 
+import cv2
+import numpy as np
 from sqlalchemy.orm import Session
 
 from app.database.ai_suggestions import AiSuggestions, SuggestionSource
@@ -49,6 +51,45 @@ def _now() -> datetime:
 
 def new_run_id() -> str:
     return uuid4().hex
+
+
+#: Grid size (longest side, in pixels) used to compare two outlines. Only the union
+#: bounding box of the pair is rasterised, so small objects keep their detail and
+#: the cost stays the same however large the image is.
+_IOU_RESOLUTION = 512
+
+
+def outline_iou(ax: list[float], ay: list[float],
+                bx: list[float], by: list[float]) -> float | None:
+    """Intersection over union of two outlines given as normalised coordinates.
+
+    Coordinates are normalised per axis, which stretches both outlines by the same
+    factors; IoU is a ratio of areas and does not change under that stretch, so no
+    image size is needed. Returns None when either outline is not a polygon.
+    """
+    if min(len(ax), len(ay)) < 3 or min(len(bx), len(by)) < 3:
+        return None
+    a = np.column_stack([ax, ay]).astype(np.float64)
+    b = np.column_stack([bx, by]).astype(np.float64)
+    both = np.vstack([a, b])
+    origin = both.min(axis=0)
+    span = float((both.max(axis=0) - origin).max())
+    if span <= 0:
+        return None
+    scale = (_IOU_RESOLUTION - 1) / span
+    width, height = (np.ceil((both.max(axis=0) - origin) * scale).astype(int) + 1)
+
+    def rasterise(points: np.ndarray) -> np.ndarray:
+        canvas = np.zeros((height, width), dtype=np.uint8)
+        pixels = np.round((points - origin) * scale).astype(np.int32)
+        cv2.fillPoly(canvas, [pixels], 1)
+        return canvas.astype(bool)
+
+    mask_a, mask_b = rasterise(a), rasterise(b)
+    union = np.logical_or(mask_a, mask_b).sum()
+    if union == 0:
+        return None
+    return float(np.logical_and(mask_a, mask_b).sum() / union)
 
 
 def _safely(action: str):
@@ -153,16 +194,25 @@ def record_refinement(db: Session, contour_id: int, *, model_key: str | None,
 
 @_safely("geometry edit")
 def record_geometry_edit(db: Session, contour_id: int) -> None:
-    """A person changed an object's outline by hand."""
+    """A person changed an object's outline by hand.
+
+    Also stores how much of the AI outline survived (``final_iou``), which is what a
+    study means by "how much was changed".
+    """
     contour = db.query(Contours).filter_by(id=contour_id).first()
     if contour is None:
         return
     now = _now()
     contour.geometry_edited_at = now
-    if contour.suggestion_id is not None:
-        (db.query(AiSuggestions).filter(AiSuggestions.id == contour.suggestion_id,
-                                        AiSuggestions.edited_at.is_(None))
-         .update({AiSuggestions.edited_at: now}, synchronize_session=False))
+    suggestion = (db.query(AiSuggestions).filter_by(id=contour.suggestion_id).first()
+                  if contour.suggestion_id is not None else None)
+    if suggestion is not None:
+        if suggestion.edited_at is None:
+            suggestion.edited_at = now
+        # Recomputed on every edit, not just the first, so the value always describes
+        # how far the current outline is from what the model proposed.
+        suggestion.final_iou = outline_iou(list(suggestion.x or []), list(suggestion.y or []),
+                                           list(contour.x or []), list(contour.y or []))
     db.commit()
 
 

@@ -9,6 +9,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from app.database import get_context_session, init_db
 from app.routes.general.admin import router as admin_router
+from app.routes.general.usage_stats import router as usage_stats_router
 from app.routes.general.annotation_history import router as annotation_history_router
 from app.routes.general.annotation_queue import router as annotation_queue_router
 from app.routes.general.auth import router as auth_router
@@ -144,6 +145,7 @@ def create_app():
     app.include_router(instance_router)
     app.include_router(auth_router)
     app.include_router(admin_router)
+    app.include_router(usage_stats_router)
     app.include_router(dataset_router)
     # Shares the /datasets prefix with the dataset router; the paths do not overlap.
     app.include_router(member_router)

@@ -115,6 +115,37 @@ def test_a_hand_edit_marks_the_object_and_its_suggestion(ctx):
     assert suggestion.edited_at is not None
     # The logged outline is still the original suggestion, for measuring the change.
     assert suggestion.x == list(SQUARE[0])
+    # Doubling the width keeps half of the union: the edit's size is stored.
+    assert suggestion.final_iou == pytest.approx(0.5, abs=0.02)
+
+
+def test_a_later_edit_updates_the_stored_iou(ctx):
+    db, _, _, mask = ctx
+    contour = _contour(db, mask, added_by="sam2")
+    provenance.record_suggestions(db, [contour.id], source=SuggestionSource.PROMPTED,
+                                  model_key="sam2", username="ann")
+
+    run(contours_db.modify_contour(contour.id, db, x=[0.1, 0.3, 0.3, 0.1]))
+    run(contours_db.modify_contour(contour.id, db, x=list(SQUARE[0])))
+
+    suggestion = _suggestion(db, contour)
+    db.refresh(suggestion)
+    # Edited back to the suggestion: still counted as edited, but the outline is unchanged.
+    assert suggestion.edited_at is not None
+    assert suggestion.final_iou == pytest.approx(1.0, abs=0.01)
+
+
+@pytest.mark.parametrize("b, expected", [
+    (SQUARE, 1.0),
+    (([0.15, 0.25, 0.25, 0.15], SQUARE[1]), 1 / 3),
+    (([0.5, 0.6, 0.6, 0.5], SQUARE[1]), 0.0),
+])
+def test_outline_iou(b, expected):
+    assert provenance.outline_iou(*SQUARE, *b) == pytest.approx(expected, abs=0.02)
+
+
+def test_outline_iou_needs_polygons():
+    assert provenance.outline_iou([0.1, 0.2], [0.1, 0.2], *SQUARE) is None
 
 
 def test_changing_only_the_label_is_not_a_geometry_edit(ctx):
