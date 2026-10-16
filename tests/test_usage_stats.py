@@ -149,8 +149,26 @@ def test_detail_summarises_one_user(db):
     assert timeline["2026-10-16"]["active_ms"] == 8000
 
 
+def test_detail_summarises_scene_graph_edits(db):
+    event(db, "ann", "scene_graph.relationship.add", {"relationship": "touches", "count": 2})
+    event(db, "ann", "scene_graph.relationship.add", {"relationship": "touches", "count": 1})
+    event(db, "ann", "scene_graph.relationship.add", {"relationship": "grows on", "count": 1})
+    event(db, "ann", "scene_graph.attribute.set", {"attribute_id": 5, "count": 4})
+    event(db, "ann", "scene_graph.relationship.confirm", {"count": 3})
+    event(db, "bob", "scene_graph.attribute.set", {"attribute_id": 5, "count": 1})
+
+    graph = usage_stats.get_user_usage(db, "ann", since=None)["scene_graph"]
+
+    actions = {a["action"]: a for a in graph["actions"]}
+    assert actions["relationship.add"] == {"action": "relationship.add", "count": 3, "objects": 4}
+    assert actions["attribute.set"]["objects"] == 4
+    assert actions["relationship.confirm"]["objects"] == 3
+    assert graph["relationships"] == [{"name": "touches", "count": 3}, {"name": "grows on", "count": 1}]
+
+
 def test_detail_is_empty_but_well_formed_without_data(db):
     detail = usage_stats.get_user_usage(db, "nobody", since=None)
 
     assert detail["suggestions"] == [] and detail["workflows"] == [] and detail["timeline"] == []
     assert detail["images"]["visits"] == 0 and detail["images"]["mean_active_ms"] is None
+    assert detail["scene_graph"] == {"actions": [], "relationships": []}

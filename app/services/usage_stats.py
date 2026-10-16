@@ -6,7 +6,8 @@ Two sources, with different availability:
   did with AI suggestions -- kept, edited (and by how much), rejected -- is available
   on every deployment.
 * ``user_events`` only fills while the activity log captures. Workflow time, tools,
-  AI invocations, model choices, the per-day timeline and per-image effort all come
+  AI invocations, model choices, scene graph edits, the per-day timeline and per-image
+  effort all come
   from there, and are empty on a deployment with capture off. The response says
   which case applies (``events_enabled``) so the UI can explain an empty section
   instead of suggesting nobody used the tool.
@@ -24,7 +25,7 @@ from datetime import datetime
 from statistics import median
 from typing import Any, Iterable
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database.ai_suggestions import AiSuggestions
@@ -66,6 +67,8 @@ _AI_FEATURES = {
 #: Event types the detail view reads payloads from.
 _DETAIL_EVENT_TYPES = ["route.change", "tool.switch", "image.visit", "ai.model.select",
                        *_AI_FEATURES]
+#: Prefix of the frontend's scene graph edits (`scene_graph.relationship.add`, ...).
+_SCENE_GRAPH_PREFIX = "scene_graph."
 
 _INTERACTION_KEYS = ["clicks", "prompts", "edits", "creates", "deletes", "relabels", "undos"]
 
@@ -185,7 +188,8 @@ def get_user_usage(db: Session, username: str, since: datetime | None) -> dict:
     events = db.execute(
         select(UserEvents.event_type, UserEvents.ts, UserEvents.image_id,
                UserEvents.duration_ms, UserEvents.payload)
-        .where(UserEvents.event_type.in_(_DETAIL_EVENT_TYPES),
+        .where(or_(UserEvents.event_type.in_(_DETAIL_EVENT_TYPES),
+                   UserEvents.event_type.startswith(_SCENE_GRAPH_PREFIX)),
                *_event_filter(username, since))
         .order_by(UserEvents.ts)
     ).all()
@@ -200,6 +204,7 @@ def get_user_usage(db: Session, username: str, since: datetime | None) -> dict:
         "ai_features": _ai_features(events),
         "model_selections": _model_selections(events),
         "images": _image_effort(events),
+        "scene_graph": _scene_graph(events),
         "timeline": _timeline(db, username, since, events),
     }
 
@@ -280,6 +285,31 @@ def _model_selections(events: Iterable) -> list[dict]:
             counts[(payload.get("tool") or "unknown", payload.get("model") or "unknown")] += 1
     return [{"tool": tool, "model": model, "count": n}
             for (tool, model), n in counts.most_common()]
+
+
+def _scene_graph(events: Iterable) -> dict:
+    """Scene graph edits: how often each action ran, on how many objects, and which
+    relationship names were used.
+
+    ``confirm`` actions are a person accepting suggested (model-made) relationships or
+    attribute values, so they read as the scene graph's accept count.
+    """
+    actions: dict[str, dict] = {}
+    relationships = Counter()
+    for event_type, _ts, _image, _duration, raw in events:
+        if not event_type.startswith(_SCENE_GRAPH_PREFIX):
+            continue
+        action = event_type[len(_SCENE_GRAPH_PREFIX):]
+        payload = _payload(raw)
+        entry = actions.setdefault(action, {"action": action, "count": 0, "objects": 0})
+        entry["count"] += 1
+        entry["objects"] += _int(payload.get("count"))
+        if action == "relationship.add" and payload.get("relationship"):
+            relationships[payload["relationship"]] += _int(payload.get("count")) or 1
+    return {
+        "actions": sorted(actions.values(), key=lambda a: (-a["count"], a["action"])),
+        "relationships": [{"name": name, "count": n} for name, n in relationships.most_common(10)],
+    }
 
 
 def _image_effort(events: Iterable) -> dict:
