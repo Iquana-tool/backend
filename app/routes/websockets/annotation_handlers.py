@@ -38,6 +38,7 @@ from app.services.annotation_session.operations import (
 from app.schemas.permissions import Permission
 from app.services import ai_tools, image_status, model_label_mapping, provenance
 from app.services.ai_tools import AiTool
+from app.services.activity_log.emit import emit_ai
 from app.services.annotation_session.state import AnnotationSessionState, Backends
 from app.services.auth import load_user
 from app.services.permissions import dataset_id_for_image
@@ -429,6 +430,10 @@ async def handle_prompted_select_model(websocket: WebSocket, client_msg: ClientM
     selected_model = client_msg.data.get("selected_model")
     response = await state._running_backends[Backends.PROMPTED_SEGMENTATION.value].select_model(state.user_id,
                                                                                                 selected_model)
+    # The generic `ws.message` event only says a model was chosen; usage stats need which one.
+    emit_ai("ai.model.select", username=state.user_id, session_id=state.activity_session,
+            dataset_id=state.dataset_id, image_id=state.image_id,
+            payload={"tool": "prompted", "model": selected_model, "ok": bool(response["success"])})
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.SUCCESS if response["success"] else ServerMessageType.ERROR,
