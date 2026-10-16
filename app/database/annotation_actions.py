@@ -40,6 +40,10 @@ class ActionType:
     CREATE = "create"
     DELETE = "delete"
     LABEL = "label"
+    #: Given attribute values set, cleared or confirmed (payload: before/after per object).
+    ATTRIBUTE = "attribute"
+    #: Named relationships created and/or deleted (payload: the edges' full states).
+    RELATIONSHIP = "relationship"
 
 
 def _utcnow() -> datetime:

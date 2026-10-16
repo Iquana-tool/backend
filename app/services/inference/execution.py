@@ -332,6 +332,9 @@ def run_unit(
                 else SuggestionSource.BATCH_INFERENCE),
         model_key=step.model_registry_key, username=username, commit=False,
     )
+    # Classes mapped to a label *and* an attribute value (species) set that value too.
+    model_label_mapping.apply_class_attributes(
+        db, image.dataset_id, step.model_registry_key, [row.id for row in saved_rows])
     return result
 
 

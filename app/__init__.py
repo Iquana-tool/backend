@@ -21,6 +21,7 @@ from app.routes.general.images import router as image_router
 from app.routes.general.stacks import router as stack_router
 from app.routes.general.instance import router as instance_router
 from app.routes.general.labels import router as label_router
+from app.routes.general.scene_graph import router as scene_graph_router
 from app.routes.general.masks import router as mask_router
 from app.routes.general.members import invite_router, router as member_router
 from app.routes.general.model_favorites import router as model_favorites_router
@@ -161,6 +162,7 @@ def create_app():
     app.include_router(contour_router)
     app.include_router(annotation_history_router)
     app.include_router(label_router)
+    app.include_router(scene_graph_router)
     app.include_router(scale_router)
     # Generalises the /scale router above to every calibration kind; /scale stays
     # for the existing draw-a-line flow and its clients.

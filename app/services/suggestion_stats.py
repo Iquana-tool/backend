@@ -49,9 +49,13 @@ def get_suggestion_stats(dataset_id: int | None, since: datetime | None, db: Ses
         conditions.append(AiSuggestions.created_at >= since)
 
     models: dict[str, dict] = {}
+    # One expression object for both SELECT and GROUP BY: built twice, each copy gets its
+    # own bind parameter for "unknown", and PostgreSQL then refuses to see them as the
+    # same expression (GroupingError). SQLite does not mind, so the tests never caught it.
+    model_key_or_unknown = func.coalesce(AiSuggestions.model_key, "unknown")
     rows = db.execute(
         select(
-            func.coalesce(AiSuggestions.model_key, "unknown"),
+            model_key_or_unknown,
             AiSuggestions.source,
             func.count(),
             func.sum(case((rejected, 1), else_=0)),
@@ -62,7 +66,7 @@ def get_suggestion_stats(dataset_id: int | None, since: datetime | None, db: Ses
             func.count(case((edited, AiSuggestions.final_iou))),
         )
         .where(*conditions)
-        .group_by(func.coalesce(AiSuggestions.model_key, "unknown"), AiSuggestions.source)
+        .group_by(model_key_or_unknown, AiSuggestions.source)
     )
     iou_parts: dict[str, list[float]] = {}
     for model_key, source, total, n_rejected, n_edited, last, iou_sum, iou_count in rows:

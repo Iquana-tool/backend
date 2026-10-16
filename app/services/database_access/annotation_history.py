@@ -37,7 +37,13 @@ from app.database.contours import Contours, dual_write_geometry_metrics
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
+from app.database.scene_graph import (
+    ObjectAttributeDefinitions,
+    ObjectAttributes,
+    ObjectRelationships,
+)
 from app.services import hierarchy_cache, provenance
+from app.services.database_access import scene_graph as graph_db
 from app.services.database_access.contours import (
     invalidate_metrics_for_new_contours,
     mark_contextual_stale_for_group,
@@ -70,6 +76,7 @@ def _serialize_contour(contour: Contours) -> dict:
         "reviewed_by": [reviewer.username for reviewer in contour.reviewed_by],
         "origin": contour.origin,
         "suggestion_id": contour.suggestion_id,
+        "model_class": contour.model_class,
         "geometry_edited_at": (contour.geometry_edited_at.isoformat()
                                if contour.geometry_edited_at else None),
     }
@@ -103,7 +110,21 @@ def snapshot_subtree(contour_id: int, db: Session) -> dict | None:
             db.query(Contours).filter_by(parent_id=contour.id).order_by(Contours.id).all()
         )
 
-    return {"root_id": root.id, "contours": serialized}
+    # The object's scene graph goes with it: given attributes, and every named
+    # relationship touching the subtree (the CASCADE removes those too).
+    ids = [entry["id"] for entry in serialized]
+    attributes = [
+        {"contour_id": row.contour_id, "attribute_id": row.attribute_id,
+         "state": graph_db.value_row_state(row)}
+        for row in (db.query(ObjectAttributes)
+                    .filter(ObjectAttributes.contour_id.in_(ids))
+                    .order_by(ObjectAttributes.id))
+    ]
+    relationships = [graph_db.edge_state(edge)
+                     for edge in graph_db.relationships_of_contours(db, ids)]
+
+    return {"root_id": root.id, "contours": serialized,
+            "attributes": attributes, "relationships": relationships}
 
 
 def _restore_subtree(mask_id: int, snapshot: dict, db: Session) -> tuple[list[Contours], list[str]]:
@@ -153,6 +174,7 @@ def _restore_subtree(mask_id: int, snapshot: dict, db: Session) -> tuple[list[Co
             created_at=datetime.fromisoformat(created_at) if created_at else None,
             origin=entry.get("origin"),
             suggestion_id=entry.get("suggestion_id"),
+            model_class=entry.get("model_class"),
             geometry_edited_at=(datetime.fromisoformat(entry["geometry_edited_at"])
                                 if entry.get("geometry_edited_at") else None),
             x=entry.get("x") or [],
@@ -186,9 +208,42 @@ def _restore_subtree(mask_id: int, snapshot: dict, db: Session) -> tuple[list[Co
     # A restored AI object is no longer a rejected suggestion.
     provenance.record_restore(db, [c.id for c in restored], commit=False)
 
+    notes.extend(_restore_graph(snapshot, revived_ids, db))
+
     # Dedupe while preserving order -- a 20-contour subtree should not report the
     # same missing label twenty times.
     return restored, list(dict.fromkeys(notes))
+
+
+def _restore_graph(snapshot: dict, revived_ids: set[int], db: Session) -> list[str]:
+    """Bring back the attributes and relationships of the contours just restored.
+
+    Snapshots from before the scene graph existed have neither key, which restores
+    nothing. A value whose attribute was deleted since, or an edge whose type or other
+    end is gone, cannot come back and is reported instead.
+    """
+    notes = []
+    lost_values = 0
+    for entry in snapshot.get("attributes", []):
+        if entry["contour_id"] not in revived_ids:
+            continue
+        if db.query(ObjectAttributeDefinitions.id).filter_by(id=entry["attribute_id"]).first() is None:
+            lost_values += 1
+            continue
+        graph_db.apply_value_state(db, entry["contour_id"], entry["attribute_id"], entry["state"])
+    if lost_values:
+        notes.append("some of its attributes have since been removed from the dataset")
+
+    lost_edges = 0
+    for state in snapshot.get("relationships", []):
+        if state["subject_id"] not in revived_ids and state["object_id"] not in revived_ids:
+            continue
+        if not graph_db.restore_edge(db, state):
+            lost_edges += 1
+    if lost_edges:
+        notes.append("some of its relationships could not be restored")
+    db.flush()
+    return notes
 
 
 def _delete_subtree_root(contour_id: int, db: Session) -> bool:
@@ -324,6 +379,42 @@ def record_label_change(db: Session, mask_id: int, username: str, contour_id: in
     }, group_id)
 
 
+def _record_per_mask(db: Session, username: str, action_type: str, by_mask: dict[int, dict],
+                     group_id: str | None) -> None:
+    """Record one step per mask. A change spanning images (a bulk attribute set from
+    the dataset view) is one step on each image, tied together by one group id."""
+    if len(by_mask) > 1 and group_id is None:
+        group_id = new_group_id()
+    for mask_id, payload in by_mask.items():
+        _record(db, mask_id, username, action_type, payload, group_id)
+
+
+def record_attribute_changes(db: Session, username: str, changes: list[dict],
+                             group_id: str | None = None) -> None:
+    """Record attribute value changes, as returned by the ``scene_graph`` writers."""
+    by_mask: dict[int, dict] = {}
+    for change in changes:
+        by_mask.setdefault(change["mask_id"], {"changes": []})["changes"].append(
+            {key: change[key] for key in ("contour_id", "attribute_id", "before", "after")})
+    _record_per_mask(db, username, ActionType.ATTRIBUTE, by_mask, group_id)
+
+
+def record_relationship_changes(db: Session, username: str, created: list[dict],
+                                deleted: list[dict], group_id: str | None = None) -> None:
+    """Record edges created and deleted. Each edge is filed under its subject's image."""
+    subject_ids = {state["subject_id"] for state in [*created, *deleted]}
+    mask_of = dict(db.query(Contours.id, Contours.mask_id)
+                   .filter(Contours.id.in_(subject_ids)).all()) if subject_ids else {}
+    by_mask: dict[int, dict] = {}
+    for key, states in (("created", created), ("deleted", deleted)):
+        for state in states:
+            mask_id = mask_of.get(state["subject_id"])
+            if mask_id is None:
+                continue
+            by_mask.setdefault(mask_id, {"created": [], "deleted": []})[key].append(state)
+    _record_per_mask(db, username, ActionType.RELATIONSHIP, by_mask, group_id)
+
+
 # --- Applying -----------------------------------------------------------------
 
 
@@ -369,6 +460,38 @@ def _apply_label(payload: dict, db: Session, forward: bool) -> str:
     return "Label restored" if not forward else "Label reapplied"
 
 
+def _apply_attribute(payload: dict, db: Session, forward: bool) -> str:
+    """Apply an ``attribute`` step: put each object's value back to before/after."""
+    changes = payload.get("changes", [])
+    applied = 0
+    for change in (changes if forward else list(reversed(changes))):
+        if db.get(Contours, change["contour_id"]) is None:
+            continue
+        if db.query(ObjectAttributeDefinitions.id).filter_by(id=change["attribute_id"]).first() is None:
+            continue
+        graph_db.apply_value_state(db, change["contour_id"], change["attribute_id"],
+                                   change["after"] if forward else change["before"])
+        applied += 1
+    if changes and not applied:
+        raise HistoryError("Those objects or that attribute no longer exist.")
+    db.flush()
+    return "Attributes reapplied" if forward else "Attributes restored"
+
+
+def _apply_relationship(payload: dict, db: Session, forward: bool) -> str:
+    """Apply a ``relationship`` step: (re)create one set of edges, delete the other."""
+    to_restore = payload.get("created", []) if forward else payload.get("deleted", [])
+    to_remove = payload.get("deleted", []) if forward else payload.get("created", [])
+    for state in to_remove:
+        edge = db.get(ObjectRelationships, state["id"])
+        if edge is not None:
+            db.delete(edge)
+    db.flush()
+    lost = sum(1 for state in to_restore if not graph_db.restore_edge(db, state))
+    message = "Relationships reapplied" if forward else "Relationships restored"
+    return _with_notes(message, ["some relationships could not be restored"] if lost else [])
+
+
 def _with_notes(message: str, notes: list[str]) -> str:
     return f"{message} ({'; '.join(notes)})" if notes else message
 
@@ -382,6 +505,10 @@ def _apply(row: AnnotationActions, db: Session, forward: bool) -> str:
         return _apply_create(row.payload, row.mask_id, db, not forward)
     if row.action_type == ActionType.LABEL:
         return _apply_label(row.payload, db, forward)
+    if row.action_type == ActionType.ATTRIBUTE:
+        return _apply_attribute(row.payload, db, forward)
+    if row.action_type == ActionType.RELATIONSHIP:
+        return _apply_relationship(row.payload, db, forward)
     raise HistoryError(f"Unknown action type {row.action_type!r}.")
 
 
@@ -392,9 +519,13 @@ def _newest_step(db: Session, mask_id: int, username: str,
     A grouped action returns all of its rows; an ordinary one returns a single-item
     list. Callers apply the list in whichever order their direction needs.
     """
+    # The top of the undo stack is the latest step still done; the top of the redo
+    # stack is the step undone *last*, which is the earliest of the undone ones (undo
+    # walks backwards through time).
+    order = AnnotationActions.id.asc() if undone else AnnotationActions.id.desc()
     newest = (db.query(AnnotationActions)
               .filter_by(mask_id=mask_id, username=username, undone=undone)
-              .order_by(AnnotationActions.id.desc())
+              .order_by(order)
               .first())
     if newest is None:
         return []
@@ -411,6 +542,8 @@ _DESCRIPTIONS = {
     ActionType.CREATE: "add object",
     ActionType.DELETE: "delete object",
     ActionType.LABEL: "label change",
+    ActionType.ATTRIBUTE: "attribute change",
+    ActionType.RELATIONSHIP: "relationship change",
 }
 
 

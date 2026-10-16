@@ -14,6 +14,9 @@ from datetime import datetime, timezone
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 
 from app.database import database
+# The attribute a class may also set lives in the scene-graph tables; importing them here
+# registers them on the metadata wherever this table is created.
+from app.database import scene_graph as _scene_graph  # noqa: F401
 
 
 def _utcnow() -> datetime:
@@ -40,6 +43,12 @@ class ModelLabelMappings(database):
     model_class = Column(String, nullable=False)
     action = Column(String(16), nullable=False)
     label_id = Column(Integer, ForeignKey("labels.id", ondelete="CASCADE"), nullable=True)
+    #: Optionally, an attribute value the class also stands for: a species detector's
+    #: class "Acropora" maps to the label "Coral fragment" *and* ``species = Acropora``.
+    #: Deleting the attribute keeps the label mapping.
+    attribute_id = Column(Integer, ForeignKey("object_attribute_definitions.id", ondelete="SET NULL"),
+                          nullable=True)
+    attribute_value = Column(String(512), nullable=True)
     updated_by = Column(
         String, ForeignKey("users.username", ondelete="SET NULL", onupdate="CASCADE"), nullable=True
     )

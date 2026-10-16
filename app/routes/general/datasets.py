@@ -28,6 +28,7 @@ from app.exceptions import (
     DatasetNotFoundError,
     InvalidLabelFilterError,
     InvalidMetadataError,
+    InvalidSceneGraphError,
 )
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.dataset_archive import DatasetArchiveImportResponse
@@ -40,11 +41,13 @@ from app.services.dataset_archive import (
     import_iquana_dataset_archive,
 )
 from app.services.database_access import datasets as datasets_db
+from app.services.database_access import derived_metrics as derived_db
 from app.services.database_access import image_metadata as metadata_db
 from app.services.database_access import labels as labels_db
 from app.services.database_access import members as members_db
 from app.services.database_access import organizations as organizations_db
 from app.services.database_access import quantification_profiles as profiles_db
+from app.services.database_access import scene_graph as graph_db
 from app.services.database_access.datasets import (
     ContourSelection,
     export_dataset_contours_to_coco,
@@ -59,6 +62,11 @@ from app.services.quantification import (
     compute_contextual_metrics_for_dataset,
     compute_geometry_metrics_for_dataset,
     compute_relational_metrics_for_dataset,
+)
+from app.services.derived_metrics import (
+    DerivedMetricDefinition,
+    DerivedMetricError,
+    direct_metric_inputs,
 )
 from app.services.util import get_mask_path_from_image_path
 from app.services.permissions import ensure_permission, require, require_global
@@ -123,8 +131,11 @@ def _resolve_profile_scoping(
 
     :raises HTTPException: 404 if ``profile_id`` does not belong to the dataset.
     """
+    # The dataset's derived metrics are reported under every profile, so whatever they read
+    # has to be computed too, even when the profile itself does not select it.
+    derived_tiers = _tiers_for_keys(derived_db.required_metric_keys(db, dataset_id))
     if profile_id is None:
-        return None, {"appearance", "contextual", "relational"}
+        return None, {"appearance", "contextual", "relational"} | derived_tiers
 
     row = profiles_db.get_profile(db, dataset_id, profile_id)
     if row is None:
@@ -135,16 +146,34 @@ def _resolve_profile_scoping(
     for entry in profile.entries:
         metric_scoping[entry.metric_key] = entry.label_ids
 
+    return metric_scoping, _tiers_for_keys(metric_scoping) | derived_tiers
+
+
+def _tiers_for_keys(keys) -> set[str]:
+    """The compute tiers the given registry metric keys belong to."""
+    keys = set(keys)
     tiers: set[str] = set()
-    if any(key in GEOMETRY_METRIC_KEYS for key in metric_scoping):
+    if keys & set(GEOMETRY_METRIC_KEYS):
         tiers.add("geometry")
-    if any(key in APPEARANCE_METRIC_KEYS for key in metric_scoping):
+    if keys & set(APPEARANCE_METRIC_KEYS):
         tiers.add("appearance")
-    if any(key in CONTEXTUAL_METRIC_KEYS for key in metric_scoping):
+    if keys & set(CONTEXTUAL_METRIC_KEYS):
         tiers.add("contextual")
-    if any(key in RELATIONAL_METRIC_KEYS for key in metric_scoping):
+    if keys & set(RELATIONAL_METRIC_KEYS):
         tiers.add("relational")
-    return metric_scoping, tiers
+    return tiers
+
+
+def _compute_tiers(db: Session, dataset_id: int, tiers: set[str]) -> None:
+    """Bring the stored metrics of ``tiers`` up to date (missing or stale rows only)."""
+    if "geometry" in tiers:
+        compute_geometry_metrics_for_dataset(db, dataset_id, only_stale=True)
+    if "appearance" in tiers:
+        compute_appearance_metrics_for_dataset(db, dataset_id, only_stale=True)
+    if "contextual" in tiers:
+        compute_contextual_metrics_for_dataset(db, dataset_id, only_stale=True)
+    if "relational" in tiers:
+        compute_relational_metrics_for_dataset(db, dataset_id, only_stale=True)
 
 
 @router.post("/create")
@@ -682,7 +711,8 @@ async def get_dataset_quantification_summary(
             down by, so the page can compare the same label across sites / treatments
             rather than only across labels. Metadata is effectively an image-wide label
             that every object on the image inherits, which is why this is a grouping key
-            on the existing aggregation rather than a new kind of metric.
+            on the existing aggregation rather than a new kind of metric. ``attr:<name>``
+            groups by a given object attribute instead (e.g. ``attr:species``).
 
             Only *groupable* key types are accepted (category, yes/no); a number or a
             date is near-unique per image and would draw one band per image, so it is
@@ -727,8 +757,13 @@ async def get_dataset_quantification_summary(
     group_by_key = None
     if group_by:
         try:
-            group_by_key = metadata_db.assert_groupable(db, dataset_id, group_by)
-        except InvalidMetadataError as exc:
+            if group_by.startswith(graph_db.ATTRIBUTE_GROUP_PREFIX):
+                name = group_by[len(graph_db.ATTRIBUTE_GROUP_PREFIX):]
+                group_by_key = (graph_db.ATTRIBUTE_GROUP_PREFIX
+                                + graph_db.assert_groupable_attribute(db, dataset_id, name))
+            else:
+                group_by_key = metadata_db.assert_groupable(db, dataset_id, group_by)
+        except (InvalidMetadataError, InvalidSceneGraphError) as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail=str(exc))
 
@@ -1028,6 +1063,166 @@ async def delete_quantification_profile(
 
     profiles_db.delete_profile(db, row)
     return {"success": True, "message": "Profile deleted successfully."}
+
+
+# --- Derived metrics ----------------------------------------------------------------
+# A dataset's own formulas over the direct measurements (see app.services.derived_metrics).
+# Reading them is open to anyone who can see the dataset, like the profiles; changing them
+# is dataset configuration, so it takes the curator's dataset.update.
+
+class DerivedPreviewBody(BaseModel):
+    """An unsaved definition to check and preview; ``id`` when it edits a saved one."""
+    definition: DerivedMetricDefinition
+    id: int | None = Field(default=None, description="The saved definition this edits, if any.")
+
+
+class DerivedCopyBody(BaseModel):
+    """Copy definitions from another dataset the caller can see."""
+    source_dataset_id: int
+    keys: list[str] | None = Field(default=None, description="Keys to copy; null copies all.")
+
+
+def _unprocessable(exc: DerivedMetricError) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=" ".join(exc.problems))
+
+
+@router.get("/{dataset_id}/quantification/derived-metrics")
+async def list_derived_metrics(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user),
+):
+    """The dataset's derived measurements, each with its unit and any problem found.
+
+    A definition can break after it was saved -- a label it names gets deleted -- and is
+    then listed with ``problems`` rather than hidden, so it can be repaired. Only
+    definitions without problems are computed.
+
+    Returns:
+        dict: ``{success, derived_metrics}``; each entry carries the definition plus
+        ``id``, ``unit_exponent`` (length exponent: 1 length, 2 area, -2 per area, ...),
+        ``problems``, ``created_by`` and ``updated_at``.
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+    return {"success": True, "derived_metrics": derived_db.list_serialized(db, dataset_id)}
+
+
+@router.post("/{dataset_id}/quantification/derived-metrics")
+async def create_derived_metric(
+        dataset_id: int,
+        body: DerivedMetricDefinition,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE)),
+):
+    """Define a new derived measurement for the dataset.
+
+    Refused with a 422 naming every problem when the key is taken or the formula is not
+    usable (unknown measurement, unknown label, a unit clash, a circular reference).
+    """
+    try:
+        created = derived_db.create(db, dataset_id, body, user.username)
+    except DerivedMetricError as exc:
+        raise _unprocessable(exc)
+    return {"success": True, "derived_metric": created}
+
+
+@router.put("/{dataset_id}/quantification/derived-metrics/{metric_id}")
+async def update_derived_metric(
+        dataset_id: int,
+        metric_id: int,
+        body: DerivedMetricDefinition,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE)),
+):
+    """Change a derived measurement's name, description, labels or formula.
+
+    The key stays fixed, since other formulas and exported analyses refer to it.
+    """
+    row = derived_db.get_row(db, dataset_id, metric_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Derived measurement not found.")
+    try:
+        updated = derived_db.update(db, row, body)
+    except DerivedMetricError as exc:
+        raise _unprocessable(exc)
+    return {"success": True, "derived_metric": updated}
+
+
+@router.delete("/{dataset_id}/quantification/derived-metrics/{metric_id}")
+async def delete_derived_metric(
+        dataset_id: int,
+        metric_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE)),
+):
+    """Delete a derived measurement. Refused (409) while another formula uses it."""
+    row = derived_db.get_row(db, dataset_id, metric_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Derived measurement not found.")
+    try:
+        derived_db.delete(db, row)
+    except DerivedMetricError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=" ".join(exc.problems))
+    return {"success": True, "message": "Derived measurement deleted."}
+
+
+@router.post("/{dataset_id}/quantification/derived-metrics/preview")
+async def preview_derived_metric(
+        dataset_id: int,
+        body: DerivedPreviewBody,
+        exclude_unreviewed: bool = True,
+        exclude_not_fully_annotated: bool = True,
+        db: Session = Depends(get_session),
+        user: User = Depends(get_current_user),
+):
+    """Check an unsaved formula and compute it, without saving anything.
+
+    The editor calls this as the formula changes. Problems come back as data (``ok:
+    false``) rather than as an error status, because a half-built formula is the normal
+    state of an editor. The measurements the formula reads are computed first if they are
+    missing or stale, as the summary does.
+    """
+    if dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User does not have access to this dataset.")
+    if body.id is not None and derived_db.get_row(db, dataset_id, body.id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Derived measurement not found.")
+
+    _compute_tiers(db, dataset_id, _tiers_for_keys(
+        {key for key, _ in direct_metric_inputs([body.definition])}
+        | derived_db.required_metric_keys(db, dataset_id)
+    ))
+    preview = await datasets_db.preview_derived_metric(
+        dataset_id, body.definition, body.id, exclude_not_fully_annotated, exclude_unreviewed, db,
+    )
+    return {"success": True, **preview}
+
+
+@router.post("/{dataset_id}/quantification/derived-metrics/copy")
+async def copy_derived_metrics(
+        dataset_id: int,
+        body: DerivedCopyBody,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE)),
+):
+    """Copy derived measurements from another dataset, matching labels by name.
+
+    The point is reuse without making a formula global: an eye clinic defines its
+    vascularity index once and copies it into each new OCT dataset. Everything is copied
+    or nothing is; a 422 says which definitions could not be (a key already in use, a
+    label the dataset does not have).
+    """
+    if body.source_dataset_id not in user.available_datasets:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="User does not have access to the source dataset.")
+    if body.source_dataset_id == dataset_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Pick a different dataset to copy from.")
+    try:
+        listed = derived_db.copy_from_dataset(db, body.source_dataset_id, dataset_id, body.keys, user.username)
+    except DerivedMetricError as exc:
+        raise _unprocessable(exc)
+    return {"success": True, "derived_metrics": listed}
 
 
 @router.get(

@@ -7,7 +7,20 @@ approves the draft and it is persisted via the bulk-create endpoint.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+class DraftAttribute(BaseModel):
+    """A proposed attribute of a label's objects: anything that does not change the outline."""
+    name: str = Field(..., description="Short lower-case name, e.g. 'species' or 'bleached'.")
+    value_type: Literal["categorical", "boolean", "number", "text"] = Field(
+        "categorical", description="categorical for a fixed set of kinds, boolean for yes/no.")
+    options: list[str] = Field(
+        default_factory=list, description="The allowed values of a categorical attribute, e.g. the species.")
+    unit: str | None = Field(None, description="Unit of a number attribute.")
+    description: str | None = Field(None, description="What the attribute records.")
 
 
 class DraftLabel(BaseModel):
@@ -20,6 +33,10 @@ class DraftLabel(BaseModel):
     children: list["DraftLabel"] = Field(
         default_factory=list,
         description="Nested sub-labels forming the tree structure.",
+    )
+    attributes: list[DraftAttribute] = Field(
+        default_factory=list,
+        description="Attributes of this label's objects, e.g. species of a coral fragment.",
     )
 
 

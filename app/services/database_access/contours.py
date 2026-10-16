@@ -14,7 +14,6 @@ from app.database.contours import (
 from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.masks import Masks
-from app.database.rejections import AnnotationRejections
 from app.database.users import Users
 from app.services import hierarchy_cache, provenance
 from app.services.database_access.labels import get_label_hierarchy
@@ -428,7 +427,22 @@ async def replace_contour(
         db: Session,
         author_username: str | None = None
 ):
-    """ Replace a contour with a new one. """
+    """Give an existing object a new outline, in place.
+
+    The object keeps its id and everything hanging off it: children, review
+    rejections, given attributes, relationships, and its provenance (when and how it
+    was created, which suggestion it carries). Callers that change provenance (an AI
+    refinement, a hand edit) update it afterwards.
+
+    This used to be a DELETE + re-INSERT under the same id. Every ON DELETE CASCADE
+    on ``contours.id`` fired in between, so a refinement silently dropped the
+    object's children and attributes.
+
+    What the replacement *does* carry over from ``new_contour_model``: the geometry,
+    label, ``added_by``, confidence and approvals. Approvals are taken from the model
+    on purpose, since a changed outline has not been reviewed yet. Children on the
+    model replace the existing children; a model without children keeps them.
+    """
     new_contour_model.id = old_contour_id
     contour = db.query(Contours).filter_by(id=old_contour_id).first()
     if not contour:
@@ -437,59 +451,38 @@ async def replace_contour(
     # contour's geometry does not silently reassign who is credited with it.
     author_username = author_username or contour.author_username
     mask_id, parent_id = contour.mask_id, contour.parent_id
-    # Identity survives the swap along with the id: when the object was created, which
-    # tool created it and which suggestion it carries. Callers that change these (an AI
-    # refinement, a hand edit) update them after the replace.
-    kept = {
-        "created_at": contour.created_at,
-        "origin": contour.origin,
-        "suggestion_id": contour.suggestion_id,
-        "geometry_edited_at": contour.geometry_edited_at,
-    }
 
-    # A replace is delete + re-insert under the SAME id — logically an in-place
-    # geometry update (e.g. an outline refinement), not a real deletion. But the
-    # DELETE fires the ON DELETE CASCADE on annotation_rejections.contour_id, which
-    # would wipe the reviewer's open send-backs for this object — and in the
-    # correction queue, 404 the "Mark as done" that follows the fix. Detach the
-    # rejections across the swap and re-point them to the reused id, so both the
-    # rejections and their ids survive the geometry change.
-    rejection_ids = [
-        rid for (rid,) in
-        db.query(AnnotationRejections.id).filter_by(contour_id=old_contour_id).all()
-    ]
-    if rejection_ids:
-        db.query(AnnotationRejections).filter(
-            AnnotationRejections.id.in_(rejection_ids)
-        ).update({AnnotationRejections.contour_id: None}, synchronize_session=False)
+    contour.x = list(new_contour_model.x)
+    contour.y = list(new_contour_model.y)
+    contour.label_id = new_contour_model.label_id
+    contour.added_by = new_contour_model.added_by or contour.added_by
+    contour.confidence_score = new_contour_model.confidence
+    reviewers = list(getattr(new_contour_model, "reviewed_by", None) or [])
+    contour.reviewed_by = (db.query(Users).filter(Users.username.in_(reviewers)).all()
+                           if reviewers else [])
+
+    new_children = list(getattr(new_contour_model, "children", None) or [])
+    if new_children:
+        for child in db.query(Contours).filter_by(parent_id=old_contour_id).all():
+            db.delete(child)
         db.flush()
+        for child in new_children:
+            child.id = None
+            save_contour_tree(db, child, mask_id, old_contour_id,
+                              author_username=author_username)
+        mark_relational_stale_for_parent(db, [old_contour_id])
+    db.flush()
 
-    db.query(Contours).filter_by(id=old_contour_id).delete()
-    save_contour_tree(db, new_contour_model, mask_id, parent_id,
-                      author_username=author_username)
-
-    (db.query(Contours).filter_by(id=old_contour_id)
-     .update({getattr(Contours, key): value for key, value in kept.items()},
-             synchronize_session=False))
-
-    if rejection_ids:
-        # The contour keeps its id (set above), so the FK is valid again.
-        db.query(AnnotationRejections).filter(
-            AnnotationRejections.id.in_(rejection_ids)
-        ).update({AnnotationRejections.contour_id: old_contour_id},
-                 synchronize_session=False)
-    # The contour keeps its id but its geometry (and therefore its filled pixels) is
-    # entirely new; any appearance rows written above the delete's CASCADE (none should
-    # remain, since the CASCADE removed them with the old contour row) must not be
-    # trusted stale-free. Mark defensively so a re-insert racing the CASCADE, or a future
-    # change to how replacement is implemented, cannot leave stale appearance data behind.
+    # Geometry is recomputed in place (the legacy columns and the tall rows alike); the
+    # filled pixels and the centroid moved, so appearance and the sibling group's
+    # neighbour distances are stale.
+    dual_write_geometry_metrics(db, mask_id, [contour])
     mark_appearance_stale(db, old_contour_id)
-    # Same reasoning for CONTEXTUAL: the replaced contour's centroid may have moved, so
-    # its whole parent group (same mask_id/parent_id, unchanged by the replace) needs
-    # recomputing. save_contour_tree only dual-writes GEOMETRY rows for the new contour;
-    # contextual staleness for the group is marked here explicitly, mirroring
-    # mark_appearance_stale above.
     mark_contextual_stale_for_group(db, mask_id, parent_id)
     db.commit()
     hierarchy_cache.invalidate(mask_id)
+    # The outline is a different exemplar now. Local import, as in save_contour_tree.
+    if not contour.temporary:
+        from app.services.embedding_lifecycle import enqueue_embed_contours
+        enqueue_embed_contours([old_contour_id])
     return True

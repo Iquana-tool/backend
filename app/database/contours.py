@@ -80,6 +80,11 @@ class Contours(database):
     # a refinement points it at the newer suggestion. Not a foreign key, as the
     # suggestion log outlives objects.
     suggestion_id = Column(Integer, nullable=True, index=True)
+    # The class a model with a fixed label space predicted for this object, in the
+    # model's own terms (ModelInfo.classes). Kept because the dataset's mapping may turn
+    # it into a label *and* an attribute value (species), and because "what did the
+    # model call it" is worth asking later. NULL for manual and class-agnostic objects.
+    model_class = Column(String(255), nullable=True)
     # Last time a person changed the outline by hand. NULL means the geometry is still
     # exactly what the tool (or the person, for manual objects) first produced.
     geometry_edited_at = Column(DateTime, nullable=True)
@@ -128,6 +133,7 @@ class Contours(database):
             author_username=author_username,
             confidence_score=model_schema.confidence,
             label_id=model_schema.label_id,
+            model_class=getattr(model_schema, "model_class", None),
             # Normalized coordinates stored as JSON lists
             x=model_schema.x,
             y=model_schema.y,

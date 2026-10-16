@@ -231,16 +231,9 @@ def test_replacing_an_objects_geometry_keeps_its_identity(ctx, monkeypatch):
     db.refresh(contour)
     before = (contour.origin, contour.suggestion_id, contour.created_at)
 
-    replacement = SimpleNamespace(id=None)
-
-    def fake_save(session, schema, mask_id, parent_id, author_username=None):
-        session.add(Contours(id=schema.id, mask_id=mask_id, parent_id=parent_id, added_by="sam2",
-                             author_username=author_username, confidence_score=1.0, area=1.0,
-                             perimeter=1.0, circularity=1.0, diameter=1.0,
-                             x=[0.5, 0.6, 0.6], y=[0.5, 0.5, 0.6]))
-        session.flush()
-
-    monkeypatch.setattr(contours_db, "save_contour_tree", fake_save)
+    replacement = SimpleNamespace(id=None, x=[0.5, 0.6, 0.6], y=[0.5, 0.5, 0.6], label_id=None,
+                                  added_by="sam2", confidence=1.0, reviewed_by=[], children=[])
+    monkeypatch.setattr(contours_db, "dual_write_geometry_metrics", lambda *a, **k: None)
     assert run(contours_db.replace_contour(contour.id, replacement, db))
 
     db.expire_all()
