@@ -1,4 +1,4 @@
-"""Fill ``ai_suggestions.final_iou`` for suggestions edited before revision 0009.
+"""Fill ``ai_suggestions.final_iou`` for suggestions edited before revision 0011.
 
 For every suggestion that was edited by hand but has no IoU yet, compare the logged
 outline with the object's current outline and store the result. Suggestions whose
