@@ -1,6 +1,7 @@
 import logging
 import os
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 import sqlite3
 
@@ -116,28 +117,200 @@ _ADDED_COLUMNS = [
     ("masks", "fully_annotated_by", "VARCHAR"),
     ("masks", "fully_annotated_at", "TIMESTAMP"),
     ("reviewer_contour_association", "reviewed_at", "TIMESTAMP"),
+    # SQLite's create_all() does not change tables already present in an older
+    # development database. Keep these additions in step with the Alembic
+    # revisions without rebuilding tables or rewriting annotation rows.
+    ("users", "display_name", "VARCHAR(100)"),
+    ("users", "email", "VARCHAR(254)"),
+    ("users", "preferences", "JSON NOT NULL DEFAULT '{}'"),
+    ("users", "created_at", "TIMESTAMP"),
+    ("users", "last_login_at", "TIMESTAMP"),
+    ("users", "tokens_valid_after", "TIMESTAMP"),
+    ("users", "must_change_password", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("datasets", "organization_id",
+     "INTEGER REFERENCES organizations(id) ON DELETE RESTRICT"),
+    ("ai_suggestions", "final_iou", "FLOAT"),
+    ("contours", "model_class", "VARCHAR(255)"),
+    ("image_metadata", "stack_id",
+     "INTEGER REFERENCES stacks(id) ON DELETE CASCADE"),
+    ("images", "kind", "VARCHAR(16) NOT NULL DEFAULT 'image'"),
+    ("images", "stack_id", "INTEGER REFERENCES stacks(id) ON DELETE CASCADE"),
+    ("images", "frame_index", "INTEGER"),
+    ("images", "frame_position", "FLOAT"),
+    ("images", "overview_geometry", "JSON"),
+]
+
+# SQLite indexes for the columns added above and for older tables whose indexes
+# were not created by create_all(). The vector HNSW index is intentionally absent:
+# it is PostgreSQL-only and SQLite uses the NumPy cosine-search path.
+_SQLITE_INDEXES = [
+    ("reviewer_contour_association", "ix_reviewer_contour_association_contour_id",
+     "CREATE INDEX IF NOT EXISTS ix_reviewer_contour_association_contour_id "
+     "ON reviewer_contour_association (contour_id)", ()),
+    ("contours", "ix_contours_author_username",
+     "CREATE INDEX IF NOT EXISTS ix_contours_author_username ON contours (author_username)", ()),
+    ("contours", "ix_contours_label_id",
+     "CREATE INDEX IF NOT EXISTS ix_contours_label_id ON contours (label_id)", ()),
+    ("contours", "ix_contours_mask_id",
+     "CREATE INDEX IF NOT EXISTS ix_contours_mask_id ON contours (mask_id)", ()),
+    ("contours", "ix_contours_parent_id",
+     "CREATE INDEX IF NOT EXISTS ix_contours_parent_id ON contours (parent_id)", ()),
+    ("contours", "ix_contours_suggestion_id",
+     "CREATE INDEX IF NOT EXISTS ix_contours_suggestion_id ON contours (suggestion_id)", ()),
+    ("users", "users_email_key",
+     "CREATE UNIQUE INDEX IF NOT EXISTS users_email_key ON users (email)", ("email",)),
+    ("datasets", "ix_datasets_organization_id",
+     "CREATE INDEX IF NOT EXISTS ix_datasets_organization_id ON datasets (organization_id)", ()),
+    ("images", "ix_images_dataset_id",
+     "CREATE INDEX IF NOT EXISTS ix_images_dataset_id ON images (dataset_id)", ()),
+    ("images", "ix_images_kind",
+     "CREATE INDEX IF NOT EXISTS ix_images_kind ON images (kind)", ()),
+    ("images", "ix_images_stack_id",
+     "CREATE INDEX IF NOT EXISTS ix_images_stack_id ON images (stack_id)", ()),
+    ("images", "uq_images_stack_frame_index",
+     "CREATE UNIQUE INDEX IF NOT EXISTS uq_images_stack_frame_index "
+     "ON images (stack_id, frame_index)", ("stack_id", "frame_index")),
+    ("masks", "ix_masks_image_id",
+     "CREATE INDEX IF NOT EXISTS ix_masks_image_id ON masks (image_id)", ()),
+    ("image_metadata", "ix_image_metadata_stack_id",
+     "CREATE INDEX IF NOT EXISTS ix_image_metadata_stack_id ON image_metadata (stack_id)", ()),
+    ("image_metadata", "uq_image_metadata_stack_key",
+     "CREATE UNIQUE INDEX IF NOT EXISTS uq_image_metadata_stack_key "
+     "ON image_metadata (stack_id, key)", ("stack_id",)),
+    ("organizations", "uq_organizations_default",
+     "CREATE UNIQUE INDEX IF NOT EXISTS uq_organizations_default "
+     "ON organizations (is_default) WHERE is_default", ()),
 ]
 
 
-def _ensure_columns(target_engine: Engine | None = None):
-    """Add late-arriving nullable columns to already-created tables.
+def _default_organization_name(connection) -> str:
+    """Return the same display name chosen by migration 0005."""
+    configured_name = None
+    if inspect(connection).has_table("instance_settings"):
+        configured_name = connection.execute(text(
+            "SELECT value FROM instance_settings WHERE key = 'instance_name'"
+        )).scalar()
+    configured_name = (configured_name or os.getenv("INSTANCE_NAME") or "").strip()
+    return configured_name[:100] or "Default organisation"
 
-    Mirrors ``scripts/migrate_roles.py`` but runs on every boot so a dev database
-    stays in step with the models without a manual migration step. Safe on a fresh
-    database: ``create_all`` has already made the columns, so every check is a hit.
+
+def _backfill_default_organization(connection):
+    """Match migration 0005 for a database gaining organization_id for the first time.
+
+    This runs only when the old datasets table lacked organization_id. It does not
+    repair memberships or assign intentionally personal datasets on later boots.
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    organization_id = connection.execute(text(
+        "SELECT id FROM organizations WHERE is_default = 1"
+    )).scalar()
+    if organization_id is None:
+        connection.execute(text(
+            "INSERT INTO organizations (name, is_default, created_at) "
+            "VALUES (:name, 1, :now)"
+        ), {"name": _default_organization_name(connection), "now": now})
+        organization_id = connection.execute(text(
+            "SELECT id FROM organizations WHERE is_default = 1"
+        )).scalar_one()
+    connection.execute(text(
+        "INSERT OR IGNORE INTO organization_members "
+        "(organization_id, username, role, joined_at) "
+        "SELECT :organization_id, username, "
+        "CASE WHEN global_role = 'admin' THEN 'admin' ELSE 'member' END, :now "
+        "FROM users"
+    ), {"organization_id": organization_id, "now": now})
+    connection.execute(text(
+        "UPDATE datasets SET organization_id = :organization_id "
+        "WHERE organization_id IS NULL"
+    ), {"organization_id": organization_id})
+
+
+def _ensure_columns(target_engine: Engine | None = None):
+    """Bring older SQLite tables up to the additive schema expected by current models.
+
+    SQLite DDL must share a real transaction with the organization backfill. Python's
+    sqlite3 legacy transaction mode does not begin a transaction for DDL, so use an
+    explicit BEGIN IMMEDIATE and roll back the whole upgrade if any step fails.
     """
     db_engine = target_engine or engine
-    inspector = inspect(db_engine)
-    existing_tables = set(inspector.get_table_names())
-    with db_engine.begin() as connection:
-        for table, column, ddl in _ADDED_COLUMNS:
-            if table not in existing_tables:
-                continue
-            columns = {col["name"] for col in inspector.get_columns(table)}
-            if column in columns:
-                continue
-            logger.info("Adding missing column %s.%s", table, column)
-            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+    with db_engine.connect() as connection:
+        try:
+            if db_engine.dialect.name == "sqlite":
+                # Lock before inspection so another startup cannot leave us with a
+                # stale plan that tries to add the same column after it commits.
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+            else:
+                connection.begin()
+
+            inspector = inspect(connection)
+            existing_tables = set(inspector.get_table_names())
+            columns_by_table = {
+                table: {column["name"] for column in inspector.get_columns(table)}
+                for table in existing_tables
+            }
+            existing_indexes = {
+                table: {index["name"] for index in inspector.get_indexes(table)}
+                for table in existing_tables
+            }
+            unique_column_sets = {
+                table: {tuple(constraint["column_names"]) for constraint in
+                        inspector.get_unique_constraints(table)}
+                for table in existing_tables
+            }
+            legacy_dataset_organization = (
+                db_engine.dialect.name == "sqlite"
+                and "datasets" in existing_tables
+                and "organization_id" not in columns_by_table["datasets"]
+            )
+            scheduled_columns = {
+                (table, column)
+                for table, column, _ddl in _ADDED_COLUMNS
+                if table in existing_tables and column not in columns_by_table[table]
+            }
+            has_work = any(
+                table in existing_tables and column not in columns_by_table[table]
+                for table, column, _ in _ADDED_COLUMNS
+            )
+            if db_engine.dialect.name == "sqlite":
+                has_work = has_work or any(
+                    table in existing_tables
+                    and name not in existing_indexes[table]
+                    and all(
+                        column in columns_by_table[table] or (table, column) in scheduled_columns
+                        for column in required_columns
+                    )
+                    and not (required_columns and tuple(required_columns) in unique_column_sets[table])
+                    for table, name, _ddl, required_columns in _SQLITE_INDEXES
+                )
+            if not has_work:
+                connection.commit()
+                return
+
+            for table, column, ddl in _ADDED_COLUMNS:
+                if table not in existing_tables or column in columns_by_table[table]:
+                    continue
+                logger.info("Adding missing column %s.%s", table, column)
+                connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+                columns_by_table[table].add(column)
+
+            if db_engine.dialect.name == "sqlite":
+                for table, name, ddl, required_columns in _SQLITE_INDEXES:
+                    if table not in existing_tables or name in existing_indexes[table]:
+                        continue
+                    if not all(column in columns_by_table[table] for column in required_columns):
+                        continue
+                    if required_columns and tuple(required_columns) in unique_column_sets[table]:
+                        continue
+                    connection.exec_driver_sql(ddl)
+                    existing_indexes[table].add(name)
+
+                if legacy_dataset_organization:
+                    _backfill_default_organization(connection)
+
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
 
 
 def _ensure_dataset_name_uniqueness(target_engine: Engine | None = None):

@@ -6,10 +6,16 @@ child-level predictions under the right parent, patch-vs-replace semantics, and 
 the replace warning is built from. Driven straight against the services with a temp SQLite
 database; the AI service is stubbed, since none of this is about HTTP.
 """
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from iquana_toolbox.schemas.database.masks import BinaryMask
 
 from app.database import database
 import app.database.contours  # noqa: F401
@@ -24,7 +30,12 @@ import app.database.users  # noqa: F401
 from app.database.contours import Contours
 from app.database.datasets import Datasets
 from app.database.images import Images
-from app.database.inference_jobs import InferenceJobItems
+from app.database.inference_jobs import (
+    InferenceJobItems,
+    InferenceJobs,
+    get_preview_predictions,
+    set_result_mode,
+)
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
@@ -35,6 +46,7 @@ from app.schemas.inference import (
     InferenceStepRequest,
     ModelCatalog,
     ModelOption,
+    ResultMode,
     ResolvedStep,
     UnparentedPolicy,
     WriteMode,
@@ -128,6 +140,29 @@ def test_backend_tasks_never_publish_to_the_shared_default_queue():
         # The router resolves to a kombu Queue, whose name is what the broker actually sees.
         queue = celery_app.amqp.router.route({}, task.name, (1,), {})["queue"]
         assert getattr(queue, "name", queue) == BACKEND_QUEUE
+
+
+def test_backend_queue_environment_is_shared_by_publisher_and_worker():
+    """A feature launcher can isolate its worker without an external Redis process."""
+    queue_name = "iquana.backend.cellpose_polyp"
+    env = {**os.environ, "BACKEND_QUEUE": queue_name}
+    script = """
+from app.services.celery_app import BACKEND_QUEUE, celery_app
+from app.services.inference.tasks import run_next
+queue = celery_app.amqp.router.route({}, run_next.name, (1,), {})["queue"]
+assert BACKEND_QUEUE == celery_app.conf.task_default_queue == queue.name
+print(BACKEND_QUEUE)
+"""
+    backend_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=backend_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == queue_name
 
 
 # --------------------------------------------------------------------------- #
@@ -263,6 +298,446 @@ def test_replace_without_acknowledgement_is_refused(ctx, monkeypatch):
     with pytest.raises(HTTPException) as excinfo:
         planning.create_job(ctx["db"], ctx["dataset"].id, "cur", body)
     assert excinfo.value.status_code == 400
+
+
+def test_preview_request_is_opt_in_single_image_and_non_destructive(ctx):
+    default_body = InferenceJobCreate(
+        dataset_id=ctx["dataset"].id,
+        steps=[InferenceStepRequest(label_id=ctx["cell"].id, model_registry_key="m2f")],
+    )
+    assert default_body.result_mode == ResultMode.WRITE
+
+    preview = InferenceJobCreate(
+        dataset_id=ctx["dataset"].id,
+        steps=[InferenceStepRequest(label_id=ctx["cell"].id, model_registry_key="m2f")],
+        result_mode="preview",
+        image_selection=ImageSelection.CUSTOM,
+        image_ids=[ctx["images"][0].id],
+    )
+    assert preview.result_mode == ResultMode.PREVIEW
+
+    with pytest.raises(ValueError, match="exactly one image_id"):
+        InferenceJobCreate(
+            dataset_id=ctx["dataset"].id,
+            steps=[InferenceStepRequest(label_id=ctx["cell"].id, model_registry_key="m2f")],
+            result_mode="preview",
+            image_selection=ImageSelection.CUSTOM,
+            image_ids=[image.id for image in ctx["images"][:2]],
+        )
+
+    with pytest.raises(ValueError, match="cannot use replace"):
+        InferenceJobCreate(
+            dataset_id=ctx["dataset"].id,
+            steps=[InferenceStepRequest(label_id=ctx["cell"].id, model_registry_key="m2f")],
+            result_mode="preview",
+            image_selection=ImageSelection.CUSTOM,
+            image_ids=[ctx["images"][0].id],
+            options=InferenceOptions(write_mode=WriteMode.REPLACE),
+        )
+
+
+def test_preview_roi_must_be_same_image_and_correct_parent_label(ctx, monkeypatch):
+    model_key = execution._CELLPOSE_POLYP_MODEL_KEY
+    _stub_catalog(monkeypatch, ctx, registry_key=execution._CELLPOSE_POLYP_MODEL_KEY)
+    body = InferenceJobCreate(
+        dataset_id=ctx["dataset"].id,
+        steps=[InferenceStepRequest(
+            label_id=ctx["nucleus"].id,
+            model_registry_key=model_key,
+            roi_contour_ids=[ctx["existing"].id],
+        )],
+        result_mode="preview",
+        image_selection=ImageSelection.CUSTOM,
+        image_ids=[ctx["images"][0].id],
+    )
+    job = planning.create_job(ctx["db"], ctx["dataset"].id, "cur", body)
+    assert job.plan_steps[0]["roi_contour_ids"] == [ctx["existing"].id]
+    job.status = "succeeded"
+    ctx["db"].commit()
+
+    wrong_image = body.model_copy(update={"image_ids": [ctx["images"][1].id]})
+    with pytest.raises(HTTPException) as excinfo:
+        planning.create_job(ctx["db"], ctx["dataset"].id, "cur", wrong_image)
+    assert excinfo.value.status_code == 404
+
+    other_label = db_contour(ctx["masks"][0].id, box(0.5, 0.5, 0.8, 0.8), label_id=ctx["debris"].id)
+    ctx["db"].add(other_label)
+    ctx["db"].commit()
+    wrong_label = body.model_copy(update={
+        "steps": [body.steps[0].model_copy(update={"roi_contour_ids": [other_label.id]})],
+        "name": "wrong label",
+    })
+    with pytest.raises(HTTPException) as excinfo:
+        planning.create_job(ctx["db"], ctx["dataset"].id, "cur", wrong_label)
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.parametrize("model_key", ["cpsam_polyp_v3_b_seed17", "yolo_polyp_v3_c_seed1"])
+def test_cellpose_preview_roi_accepts_only_target_ancestors(ctx, monkeypatch, model_key):
+    _stub_catalog(monkeypatch, ctx, registry_key=model_key)
+    db = ctx["db"]
+
+    fragment = Labels(id=41, dataset_id=ctx["dataset"].id, name="fragment", value=4,
+                      parent_id=ctx["cell"].id)
+    db.add(fragment)
+    db.flush()
+    surface = Labels(dataset_id=ctx["dataset"].id, name="surface", value=5,
+                     parent_id=fragment.id)
+    db.add(surface)
+    db.flush()
+    polyp = Labels(dataset_id=ctx["dataset"].id, name="polyp", value=6,
+                   parent_id=surface.id)
+    db.add(polyp)
+    db.flush()
+    child = Labels(dataset_id=ctx["dataset"].id, name="polyp child", value=7,
+                   parent_id=polyp.id)
+    db.add(child)
+    db.flush()
+
+    fragment_shape = box(0.1, 0.1, 0.4, 0.4)
+    fragment_contour = db_contour(ctx["masks"][0].id, fragment_shape, label_id=fragment.id)
+    fragment_contour.id = 21060
+    surface_shape = box(0.15, 0.15, 0.35, 0.35)
+    surface_contour = db_contour(ctx["masks"][0].id, surface_shape, label_id=surface.id)
+    descendant_contour = db_contour(ctx["masks"][0].id, box(0.2, 0.2, 0.3, 0.3),
+                                    label_id=child.id)
+    unrelated_contour = db_contour(ctx["masks"][0].id, box(0.5, 0.5, 0.8, 0.8),
+                                   label_id=ctx["debris"].id)
+    db.add_all([fragment_contour, surface_contour, descendant_contour, unrelated_contour])
+    db.commit()
+
+    def submit(contour_id, *, image_id=None, dataset_id=None):
+        body = InferenceJobCreate(
+            dataset_id=dataset_id or ctx["dataset"].id,
+            steps=[InferenceStepRequest(
+                label_id=polyp.id,
+                model_registry_key=model_key,
+                roi_contour_ids=[contour_id],
+            )],
+            result_mode="preview",
+            image_selection=ImageSelection.CUSTOM,
+            image_ids=[image_id or ctx["images"][0].id],
+        )
+        return planning.create_job(db, ctx["dataset"].id, "cur", body)
+
+    # Both the immediate parent and a higher ancestor can define Cellpose's ROI.
+    for contour in (surface_contour, fragment_contour):
+        job = submit(contour.id)
+        assert job.plan_steps[0]["roi_contour_ids"] == [contour.id]
+        if contour is fragment_contour:
+            resolved = ResolvedStep.model_validate(job.plan_steps[0])
+            captured = {}
+
+            def fake_response(db, step, image, username):
+                captured["step"] = step
+                return {"result": [], "prediction_metadata": {}}
+
+            monkeypatch.setattr(execution, "_instance_segmentation_response", fake_response)
+            execution.run_preview_unit(db, resolved, ctx["images"][0], "cur")
+            regions = captured["step"].inputs["parameters"]["parent_regions"]
+            assert captured["step"].roi_contour_ids == [21060]
+            assert len(regions) == 1
+            assert regions[0]["size"] == [100, 100]
+            assert isinstance(regions[0]["counts"], str) and regions[0]["counts"]
+            decoded = BinaryMask(rle_mask=regions[0], height=100, width=100).mask
+            expected_fragment = fragment_shape.to_binary_mask(height=100, width=100)
+            expected_surface = surface_shape.to_binary_mask(height=100, width=100)
+            assert decoded.shape == (100, 100)
+            assert decoded.any()
+            assert (decoded == expected_fragment).all()
+            assert not (decoded == expected_surface).all()
+        job.status = "succeeded"
+        db.commit()
+
+    # A descendant or unrelated label is outside the target's ancestor path.
+    for contour in (descendant_contour, unrelated_contour):
+        with pytest.raises(HTTPException) as excinfo:
+            submit(contour.id)
+        assert excinfo.value.status_code == 400
+
+    # The dataset-scoped lookup still rejects a saved contour from another image.
+    with pytest.raises(HTTPException) as excinfo:
+        submit(fragment_contour.id, image_id=ctx["images"][1].id)
+    assert excinfo.value.status_code == 404
+
+    foreign_dataset = Datasets(name="other", description="", dataset_type="image",
+                               folder_path="/tmp/other", created_by="cur")
+    db.add(foreign_dataset)
+    db.flush()
+    foreign_label = Labels(dataset_id=foreign_dataset.id, name="fragment", value=1)
+    foreign_image = Images(dataset_id=foreign_dataset.id, file_name="other.png",
+                           file_path="/tmp/other.png", thumbnail_file_path="/tmp/other-t.png",
+                           width=100, height=100, color_mode="RGB")
+    db.add_all([foreign_label, foreign_image])
+    db.flush()
+    foreign_mask = Masks(image_id=foreign_image.id, file_path="/tmp/other-m.png")
+    db.add(foreign_mask)
+    db.flush()
+    foreign_contour = db_contour(foreign_mask.id, box(0.1, 0.1, 0.4, 0.4),
+                                 label_id=foreign_label.id)
+    db.add(foreign_contour)
+    db.commit()
+    with pytest.raises(HTTPException) as excinfo:
+        submit(foreign_contour.id)
+    assert excinfo.value.status_code == 404
+
+    # Corrupt cycles fail closed rather than looping or accepting cycle members.
+    surface.parent_id = polyp.id
+    db.flush()
+    assert planning._preview_roi_label_ids(
+        db,
+        ctx["dataset"].id,
+        ResolvedStep(
+            label_id=polyp.id,
+            model_registry_key=model_key,
+            task="instance-segmentation",
+            level=3,
+            parent_label_id=surface.id,
+            label_name="polyp",
+            model_name="Cellpose-SAM",
+        ),
+    ) == set()
+
+
+@pytest.mark.parametrize("model_key", ["cpsam_polyp_v3_b_seed17", "yolo_polyp_v3_c_seed1"])
+def test_preview_unit_rasterizes_roi_and_returns_normalized_transient_contours(ctx, monkeypatch, model_key):
+    plan_step = step(
+        ctx["nucleus"].id,
+        level=1,
+        parent_label_id=ctx["cell"].id,
+        key=model_key,
+    ).model_copy(update={"roi_contour_ids": [ctx["existing"].id]})
+    captured = {}
+
+    def fake_response(db, step, image, username):
+        captured["step"] = step
+        contour = box(0.2, 0.2, 0.35, 0.35).model_dump(mode="json")
+        contour["source_instance_id"] = "mask-0001"
+        return {
+            "result": [contour],
+            "prediction_metadata": {
+                "model_key": model_key,
+                "roi_mode": "explicit",
+                "instances": [{"source_instance_id": "mask-0001", "rle": {"size": [100, 100], "counts": "RLE"}, "score": 0.9}],
+            },
+        }
+
+    monkeypatch.setattr(execution, "_instance_segmentation_response", fake_response)
+    contours_before = ctx["db"].query(Contours).count()
+    result = execution.run_preview_unit(ctx["db"], plan_step, ctx["images"][0], "cur")
+
+    regions = captured["step"].inputs["parameters"]["parent_regions"]
+    assert len(regions) == 1
+    assert regions[0]["size"] == [100, 100]
+    assert isinstance(regions[0]["counts"], str)
+    assert result["contours"][0]["label_id"] == ctx["nucleus"].id
+    assert result["contours"][0]["source_instance_id"] == "mask-0001"
+    assert result["prediction_metadata"]["instances"][0]["source_instance_id"] == "mask-0001"
+    assert ctx["db"].query(Contours).count() == contours_before
+
+
+def test_mask2former_whole_image_preview_does_not_send_parent_regions(ctx, monkeypatch):
+    """Whole-image Mask2Former preview must not receive parent_regions (Bug 4)."""
+    contract = LEGACY_TASK_DEFAULTS["instance-segmentation"]
+    plan_step = step(
+        ctx["cell"].id,
+        level=0,
+        key="m2f",
+    ).model_copy(update={
+        "roi_contour_ids": [],
+        "inputs": {"conditioning": {}, "parameters": {}},
+        "input_contract": contract,
+    })
+
+    captured = {}
+
+    def provider_boundary(db, step, image, username):
+        params = dict((step.inputs or {}).get("parameters") or {})
+        # Actual contract validation boundary: rejects undeclared parameters like parent_regions
+        declared_keys = {p.key for p in contract.parameters}
+        for k in params:
+            if k not in declared_keys:
+                raise ValueError(f"Unknown parameter '{k}' for task '{contract.task}'")
+        captured["step"] = step
+        contour = box(0.1, 0.1, 0.4, 0.4).model_dump(mode="json")
+        return {
+            "result": [contour],
+            "prediction_metadata": {"model_key": "m2f"},
+        }
+
+    monkeypatch.setattr(execution, "_instance_segmentation_response", provider_boundary)
+    result = execution.run_preview_unit(ctx["db"], plan_step, ctx["images"][0], "cur")
+
+    assert "parent_regions" not in captured["step"].inputs.get("parameters", {})
+    assert len(result["contours"]) == 1
+    assert result["contours"][0]["label_id"] == ctx["cell"].id
+
+
+def test_nested_whole_image_preview_attaches_parents_without_validation_error(ctx, monkeypatch):
+    """Whole-image preview for child label must attach parents with valid options without crashing."""
+    plan_step = step(
+        ctx["nucleus"].id,
+        level=1,
+        parent_label_id=ctx["cell"].id,
+        key="cpsam_polyp_v3_b_seed17",
+    ).model_copy(update={"roi_contour_ids": []})
+
+    inside_parent = box(0.15, 0.15, 0.25, 0.25).model_dump(mode="json")
+    outside_parent = box(0.7, 0.7, 0.8, 0.8).model_dump(mode="json")
+
+    def fake_response(db, step, image, username):
+        return {
+            "result": [inside_parent, outside_parent],
+            "prediction_metadata": {"instances": []},
+        }
+
+    monkeypatch.setattr(execution, "_instance_segmentation_response", fake_response)
+    result = execution.run_preview_unit(ctx["db"], plan_step, ctx["images"][0], "cur")
+
+    assert len(result["contours"]) == 2
+    by_parent = {c["parent_id"]: c for c in result["contours"]}
+    assert ctx["existing"].id in by_parent
+    assert None in by_parent
+
+
+def test_incompatible_model_explicit_roi_rejected_before_scheduling_and_execution(ctx, monkeypatch):
+    """Explicit ROI on incompatible models like Mask2Former must be rejected (Bug 4)."""
+    _stub_catalog(monkeypatch, ctx, registry_key="m2f")
+    body = InferenceJobCreate(
+        dataset_id=ctx["dataset"].id,
+        steps=[InferenceStepRequest(
+            label_id=ctx["nucleus"].id,
+            model_registry_key="m2f",
+            roi_contour_ids=[ctx["existing"].id],
+        )],
+        result_mode="preview",
+        image_selection=ImageSelection.CUSTOM,
+        image_ids=[ctx["images"][0].id],
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        planning.create_job(ctx["db"], ctx["dataset"].id, "cur", body)
+    assert excinfo.value.status_code == 400
+    assert "does not support explicit ROI selections" in excinfo.value.detail
+
+    # Direct execution boundary check
+    plan_step = step(
+        ctx["nucleus"].id,
+        level=1,
+        parent_label_id=ctx["cell"].id,
+        key="m2f",
+    ).model_copy(update={"roi_contour_ids": [ctx["existing"].id]})
+    with pytest.raises(execution.InferenceUnitError) as exc_exec:
+        execution.run_preview_unit(ctx["db"], plan_step, ctx["images"][0], "cur")
+    assert "does not support explicit ROI selections" in str(exc_exec.value)
+
+
+def test_preview_worker_stores_bounded_result_without_writing_and_drops_cancelled_output(ctx, monkeypatch):
+    from app.services.inference import tasks
+    from app.services.inference import progress as inference_progress
+
+    plan_step = step(ctx["cell"].id)
+    job = InferenceJobs(
+        dataset_id=ctx["dataset"].id,
+        created_by="cur",
+        status="running",
+        plan_steps=[plan_step.model_dump(mode="json")],
+        options=set_result_mode(InferenceOptions().model_dump(mode="json"), "preview"),
+        image_ids=[ctx["images"][0].id],
+        total_units=1,
+    )
+    ctx["db"].add(job)
+    ctx["db"].flush()
+    item = InferenceJobItems(
+        job_id=job.id,
+        level=0,
+        step_index=0,
+        image_id=ctx["images"][0].id,
+        status="pending",
+    )
+    ctx["db"].add(item)
+    ctx["db"].commit()
+    contours_before = ctx["db"].query(Contours).count()
+    payload = {"contours": [box(0.2, 0.2, 0.4, 0.4).model_dump(mode="json")], "prediction_metadata": {}}
+    monkeypatch.setattr(tasks, "run_preview_unit", lambda *args: payload)
+    tasks._run_one(ctx["db"], job, item, plan_step, InferenceOptions())
+    ctx["db"].expire_all()
+
+    stored = ctx["db"].get(InferenceJobItems, item.id)
+    assert stored.status == "done"
+    assert get_preview_predictions(db_job := ctx["db"].get(InferenceJobs, job.id), item.id) == payload
+    assert ctx["db"].query(Contours).count() == contours_before
+    assert planning.active_job(ctx["db"], ctx["dataset"].id) is not None
+    assert inference_progress.read_items(ctx["db"], db_job)[0].predictions is None
+    job.status = "succeeded"
+    ctx["db"].commit()
+    assert inference_progress.read_items(ctx["db"], db_job)[0].predictions == payload
+
+    cancelled = InferenceJobs(
+        dataset_id=ctx["dataset"].id,
+        created_by="cur",
+        status="running",
+        plan_steps=[plan_step.model_dump(mode="json")],
+        options=set_result_mode(InferenceOptions().model_dump(mode="json"), "preview"),
+        image_ids=[ctx["images"][1].id],
+        total_units=1,
+    )
+    ctx["db"].add(cancelled)
+    ctx["db"].flush()
+    cancelled_item = InferenceJobItems(
+        job_id=cancelled.id,
+        level=0,
+        step_index=0,
+        image_id=ctx["images"][1].id,
+        status="pending",
+    )
+    ctx["db"].add(cancelled_item)
+    ctx["db"].commit()
+
+    def cancel_during_inference(*args):
+        current = ctx["db"].get(InferenceJobs, cancelled.id)
+        current.status = "cancelling"
+        ctx["db"].commit()
+        return payload
+
+    monkeypatch.setattr(tasks, "run_preview_unit", cancel_during_inference)
+    tasks._run_one(ctx["db"], cancelled, cancelled_item, plan_step, InferenceOptions())
+    ctx["db"].expire_all()
+    cancelled_item = ctx["db"].get(InferenceJobItems, cancelled_item.id)
+    assert cancelled_item.status == "skipped"
+    assert get_preview_predictions(ctx["db"].get(InferenceJobs, cancelled.id), cancelled_item.id) is None
+    assert ctx["db"].query(Contours).count() == contours_before
+
+    too_large_job = InferenceJobs(
+        dataset_id=ctx["dataset"].id,
+        created_by="cur",
+        status="running",
+        plan_steps=[plan_step.model_dump(mode="json")],
+        options=set_result_mode(InferenceOptions().model_dump(mode="json"), "preview"),
+        image_ids=[ctx["images"][2].id],
+        total_units=1,
+    )
+    ctx["db"].add(too_large_job)
+    ctx["db"].flush()
+    too_large_item = InferenceJobItems(
+        job_id=too_large_job.id,
+        level=0,
+        step_index=0,
+        image_id=ctx["images"][2].id,
+        status="pending",
+    )
+    ctx["db"].add(too_large_item)
+    ctx["db"].commit()
+    monkeypatch.setattr(tasks, "MAX_PREVIEW_PAYLOAD_BYTES", 32)
+    monkeypatch.setattr(
+        tasks, "run_preview_unit",
+        lambda *args: {"contours": [], "prediction_metadata": {"padding": "x" * 64}},
+    )
+    tasks._run_one(ctx["db"], too_large_job, too_large_item, plan_step, InferenceOptions())
+    ctx["db"].expire_all()
+    too_large_item = ctx["db"].get(InferenceJobItems, too_large_item.id)
+    assert too_large_item.status == "failed"
+    assert get_preview_predictions(ctx["db"].get(InferenceJobs, too_large_job.id), too_large_item.id) is None
+    assert ctx["db"].query(Contours).count() == contours_before
 
 
 def test_a_model_cannot_be_bound_to_a_label_it_does_not_predict(ctx, monkeypatch):
@@ -480,11 +955,11 @@ def test_preserve_reviewed_spares_approved_objects_and_their_subtree(ctx):
 from app.services.inference.contract_resolver import LEGACY_TASK_DEFAULTS
 
 
-def _stub_catalog(monkeypatch, ctx, label_ids=()):
+def _stub_catalog(monkeypatch, ctx, label_ids=(), registry_key="m2f"):
     """Pretend one ready instance-segmentation model exists, without touching MLflow."""
     contract = LEGACY_TASK_DEFAULTS["instance-segmentation"]
     monkeypatch.setattr(planning, "model_catalog", lambda db, dataset_id: ModelCatalog(
-        models=[ModelOption(registry_key="m2f", name="Mask2Former",
+        models=[ModelOption(registry_key=registry_key, name="Mask2Former",
                             task="instance-segmentation", label_ids=list(label_ids),
                             input_contract=contract, provenance="legacy_default")],
     ))

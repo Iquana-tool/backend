@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from logging import getLogger
+from typing import Any, Optional
 
 from iquana_toolbox.inference import best_parent, nms
 from iquana_toolbox.schemas.database.contours import Contour
@@ -81,6 +82,14 @@ def predict(db: Session, step: ResolvedStep, image: Images, username: str) -> li
 def _predict_instance_segmentation(
     db: Session, step: ResolvedStep, image: Images, username: str
 ) -> list[Contour]:
+    response = _instance_segmentation_response(db, step, image, username)
+    contours, _, _ = _mapped_instance_response(db, step, image, response)
+    return contours
+
+
+def _instance_segmentation_response(
+    db: Session, step: ResolvedStep, image: Images, username: str
+) -> dict[str, Any]:
     from app.services.ai_services.instance_segmentation import InstanceSegmentationService
     from app.services.inference.conditioning_dispatcher import dispatch_conditioning
 
@@ -101,14 +110,166 @@ def _predict_instance_segmentation(
         exemplars=cond_result.get("exemplars", []),
         embeddings=cond_result.get("vectors", {}),
     )
-    response = asyncio.run(InstanceSegmentationService().inference(request))
+    return asyncio.run(InstanceSegmentationService().inference(request))
+
+
+def _mapped_instance_response(
+    db: Session, step: ResolvedStep, image: Images, response: dict[str, Any]
+) -> tuple[list[Contour], dict[str, Any], dict[int, str]]:
+    """Map provider output while retaining per-contour source instance identities."""
+    raw_items = response.get("result", []) if isinstance(response, dict) else response
+    contours = _as_contours(response)
+    source_ids: dict[int, str] = {}
+    if isinstance(raw_items, list):
+        for raw, contour in zip(raw_items, contours):
+            if isinstance(raw, dict) and raw.get("source_instance_id") is not None:
+                source_ids[id(contour)] = str(raw["source_instance_id"])
+
     # A model with a fixed label space names its classes; read them as this dataset's
     # labels. Its objects may arrive nested (vessels in the choroid) -- flatten them, since
     # each level's step nests its own objects under the level above (see attach_parents).
     contours = model_label_mapping.apply_mapping(
-        db, image.dataset_id, step.model_registry_key, _as_contours(response)
+        db, image.dataset_id, step.model_registry_key, contours
     )
-    return model_label_mapping.flatten(contours)
+    return (
+        model_label_mapping.flatten(contours),
+        response.get("prediction_metadata", {}) if isinstance(response, dict) else {},
+        source_ids,
+    )
+
+
+def _preview_roi_regions(db: Session, step: ResolvedStep, image: Images) -> list[dict]:
+    """Rasterize explicitly selected saved contours as native-size COCO RLEs."""
+    if not step.roi_contour_ids:
+        return []
+
+    rows = (
+        db.query(Contours)
+        .join(Masks, Masks.id == Contours.mask_id)
+        .filter(
+            Contours.id.in_(step.roi_contour_ids),
+            Contours.temporary.is_(False),
+            Masks.image_id == image.id,
+        )
+        .all()
+    )
+    by_id = {row.id: row for row in rows}
+    if len(by_id) != len(step.roi_contour_ids):
+        raise InferenceUnitError("A selected ROI contour no longer belongs to the preview image.")
+
+    regions: list[dict] = []
+    for contour_id in step.roi_contour_ids:
+        row = by_id[contour_id]
+        regions.append(
+            Contour(x=row.x or [], y=row.y or []).to_rle_encoding(image.height, image.width)
+        )
+    return regions
+
+
+_CELLPOSE_POLYP_MODEL_KEY = "cpsam_polyp_v3_b_seed17"
+_POLYP_ROI_MODEL_KEYS = {_CELLPOSE_POLYP_MODEL_KEY, "yolo_polyp_v3_c_seed1"}
+
+
+def run_preview_unit(
+    db: Session,
+    step: ResolvedStep,
+    image: Images,
+    username: str,
+    options: Optional[InferenceOptions] = None,
+) -> dict[str, Any]:
+    """Predict one image and return bounded-ready geometry without writing annotation rows."""
+    parameters = dict((step.inputs or {}).get("parameters") or {})
+    if step.roi_contour_ids:
+        if step.model_registry_key in _POLYP_ROI_MODEL_KEYS:
+            parameters["parent_regions"] = _preview_roi_regions(db, step, image)
+        else:
+            raise InferenceUnitError(
+                f"Model '{step.model_registry_key}' does not support explicit ROI selections."
+            )
+    else:
+        parameters.pop("parent_regions", None)
+
+    preview_step = step.model_copy(update={
+        "inputs": {**(step.inputs or {}), "parameters": parameters},
+    })
+    try:
+        response = _instance_segmentation_response(db, preview_step, image, username)
+        contours, metadata, source_ids = _mapped_instance_response(
+            db, preview_step, image, response
+        )
+    except Exception as exc:
+        raise InferenceUnitError(_prediction_error(exc, step)) from exc
+
+    candidates = filter_for_step(
+        contours, step, min_confidence=step.min_confidence or 0.0
+    )
+
+    parent_rows: list[Contours] = []
+    if step.roi_contour_ids:
+        parent_rows = (
+            db.query(Contours)
+            .join(Masks, Masks.id == Contours.mask_id)
+            .filter(
+                Contours.id.in_(step.roi_contour_ids),
+                Contours.temporary.is_(False),
+                Masks.image_id == image.id,
+            )
+            .all()
+        )
+    elif step.level > 0:
+        mask = db.query(Masks).filter(Masks.image_id == image.id).first()
+        if mask is not None:
+            if step.parent_label_id is not None:
+                parent_rows = _existing_contours(db, mask.id, label_id=step.parent_label_id)
+            if not parent_rows:
+                from app.services.inference.planning import _preview_roi_label_ids
+                allowed_ancestors = _preview_roi_label_ids(db, image.dataset_id, step)
+                if allowed_ancestors:
+                    parent_rows = (
+                        db.query(Contours)
+                        .join(Masks, Masks.id == Contours.mask_id)
+                        .filter(
+                            Contours.label_id.in_(allowed_ancestors),
+                            Contours.temporary.is_(False),
+                            Masks.image_id == image.id,
+                        )
+                        .all()
+                    )
+
+    if parent_rows and candidates:
+        if len(parent_rows) == 1 and step.roi_contour_ids:
+            for candidate in candidates:
+                candidate.parent_id = parent_rows[0].id
+        else:
+            containment = 0.05
+            if options is not None and "min_parent_containment" in options.model_fields_set:
+                containment = max(0.05, min(1.0, float(options.min_parent_containment)))
+            candidates, _ = attach_parents(
+                candidates,
+                parent_rows,
+                options=InferenceOptions(
+                    min_parent_containment=containment,
+                    unparented=UnparentedPolicy.KEEP_AT_ROOT,
+                ),
+            )
+
+    payload = []
+    for contour in candidates:
+        item = contour.model_dump(mode="json")
+        source_instance_id = source_ids.get(id(contour))
+        if source_instance_id is not None:
+            item["source_instance_id"] = source_instance_id
+        payload.append(item)
+
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    if isinstance(metadata.get("instances"), list):
+        kept_ids = {source_ids[id(contour)] for contour in candidates if id(contour) in source_ids}
+        metadata["instances"] = [
+            instance for instance in metadata["instances"]
+            if isinstance(instance, dict)
+            and str(instance.get("source_instance_id")) in kept_ids
+        ]
+    return {"contours": payload, "prediction_metadata": metadata}
 
 
 def _predict_cross_image(
