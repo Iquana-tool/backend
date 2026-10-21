@@ -92,10 +92,13 @@ def test_build_persists_and_upserts(ctx):
     assert get_saved_queue(ds.id, "ann", db).strategy == "random"
 
 
-def test_unavailable_strategy_is_rejected(ctx):
+def test_unavailable_strategy_is_rejected(ctx, monkeypatch):
     db, ds, _ = ctx
+    from app.services import annotation_queue as aq
+    monkeypatch.setitem(aq.SORT_STRATEGIES, "later", aq.QueueStrategy(
+        key="later", label="Later", description="", available=False, order=None))
     with pytest.raises(HTTPException) as exc:
-        build_and_save_queue(ds.id, "ann", "diversity", db)
+        build_and_save_queue(ds.id, "ann", "later", db)
     assert exc.value.status_code == 400
     # Nothing persisted for a rejected build.
     assert db.query(AnnotationQueues).count() == 0
@@ -122,8 +125,33 @@ def test_summary_reports_total_and_saved_state(ctx):
     assert after.saved_strategy == "as_uploaded"
 
 
-def test_diversity_option_is_a_placeholder():
+def test_active_learning_options_are_available():
     options = {option.key: option for option in strategy_options()}
     assert options["as_uploaded"].available is True
     assert options["random"].available is True
-    assert options["diversity"].available is False
+    assert options["diversity"].needs_model is False
+    assert options["density"].needs_model is False
+    assert options["uncertainty"].needs_model is True
+    # Confidence is a review-queue ordering; Mix was replaced by Density.
+    assert "confidence" not in options and "mix" not in options
+
+
+def test_model_based_ordering_requires_a_model(ctx):
+    db, ds, _ = ctx
+    with pytest.raises(HTTPException) as exc:
+        build_and_save_queue(ds.id, "ann", "uncertainty", db)
+    assert exc.value.status_code == 400
+
+
+def test_scoring_models_are_models_trained_on_this_dataset():
+    from app.services.annotation_queue import scoring_models_for_dataset
+    models = [
+        {"registry_key": "trained-a", "name": "Corals v3", "tags": {"trained_on_dataset_id": "4"}},
+        {"registry_key": "trained-b", "name": "Other", "tags": {"trained_on_dataset_id": "5"}},
+        {"registry_key": "mask2former", "name": "Mask2Former", "tags": {"trainable": "true"}},
+        {"registry_key": "legacy", "tags": {"dataset_id": "4"}},
+    ]
+    assert scoring_models_for_dataset(models, 4) == [
+        {"registry_key": "trained-a", "name": "Corals v3"},
+        {"registry_key": "legacy", "name": "legacy"},
+    ]

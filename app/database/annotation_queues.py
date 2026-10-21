@@ -48,5 +48,10 @@ class AnnotationQueues(database):
     strategy = Column(String(32), nullable=False)
     # Frozen list of image ids in queue order — a JSON array.
     image_order = Column(JSON, nullable=False, default=list)
+    # The model a model-based ordering was ranked with, so "Re-rank" can repeat it.
+    model_key = Column(String(255), nullable=True)
+    # Why each image sits where it does: {"<image id>": {"reason": str, "score": float|None}}.
+    # Stored with the order so the queue view needs no extra query. NULL for plain orderings.
+    details = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)

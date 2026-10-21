@@ -7,8 +7,10 @@ celery_app = Celery(
     backend=f"{REDIS_URL}/1",
     # Modules the worker imports so their @celery_app.task functions register. The embedding
     # tasks stay dormant unless EMBEDDING_LIFECYCLE_ENABLED is set (nothing enqueues them);
-    # the inference tasks are what the Batch Inference page hands its runs to.
-    include=["app.services.embedding_lifecycle", "app.services.inference.tasks"],
+    # the inference tasks are what the Batch Inference page hands its runs to; queue_prep fills
+    # vectors and scores for the annotation queue's active-learning orderings.
+    include=["app.services.embedding_lifecycle", "app.services.inference.tasks",
+             "app.services.queue_prep"],
 )
 
 #: Queue every backend task is published to and the backend worker consumes.
