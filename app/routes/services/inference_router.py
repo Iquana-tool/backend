@@ -1,13 +1,15 @@
-"""Batch inference: annotate a whole dataset with a hand-picked orchestration of models.
+"""Batch inference and transient one-image model previews.
 
 The counterpart to the annotation canvas, where a model runs on the one image in front of
 you. Here a user binds each label to a model, picks how the predictions meet the annotations
 that already exist (patch or replace), and hands the whole dataset to Celery.
 
-Everything is gated on `AI_BATCH_INFER`. Starting a *replace* run additionally needs
-`MASK_DELETE`: it deletes existing contours and their child objects before predicting, which
-is a destructive act on annotations, not an AI capability -- and `confirm_replace` must be
-set explicitly, so no default-valued field can ever trigger one.
+Write jobs are gated on `AI_BATCH_INFER`. Transient preview jobs use `AI_INTERACTIVE` plus
+`ANNOTATION_CREATE`, and never write annotations until the user accepts a prediction through
+the normal annotation API. Starting a *replace* run additionally needs `MASK_DELETE`: it
+deletes existing contours and their child objects before predicting, which is a destructive
+act on annotations, not an AI capability -- and `confirm_replace` must be set explicitly, so
+no default-valued field can ever trigger one.
 """
 import asyncio
 from logging import getLogger
@@ -20,7 +22,12 @@ from sqlalchemy.orm import Session
 from starlette import status as http_status
 
 from app.database import get_session
-from app.database.inference_jobs import InferenceJobItems, InferenceJobs, TERMINAL_JOB_STATUSES
+from app.database.inference_jobs import (
+    InferenceJobItems,
+    InferenceJobs,
+    TERMINAL_JOB_STATUSES,
+    clear_preview_predictions,
+)
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.inference import (
     DatasetModelRoutingRead,
@@ -32,6 +39,7 @@ from app.schemas.inference import (
     ModelRoutingSuggestRequest,
     ModelRoutingSuggestResult,
     ReplacePreview,
+    ResultMode,
     ScopeCounts,
     WriteMode,
 )
@@ -50,12 +58,42 @@ router = APIRouter(prefix="/inference", tags=["batch_inference"])
 _STREAM_INTERVAL = 2.0
 
 
-def _load_job(job_id: int, db: Session, user: AuthenticatedUser) -> InferenceJobs:
+def _ensure_job_permission(
+    user: AuthenticatedUser,
+    dataset_id: int,
+    result_mode: ResultMode | str,
+) -> None:
+    """Authorize a write job or transient preview against its own capability set."""
+    if result_mode == ResultMode.PREVIEW or result_mode == ResultMode.PREVIEW.value:
+        ensure_permission(user, dataset_id, Permission.AI_INTERACTIVE)
+        ensure_permission(user, dataset_id, Permission.ANNOTATION_CREATE)
+        return
+    ensure_permission(user, dataset_id, Permission.AI_BATCH_INFER)
+
+
+def _load_job(
+    job_id: int,
+    db: Session,
+    user: AuthenticatedUser,
+    *,
+    for_update: bool = False,
+) -> InferenceJobs:
     """Fetch a job and authorize the caller against its dataset."""
-    job = db.get(InferenceJobs, job_id)
+    job = (
+        db.query(InferenceJobs)
+        .filter(InferenceJobs.id == job_id)
+        .with_for_update()
+        .first()
+        if for_update
+        else db.get(InferenceJobs, job_id)
+    )
     if job is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"Inference job {job_id} not found.")
-    ensure_permission(user, job.dataset_id, Permission.AI_BATCH_INFER)
+    _ensure_job_permission(user, job.dataset_id, job.result_mode or ResultMode.WRITE.value)
+    if job.result_mode == ResultMode.PREVIEW.value and job.created_by != user.username:
+        # Transient suggestions belong to the annotator who requested them. Keep another
+        # dataset member from reading, cancelling, or accepting that user's preview.
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"Inference job {job_id} not found.")
     return job
 
 
@@ -119,8 +157,11 @@ async def create_job(
     user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Validate an orchestration, freeze it into a work list, and hand it to Celery."""
-    ensure_permission(user, body.dataset_id, Permission.AI_BATCH_INFER)
-    ensure_tool_enabled(body.dataset_id, AiTool.BATCH_INFERENCE, db)
+    _ensure_job_permission(user, body.dataset_id, body.result_mode)
+    if body.result_mode == ResultMode.PREVIEW:
+        ensure_tool_enabled(body.dataset_id, AiTool.INSTANCE_SEGMENTATION, db)
+    else:
+        ensure_tool_enabled(body.dataset_id, AiTool.BATCH_INFERENCE, db)
     if body.options.write_mode == WriteMode.REPLACE:
         # Destroying annotations is not something AI assistance alone should authorize.
         ensure_permission(user, body.dataset_id, Permission.MASK_DELETE)
@@ -242,8 +283,13 @@ async def cancel_job(
     Both are finalised here and now. Without this a run could sit in `cancelling` forever,
     and since that status is not terminal it would block every future run on the dataset.
     """
-    job = _load_job(job_id, db, user)
+    job = _load_job(job_id, db, user, for_update=True)
     if job.status in TERMINAL_JOB_STATUSES:
+        if job.status == "succeeded" and job.result_mode == "preview":
+            # A cancel request can arrive just after the worker's final commit. Honor it by
+            # dropping the transient preview, even though the completed job stays succeeded.
+            clear_preview_predictions(job)
+            db.commit()
         return progress.snapshot(db, job)
 
     if job.celery_task_id:
@@ -268,6 +314,8 @@ async def cancel_job(
         is not None
     )
     unreachable = job.started_at is None or job.status == "cancelling" or not has_started_item
+    if job.result_mode == ResultMode.PREVIEW.value:
+        clear_preview_predictions(job)
     if unreachable:
         tasks.abandon_pending(db, job.id)
         tasks.finish(db, job, "cancelled")

@@ -37,6 +37,38 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+_RESULT_MODE_KEY = "_inference_result_mode"
+_PREVIEW_PREDICTIONS_KEY = "_inference_preview_predictions"
+
+
+def store_preview_predictions(job: "InferenceJobs", item_id: int, predictions: dict) -> None:
+    """Store bounded preview output inside the job's existing JSON options payload."""
+    options = dict(job.options or {})
+    results = dict(options.get(_PREVIEW_PREDICTIONS_KEY) or {})
+    results[str(item_id)] = predictions
+    options[_PREVIEW_PREDICTIONS_KEY] = results
+    job.options = options
+
+
+def get_preview_predictions(job: "InferenceJobs", item_id: int) -> dict | None:
+    results = (job.options or {}).get(_PREVIEW_PREDICTIONS_KEY) or {}
+    return results.get(str(item_id))
+
+
+def clear_preview_predictions(job: "InferenceJobs") -> None:
+    options = dict(job.options or {})
+    options.pop(_PREVIEW_PREDICTIONS_KEY, None)
+    job.options = options
+
+
+def set_result_mode(options: dict, result_mode: str) -> dict:
+    """Persist a job's mode alongside its existing options without a schema change."""
+    stored = dict(options)
+    if result_mode == "preview":
+        stored[_RESULT_MODE_KEY] = result_mode
+    return stored
+
+
 #: Job lifecycle. `cancelling` is a request, not a state the worker set: the API writes it and
 #: the worker turns it into `cancelled` when it next comes up for air between items.
 JOB_STATUSES = ("pending", "running", "cancelling", "cancelled", "succeeded", "partial", "failed")
@@ -94,6 +126,11 @@ class InferenceJobs(database):
         "InferenceJobItems", back_populates="job", passive_deletes=True,
         order_by="InferenceJobItems.id",
     )
+
+    @property
+    def result_mode(self) -> str:
+        """Read preview mode from the existing JSON field; legacy jobs remain write jobs."""
+        return (self.options or {}).get(_RESULT_MODE_KEY, "write")
 
 
 class InferenceJobItems(database):

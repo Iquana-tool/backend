@@ -61,6 +61,9 @@ def classes_of(info: dict) -> list[ModelClass]:
 # --------------------------------------------------------------------------- #
 # Resolution
 # --------------------------------------------------------------------------- #
+_POLYP_ROI_MODEL_KEYS = {"cpsam_polyp_v3_b_seed17", "yolo_polyp_v3_c_seed1"}
+
+
 def resolve(
     db: Session, dataset_id: int, registry_key: str, classes: Iterable[ModelClass]
 ) -> list[ClassMappingRead]:
@@ -71,6 +74,18 @@ def resolve(
             dataset_id=dataset_id, model_registry_key=registry_key
         )
     }
+    if registry_key in _POLYP_ROI_MODEL_KEYS:
+        sibling_saved = {
+            row.model_class: row
+            for row in db.query(ModelLabelMappings).filter(
+                ModelLabelMappings.dataset_id == dataset_id,
+                ModelLabelMappings.model_registry_key.in_(_POLYP_ROI_MODEL_KEYS),
+            )
+        }
+        for k, v in sibling_saved.items():
+            if k not in saved:
+                saved[k] = v
+
     label_by_name = {
         name.strip().lower(): label_id
         for label_id, name in db.query(Labels.id, Labels.name).filter_by(dataset_id=dataset_id)
@@ -88,6 +103,13 @@ def resolve(
             ))
             continue
         suggested = label_by_name.get(model_class.name.strip().lower())
+        if suggested is None and model_class.key == "polyp":
+            polyp_matches = [
+                lid for name, lid in label_by_name.items()
+                if "polyp" in name
+            ]
+            if len(polyp_matches) == 1:
+                suggested = polyp_matches[0]
         resolved.append(ClassMappingRead(
             model_class=model_class,
             action=MAP if suggested is not None else "unmapped",

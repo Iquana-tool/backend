@@ -40,6 +40,13 @@ class WriteMode(StrEnum):
     acknowledgement (see `InferenceJobCreate.confirm_replace`)."""
 
 
+class ResultMode(StrEnum):
+    """Whether a job saves annotations or keeps predictions as a transient preview."""
+
+    WRITE = "write"
+    PREVIEW = "preview"
+
+
 class UnparentedPolicy(StrEnum):
     """What to do with a child-level prediction that lies inside no parent instance."""
 
@@ -86,11 +93,24 @@ class InferenceStepRequest(BaseModel):
         default=0.0, ge=0.0, le=1.0,
         description="Predictions below this confidence are discarded before merging.",
     )
+    roi_contour_ids: list[int] = Field(
+        default_factory=list,
+        max_length=32,
+        description="Saved same-image contours that explicitly bound preview inference.",
+    )
+
+    @field_validator("roi_contour_ids")
+    @classmethod
+    def _unique_roi_contours(cls, contour_ids: list[int]) -> list[int]:
+        if len(set(contour_ids)) != len(contour_ids):
+            raise ValueError("roi_contour_ids must not contain duplicates.")
+        return contour_ids
 
 
 from iquana_toolbox.schemas.input_contract import ConditioningSpec, InputContract
 from iquana_toolbox.schemas.model_info import ModelClass
 from iquana_toolbox.schemas.training import HyperParameter
+from app.schemas.model_label_mapping import ClassMappingRead
 
 
 class ResolvedStep(InferenceStepRequest):
@@ -346,6 +366,10 @@ class InferenceJobCreate(BaseModel):
         description="Optional human-readable name shown in the run history.",
     )
     steps: list[InferenceStepRequest] = Field(..., min_length=1)
+    result_mode: ResultMode = Field(
+        default=ResultMode.WRITE,
+        description="Preview results remain in the job item and do not create annotations.",
+    )
     image_selection: ImageSelection = Field(default=ImageSelection.ALL)
     image_ids: list[int] = Field(
         default_factory=list, description="Explicit scope; only read for image_selection=custom."
@@ -366,6 +390,24 @@ class InferenceJobCreate(BaseModel):
     def _custom_selection_needs_images(self) -> "InferenceJobCreate":
         if self.image_selection == ImageSelection.CUSTOM and not self.image_ids:
             raise ValueError("image_selection='custom' needs a non-empty image_ids list.")
+        return self
+
+    @model_validator(mode="after")
+    def _preview_is_one_non_destructive_instance_run(self) -> "InferenceJobCreate":
+        if self.result_mode != ResultMode.PREVIEW:
+            if any(step.roi_contour_ids for step in self.steps):
+                raise ValueError("roi_contour_ids are only supported for preview jobs.")
+            return self
+
+        if self.options.write_mode != WriteMode.PATCH or self.confirm_replace:
+            raise ValueError("Preview jobs cannot use replace mode or confirm_replace.")
+        if self.image_selection != ImageSelection.CUSTOM or len(self.image_ids) != 1:
+            raise ValueError("Preview jobs require image_selection='custom' and exactly one image_id.")
+        if len(self.steps) != 1 or self.steps[0].task != "instance-segmentation":
+            raise ValueError("Preview jobs require exactly one instance-segmentation step.")
+        parameters = (self.steps[0].inputs or {}).get("parameters") or {}
+        if "parent_regions" in parameters:
+            raise ValueError("Preview ROIs must use roi_contour_ids from saved application outlines.")
         return self
 
 
@@ -399,6 +441,7 @@ class InferenceJobSnapshot(BaseModel):
     created_by: Optional[str] = None
     status: str
     write_mode: WriteMode
+    result_mode: ResultMode = ResultMode.WRITE
     options: InferenceOptions
     steps: list[ResolvedStep] = Field(default_factory=list)
 
@@ -448,6 +491,10 @@ class InferenceJobItemRead(BaseModel):
     contours_unparented: int = 0
     duration_ms: Optional[float] = None
     error: Optional[str] = None
+    predictions: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Transient editable predictions; present only for completed preview items.",
+    )
 
 
 class ScopeCounts(BaseModel):
@@ -500,6 +547,10 @@ class ModelOption(BaseModel):
         default_factory=list,
         description="The model's fixed label space, if it has one. Its predictions are labelled "
                     "through the dataset's model label mapping.",
+    )
+    class_mappings: list[ClassMappingRead] = Field(
+        default_factory=list,
+        description="Per-class resolution to this dataset's labels for models with fixed classes.",
     )
     trained_on_dataset: bool = Field(
         default=False,

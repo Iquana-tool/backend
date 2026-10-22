@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
 from iquana_toolbox.schemas.database.contour_hierarchy import ContourHierarchy
 from iquana_toolbox.schemas.database.contours import Contour
 from iquana_toolbox.schemas.database.labels import LabelHierarchy
@@ -474,3 +475,704 @@ def test_handle_prompted_segmentation_forwards_parameters(monkeypatch):
     call_kwargs = mock_run_prompt.await_args.kwargs
     assert call_kwargs["parameters"] == {"threshold": 0.9, "multimask_output": False}
     assert call_kwargs["model_key"] == "sam3-prompted"
+
+
+def test_handle_object_add_preserves_parent_and_provenance(monkeypatch):
+    parent_frag = Contour(
+        id=21060,
+        x=[0.0, 1.0, 1.0, 0.0],
+        y=[0.0, 0.0, 1.0, 1.0],
+        label_id=10,
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=999,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None},
+        contour_hierarchy=SimpleNamespace(
+            id_to_contour={21060: parent_frag},
+            root_contours=[parent_frag],
+        ),
+    )
+    client_msg = ClientMessage(
+        id="req-add-1",
+        type="object_add_manual",
+        data={
+            "x": [0.1, 0.2, 0.2, 0.1],
+            "y": [0.1, 0.1, 0.2, 0.2],
+            "label_id": 43,
+            "parent_id": 21060,
+            "confidence": 0.95,
+            "added_by": "cpsam_polyp_v3_b_seed17",
+            "source": "instance_suggestion",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    assert contour_arg.parent_id == 21060
+    assert contour_arg.label_id == 43
+    assert contour_arg.added_by == "cpsam_polyp_v3_b_seed17"
+    assert mock_add.await_args.kwargs["source"] == "instance_suggestion"
+    assert mock_add.await_args.kwargs["model_key"] == "cpsam_polyp_v3_b_seed17"
+
+
+def test_handle_object_add_falls_back_to_focussed_parent(monkeypatch):
+    state = SimpleNamespace(
+        focussed_contour_id=21060,
+        mask_id=7,
+        user_id="alice",
+    )
+    client_msg = ClientMessage(
+        id="req-add-2",
+        type="object_add_manual",
+        data={
+            "x": [0.1, 0.2, 0.2, 0.1],
+            "y": [0.1, 0.1, 0.2, 0.2],
+            "label_id": 43,
+            "parent_id": None,
+            "confidence": 0.95,
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    assert contour_arg.parent_id == 21060
+
+
+def test_handle_object_add_model_prediction_outside_focused_does_not_adopt_parent(monkeypatch):
+    """Whole-image model results outside the focused contour must not inherit it."""
+    focused_parent = Contour(
+        id=21060,
+        x=[0.1, 0.3, 0.3, 0.1],
+        y=[0.1, 0.1, 0.3, 0.3],
+        label_id=10,
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=21060,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None},
+        contour_hierarchy=SimpleNamespace(
+            id_to_contour={21060: focused_parent},
+            root_contours=[focused_parent],
+        ),
+    )
+    # Prediction clearly outside [0.1, 0.3] box
+    client_msg = ClientMessage(
+        id="req-add-outside",
+        type="object_add_manual",
+        data={
+            "x": [0.7, 0.9, 0.9, 0.7],
+            "y": [0.7, 0.7, 0.9, 0.9],
+            "label_id": 43,
+            "parent_id": None,
+            "confidence": 0.95,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    assert contour_arg.parent_id is None
+
+
+@pytest.mark.parametrize("model_key", ["cpsam_polyp_v3_b_seed17", "yolo_polyp_v3_c_seed1"])
+@pytest.mark.parametrize(
+    ("candidate_x", "candidate_y"),
+    [
+        pytest.param([0.22, 0.28, 0.28, 0.22], [0.22, 0.22, 0.28, 0.28], id="contained-smaller"),
+        pytest.param([0.245, 0.345, 0.345, 0.245], [0.20, 0.20, 0.30, 0.30], id="shifted"),
+    ],
+)
+def test_polyp_instance_add_suppresses_duplicate_across_parent_branches(
+        monkeypatch, model_key, candidate_x, candidate_y
+):
+    """A rerun must not save a rim when the existing polyp is under another ancestor."""
+    parent_a = box(0.0, 0.0, 0.5, 0.5, contour_id=10)
+    parent_a.label_id = 10
+    parent_b = box(0.0, 0.0, 0.5, 0.5, contour_id=20)
+    parent_b.label_id = 10
+    existing = box(0.20, 0.20, 0.30, 0.30, contour_id=30, confidence=0.6)
+    existing.label_id = 43
+    existing.parent_id = parent_a.id
+    hierarchy = SimpleNamespace(
+        id_to_contour={10: parent_a, 20: parent_b, 30: existing},
+        root_contours=[parent_a, parent_b],
+        label_id_to_contours={10: [parent_a, parent_b], 43: [existing]},
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=None,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None},
+        contour_hierarchy=None,
+    )
+    client_msg = ClientMessage(
+        id="req-polyp-rerun",
+        type="object_add_manual",
+        data={
+            "x": candidate_x,
+            "y": candidate_y,
+            "label_id": 43,
+            "parent_id": parent_b.id,
+            "confidence": 0.99,
+            "source": "instance_segmentation",
+            "model_key": model_key,
+        },
+    )
+    add = AsyncMock()
+    sent = []
+
+    @contextmanager
+    def context_session():
+        yield object()
+
+    async def get_hierarchy(_mask_id, _db):
+        return hierarchy
+
+    async def send(_websocket, message):
+        sent.append(message)
+
+    monkeypatch.setattr(handlers, "get_context_session", context_session)
+    monkeypatch.setattr(handlers.masks_db, "get_contour_hierarchy_of_mask", get_hierarchy)
+    monkeypatch.setattr(handlers, "add_object", add)
+    monkeypatch.setattr(handlers, "send_msg", send)
+
+    candidate = Contour(x=candidate_x, y=candidate_y, label_id=43)
+    assert handlers.nms([candidate], iou_threshold=0.5, existing=[existing]).kept == [0]
+    assert handlers._polyp_intersection_over_smaller(candidate, existing) >= 0.3
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert state.contour_hierarchy is hierarchy
+    add.assert_not_awaited()
+    assert sent[-1].data == {"skipped": True, "duplicate": True}
+
+
+def test_polyp_instance_add_keeps_overlapping_contour_with_different_label(monkeypatch):
+    existing = box(0.20, 0.20, 0.30, 0.30, contour_id=30)
+    existing.label_id = 44
+    hierarchy = SimpleNamespace(
+        id_to_contour={30: existing},
+        root_contours=[existing],
+        label_id_to_contours={44: [existing]},
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=None,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 44: 10, 10: None},
+        contour_hierarchy=None,
+    )
+    client_msg = ClientMessage(
+        id="req-polyp-different-label",
+        type="object_add_manual",
+        data={
+            "x": [0.205, 0.305, 0.305, 0.205],
+            "y": [0.205, 0.205, 0.305, 0.305],
+            "label_id": 43,
+            "confidence": 0.9,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    add = AsyncMock()
+
+    @contextmanager
+    def context_session():
+        yield object()
+
+    async def get_hierarchy(_mask_id, _db):
+        return hierarchy
+
+    monkeypatch.setattr(handlers, "get_context_session", context_session)
+    monkeypatch.setattr(handlers.masks_db, "get_contour_hierarchy_of_mask", get_hierarchy)
+    monkeypatch.setattr(handlers, "add_object", add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    add.assert_awaited_once()
+
+
+def test_polyp_instance_add_keeps_slight_same_label_edge_overlap(monkeypatch):
+    existing = box(0.20, 0.20, 0.30, 0.30, contour_id=30)
+    existing.label_id = 43
+    hierarchy = SimpleNamespace(
+        id_to_contour={30: existing},
+        root_contours=[existing],
+        label_id_to_contours={43: [existing]},
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=None,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None},
+        contour_hierarchy=None,
+    )
+    client_msg = ClientMessage(
+        id="req-polyp-distinct",
+        type="object_add_manual",
+        data={
+            "x": [0.275, 0.375, 0.375, 0.275],
+            "y": [0.20, 0.20, 0.30, 0.30],
+            "label_id": 43,
+            "confidence": 0.9,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    add = AsyncMock()
+
+    @contextmanager
+    def context_session():
+        yield object()
+
+    async def get_hierarchy(_mask_id, _db):
+        return hierarchy
+
+    candidate = Contour(x=[0.275, 0.375, 0.375, 0.275], y=[0.20, 0.20, 0.30, 0.30], label_id=43)
+    assert handlers._polyp_intersection_over_smaller(candidate, existing) < 0.3
+
+    monkeypatch.setattr(handlers, "get_context_session", context_session)
+    monkeypatch.setattr(handlers.masks_db, "get_contour_hierarchy_of_mask", get_hierarchy)
+    monkeypatch.setattr(handlers, "add_object", add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    add.assert_awaited_once()
+
+
+def test_handle_object_add_model_prediction_inside_focused_adopts_parent_via_containment(monkeypatch):
+    """Whole-image model results inside the focused contour adopt it when it is an allowed ancestor."""
+    focused_parent = Contour(
+        id=21060,
+        x=[0.1, 0.5, 0.5, 0.1],
+        y=[0.1, 0.1, 0.5, 0.5],
+        label_id=10,
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=21060,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None},
+        contour_hierarchy=SimpleNamespace(
+            id_to_contour={21060: focused_parent},
+            root_contours=[focused_parent],
+        ),
+    )
+    # Prediction clearly inside [0.1, 0.5] box
+    client_msg = ClientMessage(
+        id="req-add-inside",
+        type="object_add_manual",
+        data={
+            "x": [0.2, 0.3, 0.3, 0.2],
+            "y": [0.2, 0.2, 0.3, 0.3],
+            "label_id": 43,
+            "parent_id": None,
+            "confidence": 0.95,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    assert contour_arg.parent_id == 21060
+
+
+def test_handle_object_add_model_prediction_does_not_adopt_focused_same_label_contour(monkeypatch):
+    """A new prediction must NOT be parented beneath an existing contour with the same label."""
+    existing_same_label_polyp = Contour(
+        id=21065,
+        x=[0.1, 0.5, 0.5, 0.1],
+        y=[0.1, 0.1, 0.5, 0.5],
+        label_id=43,
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=21065,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None},
+        contour_hierarchy=SimpleNamespace(
+            id_to_contour={21065: existing_same_label_polyp},
+            root_contours=[existing_same_label_polyp],
+        ),
+    )
+    client_msg = ClientMessage(
+        id="req-add-same-label",
+        type="object_add_manual",
+        data={
+            "x": [0.2, 0.3, 0.3, 0.2],
+            "y": [0.2, 0.2, 0.3, 0.3],
+            "label_id": 43,
+            "parent_id": None,
+            "confidence": 0.95,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    # Same label cannot be a parent -> must remain None
+    assert contour_arg.parent_id is None
+
+
+def test_handle_object_add_model_prediction_fallback_to_valid_ancestor_and_ignores_unrelated(monkeypatch):
+    """Fallback selects a valid ancestor and ignores containing unrelated or same-label objects."""
+    focused_polyp = Contour(
+        id=21065,
+        x=[0.1, 0.5, 0.5, 0.1],
+        y=[0.1, 0.1, 0.5, 0.5],
+        label_id=43,
+    )
+    unrelated_debris = Contour(
+        id=21070,
+        x=[0.05, 0.6, 0.6, 0.05],
+        y=[0.05, 0.05, 0.6, 0.6],
+        label_id=99,
+    )
+    valid_fragment = Contour(
+        id=21060,
+        x=[0.0, 0.8, 0.8, 0.0],
+        y=[0.0, 0.0, 0.8, 0.8],
+        label_id=10,
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=21065,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None, 99: None},
+        contour_hierarchy=SimpleNamespace(
+            id_to_contour={
+                21065: focused_polyp,
+                21070: unrelated_debris,
+                21060: valid_fragment,
+            },
+            root_contours=[valid_fragment],
+        ),
+    )
+    client_msg = ClientMessage(
+        id="req-add-fallback-ancestor",
+        type="object_add_manual",
+        data={
+            "x": [0.2, 0.3, 0.3, 0.2],
+            "y": [0.2, 0.2, 0.3, 0.3],
+            "label_id": 43,
+            "parent_id": None,
+            "confidence": 0.95,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    # Focused polyp (43) and debris (99) are rejected; valid fragment (10) is adopted!
+    assert contour_arg.parent_id == 21060
+
+
+def test_handle_object_add_model_prediction_no_focused_does_not_infer_parent(monkeypatch):
+    """When no contour is focused, model prediction parent is not inferred (remains None)."""
+    valid_fragment = Contour(
+        id=3001,
+        x=[0.0, 0.8, 0.8, 0.0],
+        y=[0.0, 0.0, 0.8, 0.8],
+        label_id=10,
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=None,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None},
+        contour_hierarchy=SimpleNamespace(
+            id_to_contour={3001: valid_fragment},
+            root_contours=[valid_fragment],
+        ),
+    )
+    client_msg = ClientMessage(
+        id="req-add-no-focused",
+        type="object_add_manual",
+        data={
+            "x": [0.2, 0.3, 0.3, 0.2],
+            "y": [0.2, 0.2, 0.3, 0.3],
+            "label_id": 43,
+            "parent_id": None,
+            "confidence": 0.95,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    assert contour_arg.parent_id is None
+
+
+def test_handle_object_add_model_prediction_closest_ancestor_preferred_over_distant(monkeypatch):
+    """Nearest taxonomy ancestor (immediate parent) is chosen over distant grandparent ancestor in fallback."""
+    unrelated_focused = Contour(
+        id=9999,
+        x=[0.9, 0.95, 0.95, 0.9],
+        y=[0.9, 0.9, 0.95, 0.95],
+        label_id=88,  # Unrelated label outside prediction
+    )
+    colony = Contour(
+        id=100,
+        x=[0.0, 1.0, 1.0, 0.0],
+        y=[0.0, 0.0, 1.0, 1.0],
+        label_id=5,  # Grandparent (colony)
+    )
+    fragment = Contour(
+        id=200,
+        x=[0.1, 0.9, 0.9, 0.1],
+        y=[0.1, 0.1, 0.9, 0.9],
+        label_id=10,  # Immediate parent (fragment)
+    )
+    # 43 (polyp) -> 10 (fragment) -> 5 (colony) -> None
+    state = SimpleNamespace(
+        focussed_contour_id=9999,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: 5, 5: None, 88: None},
+        contour_hierarchy=SimpleNamespace(
+            id_to_contour={9999: unrelated_focused, 100: colony, 200: fragment},
+            root_contours=[colony],
+        ),
+    )
+    client_msg = ClientMessage(
+        id="req-add-nearest-ancestor",
+        type="object_add_manual",
+        data={
+            "x": [0.2, 0.3, 0.3, 0.2],
+            "y": [0.2, 0.2, 0.3, 0.3],
+            "label_id": 43,
+            "parent_id": None,
+            "confidence": 0.95,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    # Fragment (label 10, distance 0) is preferred over Colony (label 5, distance 1)
+    assert contour_arg.parent_id == 200
+
+
+def test_handle_object_add_model_prediction_explicit_parent_invalid_ancestor_cleared(monkeypatch):
+    """Explicit model parent is cleared when its label is not in dataset label ancestry (e.g. root polyp)."""
+    fragment = Contour(
+        id=21060,
+        x=[0.0, 1.0, 1.0, 0.0],
+        y=[0.0, 0.0, 1.0, 1.0],
+        label_id=10,
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=None,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: None, 10: None},  # Root-level polyp (no ancestors)
+        contour_hierarchy=SimpleNamespace(
+            id_to_contour={21060: fragment},
+            root_contours=[fragment],
+        ),
+    )
+    # Client sends explicit parent_id pointing to fragment 21060
+    client_msg = ClientMessage(
+        id="req-add-explicit-invalid-ancestor",
+        type="object_add_manual",
+        data={
+            "x": [0.2, 0.3, 0.3, 0.2],
+            "y": [0.2, 0.2, 0.3, 0.3],
+            "label_id": 43,
+            "parent_id": 21060,
+            "confidence": 0.95,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    # Incompatible explicit parent must be stripped -> remains None
+    assert contour_arg.parent_id is None
+
+
+def test_handle_object_add_model_prediction_explicit_parent_valid_ancestor_preserved(monkeypatch):
+    """Explicit model parent is preserved when its label is a valid dataset ancestor and contains the child."""
+    fragment = Contour(
+        id=21060,
+        x=[0.0, 1.0, 1.0, 0.0],
+        y=[0.0, 0.0, 1.0, 1.0],
+        label_id=10,
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=None,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None},  # Polyp is child of Fragment 10
+        contour_hierarchy=SimpleNamespace(
+            id_to_contour={21060: fragment},
+            root_contours=[fragment],
+        ),
+    )
+    client_msg = ClientMessage(
+        id="req-add-explicit-valid-ancestor",
+        type="object_add_manual",
+        data={
+            "x": [0.2, 0.3, 0.3, 0.2],
+            "y": [0.2, 0.2, 0.3, 0.3],
+            "label_id": 43,
+            "parent_id": 21060,
+            "confidence": 0.95,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    # Valid explicit parent is accepted
+    assert contour_arg.parent_id == 21060
+
+
+def test_handle_object_add_model_prediction_explicit_parent_same_label_cleared(monkeypatch):
+    """Explicit model parent pointing to another contour with the same label is cleared."""
+    polyp1 = Contour(
+        id=21065,
+        x=[0.1, 0.8, 0.8, 0.1],
+        y=[0.1, 0.1, 0.8, 0.8],
+        label_id=43,
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=None,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None},
+        contour_hierarchy=SimpleNamespace(
+            id_to_contour={21065: polyp1},
+            root_contours=[polyp1],
+        ),
+    )
+    client_msg = ClientMessage(
+        id="req-add-explicit-same-label",
+        type="object_add_manual",
+        data={
+            "x": [0.2, 0.3, 0.3, 0.2],
+            "y": [0.2, 0.2, 0.3, 0.3],
+            "label_id": 43,
+            "parent_id": 21065,
+            "confidence": 0.95,
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    assert contour_arg.parent_id is None
+
+
+def test_handle_object_add_refreshes_hierarchy_from_storage_when_state_is_stale(monkeypatch):
+    """When state.contour_hierarchy has a stale snapshot (missing newly added parent),
+    handle_object_add queries masks_db.get_contour_hierarchy_of_mask, updates state.contour_hierarchy,
+    and validates the parent against the refreshed storage hierarchy.
+    """
+    stale_hierarchy = SimpleNamespace(
+        id_to_contour={},
+        root_contours=[],
+    )
+    fresh_parent = Contour(
+        id=21060,
+        x=[0.0, 1.0, 1.0, 0.0],
+        y=[0.0, 0.0, 1.0, 1.0],
+        label_id=10,
+    )
+    fresh_hierarchy = SimpleNamespace(
+        id_to_contour={21060: fresh_parent},
+        root_contours=[fresh_parent],
+    )
+    state = SimpleNamespace(
+        focussed_contour_id=None,
+        mask_id=7,
+        user_id="alice",
+        label_parents={43: 10, 10: None},
+        contour_hierarchy=stale_hierarchy,
+    )
+    client_msg = ClientMessage(
+        id="req-add-stale-refresh",
+        type="object_add_manual",
+        data={
+            "x": [0.1, 0.2, 0.2, 0.1],
+            "y": [0.1, 0.1, 0.2, 0.2],
+            "label_id": 43,
+            "parent_id": 21060,
+            "confidence": 0.95,
+            "source": "instance_suggestion",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+
+    # Mock get_contour_hierarchy_of_mask to return fresh_hierarchy
+    mock_get_hierarchy = AsyncMock(return_value=fresh_hierarchy)
+    monkeypatch.setattr(handlers.masks_db, "get_contour_hierarchy_of_mask", mock_get_hierarchy)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_get_hierarchy.await_count == 1
+    assert state.contour_hierarchy is fresh_hierarchy
+    assert mock_add.await_count == 1
+    contour_arg = mock_add.await_args.args[0]
+    assert contour_arg.parent_id == 21060
+
+
