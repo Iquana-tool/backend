@@ -23,7 +23,9 @@ from app.database.masks import Masks
 from app.database.labels import Labels
 from app.database.contours import Contours
 from app.database.ai_suggestions import AiSuggestions, SuggestionSource
+from app.database.annotation_actions import AnnotationActions
 from app.routes.websockets import annotation_handlers as handlers
+from app.services import provenance
 from app.services.database_access import masks as masks_db
 from app.services.database_access import contours as contours_db
 from iquana_toolbox.schemas.database.contours import Contour
@@ -212,6 +214,291 @@ def test_cellpose_polyp_acceptance_persistence_and_reload(scratch_ctx, monkeypat
         after_delete = asyncio.run(masks_db.get_contour_hierarchy_of_mask(mask_id, db))
         assert len(after_delete.root_contours) == 1
         assert len(after_delete.root_contours[0].children) == 0
+
+
+@pytest.mark.parametrize("prediction_parent_id", [21061, 21060], ids=["same-parent", "ancestor"])
+def test_cellpose_patch_skips_duplicate_before_hierarchy_fitting(
+        scratch_ctx, monkeypatch, prediction_parent_id
+):
+    """A rerun keeps the manual outline intact and creates no duplicate write records."""
+    session_factory, ds_id, img, mask_id, frag_contour = scratch_ctx
+
+    @contextmanager
+    def test_session():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    monkeypatch.setattr(handlers, "get_context_session", test_session)
+    sent_messages = []
+
+    async def fake_send_msg(_websocket, message):
+        sent_messages.append(message)
+
+    monkeypatch.setattr(handlers, "send_msg", fake_send_msg)
+
+    # Existing manual hierarchy: fragment -> surface -> polyp. Keep the polyp's
+    # geometry untouched when a slightly larger model outline nearly duplicates it.
+    with test_session() as db:
+        surface = Contours(
+            id=21061,
+            mask_id=mask_id,
+            parent_id=frag_contour.id,
+            label_id=42,
+            added_by="User",
+            author_username="researcher",
+            confidence_score=1.0,
+            area=4900.0,
+            perimeter=280.0,
+            circularity=0.8,
+            diameter=70.0,
+            x=[0.15, 0.85, 0.85, 0.15],
+            y=[0.15, 0.15, 0.85, 0.85],
+        )
+        manual_polyp = Contours(
+            id=21062,
+            mask_id=mask_id,
+            parent_id=surface.id,
+            label_id=43,
+            added_by="User",
+            author_username="researcher",
+            confidence_score=1.0,
+            area=100.0,
+            perimeter=40.0,
+            circularity=0.8,
+            diameter=10.0,
+            x=[0.30, 0.40, 0.40, 0.30],
+            y=[0.30, 0.30, 0.40, 0.40],
+        )
+        db.add_all([surface, manual_polyp])
+        db.commit()
+
+    state = SimpleNamespace(
+        mask_id=mask_id,
+        dataset_id=ds_id,
+        user_id="researcher",
+        focussed_contour_id=None,
+        image_db=img,
+    )
+    duplicate_msg = ClientMessage(
+        id="msg-polyp-duplicate",
+        type="object_add_manual",
+        data={
+            # Slightly larger than the manual outline; hierarchy fitting alone
+            # would persist the thin pixels around its edge.
+            "x": [0.295, 0.405, 0.405, 0.295],
+            "y": [0.295, 0.295, 0.405, 0.405],
+            "label_id": 43,
+            "parent_id": prediction_parent_id,
+            "confidence": 0.99,
+            "added_by": "cpsam_polyp_v3_b_seed17",
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+
+    asyncio.run(handlers.handle_object_add(object(), duplicate_msg, state))
+
+    assert len(sent_messages) == 1
+    assert sent_messages[0].type == ServerMessageType.SUCCESS
+    assert sent_messages[0].data == {"skipped": True, "duplicate": True}
+    with test_session() as db:
+        assert db.query(Contours).filter_by(mask_id=mask_id).count() == 3
+        assert db.query(AiSuggestions).filter_by(mask_id=mask_id).count() == 0
+        assert db.query(AnnotationActions).filter_by(mask_id=mask_id).count() == 0
+        unchanged = db.query(Contours).filter_by(id=21062).one()
+        assert unchanged.x == [0.30, 0.40, 0.40, 0.30]
+        assert unchanged.y == [0.30, 0.30, 0.40, 0.40]
+
+    # A genuinely separate polyp with the same label is still accepted.
+    distinct_msg = ClientMessage(
+        id="msg-polyp-distinct",
+        type="object_add_manual",
+        data={
+            "x": [0.60, 0.70, 0.70, 0.60],
+            "y": [0.60, 0.60, 0.70, 0.70],
+            "label_id": 43,
+            "parent_id": 21061,
+            "confidence": 0.90,
+            "added_by": "cpsam_polyp_v3_b_seed17",
+            "source": "instance_segmentation",
+            "model_key": "cpsam_polyp_v3_b_seed17",
+        },
+    )
+    sent_messages.clear()
+    asyncio.run(handlers.handle_object_add(object(), distinct_msg, state))
+
+    assert len(sent_messages) == 1
+    assert sent_messages[0].type == ServerMessageType.OBJECT_ADDED
+    with test_session() as db:
+        assert db.query(Contours).filter_by(mask_id=mask_id).count() == 4
+        assert db.query(AiSuggestions).filter_by(mask_id=mask_id).count() == 1
+        assert db.query(AnnotationActions).filter_by(mask_id=mask_id).count() == 1
+
+
+def test_yolo_patch_skips_partial_overlap_with_saved_cellpose_polyp(scratch_ctx, monkeypatch):
+    """Cross-model overlap/min catches the crescent that IoU NMS leaves behind."""
+    session_factory, ds_id, img, mask_id, frag_contour = scratch_ctx
+
+    @contextmanager
+    def test_session():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    monkeypatch.setattr(handlers, "get_context_session", test_session)
+    sent_messages = []
+
+    async def fake_send_msg(_websocket, message):
+        sent_messages.append(message)
+
+    monkeypatch.setattr(handlers, "send_msg", fake_send_msg)
+
+    surface = Contours(
+        id=21071,
+        mask_id=mask_id,
+        parent_id=frag_contour.id,
+        label_id=42,
+        added_by="User",
+        author_username="researcher",
+        confidence_score=1.0,
+        area=4900.0,
+        perimeter=280.0,
+        circularity=0.8,
+        diameter=70.0,
+        x=[0.15, 0.85, 0.85, 0.15],
+        y=[0.15, 0.15, 0.85, 0.85],
+    )
+    manual_polyp = Contours(
+        id=21072,
+        mask_id=mask_id,
+        parent_id=surface.id,
+        label_id=43,
+        added_by="User",
+        author_username="researcher",
+        confidence_score=1.0,
+        area=25.0,
+        perimeter=20.0,
+        circularity=0.8,
+        diameter=5.0,
+        x=[0.55, 0.60, 0.60, 0.55],
+        y=[0.55, 0.55, 0.60, 0.60],
+    )
+    cellpose_polyp = Contours(
+        id=21073,
+        mask_id=mask_id,
+        parent_id=surface.id,
+        label_id=43,
+        added_by="cpsam_polyp_v3_b_seed17",
+        author_username="researcher",
+        confidence_score=0.8,
+        area=100.0,
+        perimeter=40.0,
+        circularity=0.8,
+        diameter=10.0,
+        x=[0.30, 0.40, 0.40, 0.30],
+        y=[0.30, 0.30, 0.40, 0.40],
+    )
+    with test_session() as db:
+        db.add_all([surface, manual_polyp, cellpose_polyp])
+        db.commit()
+        provenance.record_suggestions(
+            db,
+            [cellpose_polyp.id],
+            source=SuggestionSource.INSTANCE_SEGMENTATION,
+            model_key="cpsam_polyp_v3_b_seed17",
+            username="researcher",
+        )
+
+    # This shifted YOLO outline has IoU below 0.5 but 55% of its smaller area
+    # overlaps Cellpose's saved outline. Fitting it per contour leaves a crescent.
+    candidate = Contour(
+        x=[0.345, 0.445, 0.445, 0.345],
+        y=[0.30, 0.30, 0.40, 0.40],
+        label_id=43,
+        parent_id=surface.id,
+        confidence=0.99,
+    )
+    existing_shape = Contour(
+        x=cellpose_polyp.x,
+        y=cellpose_polyp.y,
+        label_id=43,
+        parent_id=surface.id,
+    )
+    assert handlers.nms([candidate], iou_threshold=0.5, existing=[existing_shape]).kept == [0]
+    assert handlers._polyp_intersection_over_smaller(candidate, existing_shape) == pytest.approx(0.55, abs=0.02)
+    with test_session() as db:
+        hierarchy = asyncio.run(masks_db.get_contour_hierarchy_of_mask(mask_id, db))
+        fitted_rim = masks_db.add_contour_to_hierarchy(hierarchy, candidate.model_copy(deep=True))
+        assert fitted_rim is not None
+        assert fitted_rim.x != candidate.x or fitted_rim.y != candidate.y
+
+    state = SimpleNamespace(
+        mask_id=mask_id,
+        dataset_id=ds_id,
+        user_id="researcher",
+        focussed_contour_id=None,
+        image_db=img,
+    )
+    duplicate_msg = ClientMessage(
+        id="msg-yolo-cellpose-duplicate",
+        type="object_add_manual",
+        data={
+            "x": candidate.x,
+            "y": candidate.y,
+            "label_id": 43,
+            "parent_id": surface.id,
+            "confidence": candidate.confidence,
+            "added_by": "yolo_polyp_v3_c_seed1",
+            "source": "instance_segmentation",
+            "model_key": "yolo_polyp_v3_c_seed1",
+        },
+    )
+    asyncio.run(handlers.handle_object_add(object(), duplicate_msg, state))
+
+    assert len(sent_messages) == 1
+    assert sent_messages[0].type == ServerMessageType.SUCCESS
+    assert sent_messages[0].data == {"skipped": True, "duplicate": True}
+    with test_session() as db:
+        assert db.query(Contours).filter_by(mask_id=mask_id).count() == 4
+        assert db.query(AiSuggestions).filter_by(mask_id=mask_id).count() == 1
+        assert db.query(AnnotationActions).filter_by(mask_id=mask_id).count() == 0
+        unchanged_manual = db.query(Contours).filter_by(id=manual_polyp.id).one()
+        unchanged_cellpose = db.query(Contours).filter_by(id=cellpose_polyp.id).one()
+        assert unchanged_manual.x == [0.55, 0.60, 0.60, 0.55]
+        assert unchanged_manual.y == [0.55, 0.55, 0.60, 0.60]
+        assert unchanged_cellpose.x == [0.30, 0.40, 0.40, 0.30]
+        assert unchanged_cellpose.y == [0.30, 0.30, 0.40, 0.40]
+
+    fresh_msg = ClientMessage(
+        id="msg-yolo-fresh-polyp",
+        type="object_add_manual",
+        data={
+            "x": [0.65, 0.70, 0.70, 0.65],
+            "y": [0.65, 0.65, 0.70, 0.70],
+            "label_id": 43,
+            "parent_id": surface.id,
+            "confidence": 0.9,
+            "added_by": "yolo_polyp_v3_c_seed1",
+            "source": "instance_segmentation",
+            "model_key": "yolo_polyp_v3_c_seed1",
+        },
+    )
+    sent_messages.clear()
+    asyncio.run(handlers.handle_object_add(object(), fresh_msg, state))
+    assert len(sent_messages) == 1
+    assert sent_messages[0].type == ServerMessageType.OBJECT_ADDED
+    with test_session() as db:
+        assert db.query(Contours).filter_by(mask_id=mask_id).count() == 5
+        assert db.query(AiSuggestions).filter_by(mask_id=mask_id).count() == 2
+        assert db.query(AiSuggestions).filter_by(
+            mask_id=mask_id, model_key="yolo_polyp_v3_c_seed1"
+        ).count() == 1
+        assert db.query(AnnotationActions).filter_by(mask_id=mask_id).count() == 1
 
 
 def test_focus_mode_parent_fallback_and_unparented_clipping(scratch_ctx, monkeypatch):
@@ -421,5 +708,3 @@ def test_open_image_draw_fragment_run_cellpose_without_reload(scratch_ctx, monke
         assert child_polyp.parent_id == drawn_frag_id
         assert child_polyp.label_id == 43
         assert child_polyp.added_by == "cpsam_polyp_v3_b_seed17"
-
-
