@@ -43,6 +43,7 @@ from app.schemas.review import (
     ReviewSortStrategyOption,
     ReviewSummary,
 )
+from app.services import al_ranking
 
 
 @dataclass
@@ -84,17 +85,21 @@ class SortStrategy:
     label: str
     description: str
     score: ScoreFn
+    #: The direction the setup page preselects: the one that serves the strategy's
+    #: purpose (e.g. most uncertain first). The reviewer can still flip it.
+    default_direction: ReviewSortDirection = ReviewSortDirection.ASCENDING
 
 
 SORT_STRATEGIES: dict[str, SortStrategy] = {}
 
 
-def register_strategy(key: str, label: str, description: str):
+def register_strategy(key: str, label: str, description: str,
+                      default_direction: ReviewSortDirection = ReviewSortDirection.ASCENDING):
     """Register a queue ordering. Registered keys appear in the setup UI."""
 
     def decorator(fn: ScoreFn) -> ScoreFn:
-        SORT_STRATEGIES[key] = SortStrategy(key=key, label=label,
-                                            description=description, score=fn)
+        SORT_STRATEGIES[key] = SortStrategy(key=key, label=label, description=description,
+                                            score=fn, default_direction=default_direction)
         return fn
 
     return decorator
@@ -110,17 +115,31 @@ def _score_by_depth(candidate: QueueCandidate) -> float:
 
 
 @register_strategy(
-    "uncertainty",
-    "By model confidence",
-    "Least confident instances first. Manual annotations (confidence 1.0) come last.",
+    "confidence",
+    "Confidence",
+    "Ascending: least confident instances first, to fix likely mistakes. Descending: "
+    "most confident first, to accept good predictions quickly. Manual annotations count "
+    "as fully confident. To focus on some labels, use Custom selection.",
 )
 def _score_by_confidence(candidate: QueueCandidate) -> float:
     return float(candidate.confidence)
 
 
+@register_strategy(
+    "uncertainty",
+    "Uncertainty",
+    "Most borderline instances first (the model was closest to 50/50), where mistakes "
+    "are most likely. Manual annotations are not uncertain and come last.",
+    default_direction=ReviewSortDirection.DESCENDING,
+)
+def _score_by_uncertainty(candidate: QueueCandidate) -> float:
+    return al_ranking.binary_entropy(candidate.confidence)
+
+
 def strategy_options() -> list[ReviewSortStrategyOption]:
     return [
-        ReviewSortStrategyOption(key=s.key, label=s.label, description=s.description)
+        ReviewSortStrategyOption(key=s.key, label=s.label, description=s.description,
+                                 default_direction=s.default_direction)
         for s in SORT_STRATEGIES.values()
     ]
 

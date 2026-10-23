@@ -32,7 +32,7 @@ from app.schemas.review import (
     ReviewQueueRequest,
     ReviewSortDirection,
 )
-from app.services.review_queue import SORT_STRATEGIES, build_queue, summarize
+from app.services.review_queue import SORT_STRATEGIES, build_queue, strategy_options, summarize
 
 
 def _contour(mask_id, label_id=None, parent_id=None, author="ann", confidence=1.0):
@@ -196,15 +196,36 @@ def test_unknown_strategy_is_rejected(ctx):
     assert exc.value.status_code == 400
 
 
-def test_uncertainty_strategy_orders_least_confident_first(ctx):
-    assert "uncertainty" in SORT_STRATEGIES
+def test_confidence_strategy_orders_least_confident_first(ctx):
     queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
         granularity=ReviewGranularity.HIERARCHY,
-        sort_strategy="uncertainty"), ctx["db"])
+        sort_strategy="confidence"), ctx["db"])
     scores = [item.score for item in queue.instances]
     assert scores == sorted(scores)
     # root_a (0.4) is the least confident pending contour.
     assert queue.instances[0].contour_id == ctx["contours"]["a"]
+
+
+def test_confidence_descending_puts_most_confident_first(ctx):
+    from app.schemas.review import ReviewSortDirection
+    queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
+        granularity=ReviewGranularity.HIERARCHY, sort_strategy="confidence",
+        direction=ReviewSortDirection.DESCENDING), ctx["db"])
+    c = ctx["contours"]
+    assert [i.contour_id for i in queue.instances] == [c["c"], c["b"], c["a"]]
+
+
+def test_uncertainty_strategy_puts_most_borderline_first(ctx):
+    from app.schemas.review import ReviewSortDirection
+    option = {o.key: o for o in strategy_options()}["uncertainty"]
+    assert option.default_direction is ReviewSortDirection.DESCENDING
+    queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
+        granularity=ReviewGranularity.HIERARCHY, sort_strategy="uncertainty",
+        direction=ReviewSortDirection.DESCENDING), ctx["db"])
+    c = ctx["contours"]
+    # Confidence 0.4 is nearest 50/50, then 0.9; the manual 1.0 is not uncertain at all.
+    assert [i.contour_id for i in queue.instances] == [c["a"], c["b"], c["c"]]
+    assert queue.instances[-1].score == pytest.approx(0.0, abs=1e-6)
 
 
 def test_rejecting_a_contour_withdraws_own_approval_only(ctx):

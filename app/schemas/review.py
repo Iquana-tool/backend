@@ -247,6 +247,7 @@ class ReviewSortStrategyOption(BaseModel):
     key: str
     label: str
     description: str
+    default_direction: ReviewSortDirection = ReviewSortDirection.ASCENDING
 
 
 class ReviewSummary(BaseModel):
