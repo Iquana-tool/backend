@@ -40,22 +40,26 @@ def client(db, monkeypatch):  # noqa: F811
     return TestClient(app), db, ds, image
 
 
-def test_scoring_models_route_filters_by_dataset(client, monkeypatch):
+def test_models_route_lists_embedders_and_this_datasets_trained_models(client, monkeypatch):
     http, _, ds, _ = client
-    monkeypatch.setattr(routes, "list_available_models", lambda task: {"result": [
-        {"registry_key": "trained-a", "name": "Corals v3",
-         "tags": {"trained_on_dataset_id": str(ds.id)}},
-        {"registry_key": "mask2former", "tags": {}},
-    ]})
-    response = http.get(f"/annotation-queue/datasets/{ds.id}/scoring-models")
-    assert response.status_code == 200
-    assert response.json()["models"] == [{"registry_key": "trained-a", "name": "Corals v3"}]
+    listings = {
+        "embed": [{"registry_key": "dinov3", "name": "DINOv3 Embedder"},
+                  {"registry_key": "bioclip-2", "name": "BioCLIP 2"}],
+        "instance-segmentation": [
+            {"registry_key": "trained-a", "name": "Corals v3",
+             "tags": {"trained_on_dataset_id": str(ds.id)}},
+            {"registry_key": "mask2former", "tags": {}}],
+    }
+    monkeypatch.setattr(routes, "list_available_models", lambda task: {"result": listings[task]})
+    models = http.get(f"/annotation-queue/datasets/{ds.id}/models").json()["models"]
+    assert [m["registry_key"] for m in models["embedding"]] == ["dinov3", "bioclip-2"]
+    assert models["trained"] == [{"registry_key": "trained-a", "name": "Corals v3"}]
 
 
 def test_prepare_starts_a_job_then_reports_progress_and_cancels(client):
     http, _, ds, _ = client
     response = http.post(f"/annotation-queue/datasets/{ds.id}/prepare",
-                         json={"strategy": "uncertainty", "model_key": "m1"})
+                         json={"method": "uncertainty", "trained_model": "m1"})
     assert response.status_code == 200
     body = response.json()
     assert body["ready"] is False
@@ -75,7 +79,7 @@ def test_prepare_is_ready_when_nothing_is_missing(client):
                        confidences=[0.6]))
     db.commit()
     response = http.post(f"/annotation-queue/datasets/{ds.id}/prepare",
-                         json={"strategy": "uncertainty", "model_key": "m1"})
+                         json={"method": "uncertainty", "trained_model": "m1"})
     assert response.json() == {"success": True, "ready": True, "job": None}
 
 
@@ -84,9 +88,9 @@ def test_prepare_with_scores_respects_the_batch_inference_switch(client):
     ds.disabled_ai_tools = "batch_inference"
     db.commit()
     response = http.post(f"/annotation-queue/datasets/{ds.id}/prepare",
-                         json={"strategy": "uncertainty", "model_key": "m1"})
+                         json={"method": "uncertainty", "trained_model": "m1"})
     assert response.status_code == 403
-    assert response.json()["detail"].startswith("Uncertainty needs Batch inference")
+    assert response.json()["detail"].startswith("Using a trained model needs Batch inference")
 
 
 def test_build_with_model_returns_details(client):
@@ -95,11 +99,11 @@ def test_build_with_model_returns_details(client):
                        confidences=[0.6]))
     db.commit()
     response = http.post(f"/annotation-queue/datasets/{ds.id}",
-                         json={"strategy": "uncertainty", "model_key": "m1"})
+                         json={"method": "uncertainty", "trained_model": "m1"})
     assert response.status_code == 200
     queue = response.json()["queue"]
-    assert queue["model_key"] == "m1"
-    assert queue["details"][str(image.id)]["reason"] == "unsure"
+    assert queue["settings"]["trained_model"] == "m1"
+    assert queue["details"][str(image.id)]["reason"] == "uncertainty"
 
 
 def test_job_of_another_dataset_is_404(client):
@@ -107,6 +111,13 @@ def test_job_of_another_dataset_is_404(client):
     other = make_dataset(db)
     make_image(db, other, "b.png")
     db.commit()
-    job = queue_prep.start_prep(db, other.id, "ann", "uncertainty", "m1", enqueue=False)
+    job = queue_prep.start_prep(db, other.id, "ann", {"trained_model": "m1"}, enqueue=False)
     response = http.get(f"/annotation-queue/datasets/{ds.id}/prep-jobs/{job.id}")
     assert response.status_code == 404
+
+
+def test_prepare_without_the_needed_model_is_a_clear_400(client):
+    http, _, ds, _ = client
+    response = http.post(f"/annotation-queue/datasets/{ds.id}/prepare", json={"method": "density"})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Choose an embedding model first."

@@ -81,6 +81,7 @@ def import_models():
         image_calibrations,
         image_metadata,
         image_scores,
+        image_vectors,
         images,
         instance_settings,
         dataset_model_routing_configs,

@@ -1,5 +1,5 @@
-"""Active-learning queue: Diversity, Density, Uncertainty and the job that fills their data."""
-import numpy as np
+"""Active-learning queue: the vector and model methods, filters, round robin, and the job
+that prepares their data."""
 import pytest
 from iquana_toolbox.schemas.networking.http.services import EmbeddingVector
 from sqlalchemy import create_engine
@@ -9,18 +9,21 @@ from app.database import database, import_models
 from app.database.annotation_queues import AnnotationQueues
 from app.database.contours import Contours
 from app.database.datasets import Datasets
-from app.database.embeddings import EMBEDDING_DIM, upsert_embedding
 from app.database.image_scores import ImageScores
+from app.database.image_vectors import ImageVectors
 from app.database.images import Frames, Images
 from app.database.masks import Masks
 from app.database.queue_prep_jobs import QueuePrepJobs
 from app.database.stacks import Stacks
 from app.database.users import Users
+from app.schemas.annotation_queue import QueueSettings
 from app.services import queue_prep
 from app.services.annotation_queue import build_and_save_queue
-from config import EMBEDDING_MODEL_ID
 
 import_models()
+
+DINO = {"embedding_model": "dinov3"}
+M1 = {"trained_model": "m1"}
 
 
 @pytest.fixture
@@ -74,11 +77,17 @@ def make_stack(db, ds):
     return stack
 
 
-def add_vector(db, image, vec):
-    full = np.zeros(EMBEDDING_DIM)
-    full[:len(vec)] = vec
-    upsert_embedding(db, image_id=image.id, kind="image_cls", model_id=EMBEDDING_MODEL_ID,
-                     vector=full.tolist())
+def vector(db, image, values, model_key="dinov3"):
+    db.add(ImageVectors(image_id=image.id, model_key=model_key, vector=list(values)))
+
+
+def score(db, image, confidences, model_key="m1"):
+    db.add(ImageScores(image_id=image.id, model_key=model_key, score=0.0,
+                       num_detections=len(confidences), confidences=confidences))
+
+
+def build(db, ds, method, **kwargs):
+    return build_and_save_queue(ds.id, "ann", QueueSettings(method=method, **kwargs), db)
 
 
 class FakeScoreClient:
@@ -92,39 +101,34 @@ class FakeScoreClient:
 
 
 class FakeEmbedClient:
-    """Returns one image_cls vector per request, tagged with the configured model id."""
+    """Returns a 3-number image_cls vector: embedding models may have any length."""
+
+    def __init__(self):
+        self.requests = []
 
     def request_embeddings(self, request):
-        return [EmbeddingVector(kind="image_cls", region_id=None, model_id=EMBEDDING_MODEL_ID,
-                                dim=EMBEDDING_DIM, vector=[1.0] + [0.0] * (EMBEDDING_DIM - 1))]
+        self.requests.append(request)
+        return [EmbeddingVector(kind="image_cls", region_id=None, model_id="x", dim=3,
+                                vector=[1.0, 0.0, 0.0])]
 
 
-def test_tables_exist_and_round_trip(db):
+def test_tables_round_trip(db):
     ds = make_dataset(db)
     img = make_image(db, ds, "a.png")
-    db.add(ImageScores(image_id=img.id, model_key="m1", score=0.7, num_detections=3,
-                       confidences=[0.9, 0.5, 0.3]))
-    db.add(QueuePrepJobs(dataset_id=ds.id, created_by="ann", strategy="uncertainty",
-                         model_key="m1", image_ids=[img.id]))
-    db.add(AnnotationQueues(dataset_id=ds.id, username="ann", strategy="uncertainty", model_key="m1",
-                            image_order=[img.id], details={str(img.id): {"reason": "unsure"}}))
+    vector(db, img, [0.5] * 1280, model_key="ijepa")
+    db.add(QueuePrepJobs(dataset_id=ds.id, created_by="ann", needs=M1, image_ids=[img.id]))
+    db.add(AnnotationQueues(dataset_id=ds.id, username="ann", strategy="uncertainty",
+                            options={"method": "uncertainty"}, image_order=[img.id]))
     db.commit()
     job = db.query(QueuePrepJobs).one()
-    assert job.status == "pending"
-    assert job.next_index == 0
-    assert job.failed_image_ids == []
-    assert db.query(ImageScores).one().confidences == [0.9, 0.5, 0.3]
-    assert db.query(AnnotationQueues).one().details[str(img.id)]["reason"] == "unsure"
+    assert (job.status, job.next_index, job.failed_image_ids) == ("pending", 0, [])
+    assert len(db.query(ImageVectors).one().vector) == 1280
+    assert db.query(AnnotationQueues).one().show_builder is True
 
 
-# -- Orderings -------------------------------------------------------------------
+# -- Methods --------------------------------------------------------------------------
 
-def score(db, image, confidences, model_key="m1"):
-    db.add(ImageScores(image_id=image.id, model_key=model_key, score=0.0,
-                       num_detections=len(confidences), confidences=confidences))
-
-
-def test_uncertainty_queue_puts_most_borderline_first_with_tails_and_reasons(db):
+def test_uncertainty_puts_most_borderline_first_with_tails_and_reasons(db):
     ds = make_dataset(db)
     sure = make_image(db, ds, "sure.png")
     torn = make_image(db, ds, "torn.png")
@@ -140,15 +144,25 @@ def test_uncertainty_queue_puts_most_borderline_first_with_tails_and_reasons(db)
     score(db, others, [0.5])
     db.commit()
 
-    queue = build_and_save_queue(ds.id, "ann", "uncertainty", db, model_key="m1")
+    queue = build(db, ds, "uncertainty", trained_model="m1")
 
     assert queue.image_ids == [torn.id, mine.id, sure.id, empty.id, unscored.id,
                                others.id, done.id]
-    assert queue.model_key == "m1"
-    assert queue.details[str(torn.id)] == {"reason": "unsure", "score": 1.0}
-    assert queue.details[str(unscored.id)]["reason"] == "not_scored"
+    assert queue.details[str(torn.id)] == {"reason": "uncertainty", "score": 1.0}
+    assert queue.details[str(unscored.id)]["reason"] == "no_data"
     assert queue.details[str(others.id)]["reason"] == "started_by_other"
     assert queue.details[str(done.id)]["reason"] == "finished"
+
+
+def test_ascending_flips_a_method(db):
+    ds = make_dataset(db)
+    sure = make_image(db, ds, "sure.png")
+    torn = make_image(db, ds, "torn.png")
+    score(db, sure, [0.95])
+    score(db, torn, [0.5])
+    db.commit()
+    queue = build(db, ds, "uncertainty", trained_model="m1", direction="ascending")
+    assert queue.image_ids == [sure.id, torn.id]
 
 
 def test_stack_is_ranked_as_one_unit_by_its_most_unsure_frame(db):
@@ -162,110 +176,135 @@ def test_stack_is_ranked_as_one_unit_by_its_most_unsure_frame(db):
     score(db, f1, [0.6])
     db.commit()
 
-    queue = build_and_save_queue(ds.id, "ann", "uncertainty", db, model_key="m1")
+    queue = build(db, ds, "uncertainty", trained_model="m1")
 
     assert queue.image_ids == [f0.id, f1.id, plain.id]
     assert queue.details[str(f0.id)]["score"] == pytest.approx(0.971, abs=1e-3)
 
 
-def test_diversity_queue_starts_far_from_finished_images(db):
+def test_diversity_starts_far_from_finished_images(db):
     ds = make_dataset(db)
     done = make_image(db, ds, "done.png", state="finished")
     near = make_image(db, ds, "near.png")
     far = make_image(db, ds, "far.png")
     no_vec = make_image(db, ds, "novec.png")
-    add_vector(db, done, [1, 0])
-    add_vector(db, near, [0.99, 0.01])
-    add_vector(db, far, [0, 1])
+    vector(db, done, [1, 0])
+    vector(db, near, [0.99, 0.01])
+    vector(db, far, [0, 1])
     db.commit()
 
-    queue = build_and_save_queue(ds.id, "ann", "diversity", db)
+    queue = build(db, ds, "diversity", embedding_model="dinov3")
 
     assert queue.image_ids == [far.id, near.id, no_vec.id, done.id]
-    assert queue.details[str(far.id)]["reason"] == "varied"
-    assert queue.details[str(no_vec.id)]["reason"] == "no_vector"
+    assert queue.details[str(no_vec.id)]["reason"] == "no_data"
 
 
-def test_density_queue_puts_typical_images_first(db):
+def test_density_puts_typical_images_first_with_any_vector_length(db):
     ds = make_dataset(db)
     odd = make_image(db, ds, "odd.png")
-    common_a = make_image(db, ds, "a.png")
-    common_b = make_image(db, ds, "b.png")
-    common_c = make_image(db, ds, "c.png")
-    done = make_image(db, ds, "done.png", state="finished")
-    add_vector(db, odd, [0, 1])
-    add_vector(db, common_a, [1, 0])
-    add_vector(db, common_b, [0.99, 0.01])
-    add_vector(db, common_c, [0.98, 0.02])
-    add_vector(db, done, [1, 0])
+    commons = [make_image(db, ds, f"{n}.png") for n in "abc"]
+    vector(db, odd, [0, 1, 0, 0, 0], model_key="ijepa")
+    for image, x in zip(commons, (1.0, 0.99, 0.98)):
+        vector(db, image, [x, 1 - x, 0, 0, 0], model_key="ijepa")
     db.commit()
 
-    queue = build_and_save_queue(ds.id, "ann", "density", db)
+    queue = build(db, ds, "density", embedding_model="ijepa")
 
-    assert set(queue.image_ids[:3]) == {common_a.id, common_b.id, common_c.id}
-    assert queue.image_ids[3:] == [odd.id, done.id]
-    assert queue.details[str(odd.id)]["reason"] == "typical"
+    assert set(queue.image_ids[:3]) == {c.id for c in commons}
+    assert queue.image_ids[3] == odd.id
+
+
+def test_round_robin_alternates_two_methods(db):
+    ds = make_dataset(db)
+    a, b, c, d = (make_image(db, ds, f"{n}.png") for n in "abcd")
+    for image, confidences in ((a, [0.5]), (b, [0.6]), (c, [0.9]), (d, [0.95])):
+        score(db, image, confidences)
+    db.commit()
+
+    # Uncertainty picks a, then As uploaded (ascending) picks the first not yet taken: b...
+    queue = build(db, ds, "uncertainty", trained_model="m1", round_robin_with="as_uploaded")
+    assert queue.image_ids == [a.id, b.id, c.id, d.id]
+    # ...and with As uploaded descending first, the two lists meet in the middle.
+    queue = build(db, ds, "as_uploaded", direction="descending",
+                  round_robin_with="uncertainty", trained_model="m1")
+    assert queue.image_ids == [d.id, a.id, c.id, b.id]
+    assert queue.details[str(a.id)]["reason"] == "uncertainty"
+
+
+def test_filters_keep_matching_images_only(db, monkeypatch):
+    ds = make_dataset(db)
+    low, high, other = (make_image(db, ds, f"{n}.png") for n in ("low", "high", "other"))
+    score(db, low, [0.3])
+    score(db, high, [0.9])
+    score(db, other, [0.2])
+    db.commit()
+    import app.services.annotation_queue as aq
+    monkeypatch.setattr(aq, "filter_image_ids", lambda _db, _ds, _f: [low.id, high.id])
+
+    queue = build(db, ds, "as_uploaded", trained_model="m1", max_confidence=0.5,
+                  metadata_filters={"site": ["reef_a"]})
+
+    assert queue.image_ids == [low.id]
 
 
 # -- Preparation job ---------------------------------------------------------------
 
-def test_missing_work_by_strategy(db):
+def test_missing_work_by_need(db):
     ds = make_dataset(db)
     open_img = make_image(db, ds, "open.png")
     done = make_image(db, ds, "done.png", state="finished")
-    add_vector(db, done, [1, 0])
+    vector(db, done, [1, 0])
     score(db, open_img, [0.6])
     old = make_image(db, ds, "old.png")
     # A row from before confidences were kept counts as not scored.
     db.add(ImageScores(image_id=old.id, model_key="m1", score=0.4, num_detections=1))
     db.commit()
 
-    # Vectors: everything without one. Scores: only unfinished images.
-    assert queue_prep.missing_work(db, ds.id, "diversity", None) == [open_img.id, old.id]
-    assert queue_prep.missing_work(db, ds.id, "density", None) == [open_img.id, old.id]
-    assert queue_prep.missing_work(db, ds.id, "uncertainty", "m1") == [old.id]
-    assert queue_prep.missing_work(db, ds.id, "uncertainty", "m2") == [open_img.id, old.id]
-    assert queue_prep.missing_work(db, ds.id, "as_uploaded", None) == []
+    assert queue_prep.missing_work(db, ds.id, DINO) == [open_img.id, old.id]
+    assert queue_prep.missing_work(db, ds.id, {"embedding_model": "ijepa"}) == [
+        open_img.id, done.id, old.id]
+    assert queue_prep.missing_work(db, ds.id, M1) == [old.id]
+    assert queue_prep.missing_work(db, ds.id, {}) == []
 
 
 def test_start_prep_returns_none_when_ready_and_reuses_a_running_job(db):
     ds = make_dataset(db)
     make_image(db, ds, "a.png")
     db.commit()
-    assert queue_prep.start_prep(db, ds.id, "ann", "as_uploaded", None, enqueue=False) is None
+    assert queue_prep.start_prep(db, ds.id, "ann", {}, enqueue=False) is None
 
-    first = queue_prep.start_prep(db, ds.id, "ann", "uncertainty", "m1", enqueue=False)
-    second = queue_prep.start_prep(db, ds.id, "bob", "uncertainty", "m1", enqueue=False)
-    assert first is not None
+    first = queue_prep.start_prep(db, ds.id, "ann", M1, enqueue=False)
+    second = queue_prep.start_prep(db, ds.id, "bob", M1, enqueue=False)
+    third = queue_prep.start_prep(db, ds.id, "bob", DINO, enqueue=False)
     assert second.id == first.id
+    assert third.id != first.id
 
 
-def test_step_processes_each_image_then_finishes(db):
+def test_step_fills_vectors_and_scores_then_finishes(db):
     ds = make_dataset(db)
     a = make_image(db, ds, "a.png", state="none")
     b = make_image(db, ds, "b.png", state="none")
     db.commit()
-    job = queue_prep.start_prep(db, ds.id, "ann", "uncertainty", "m1", enqueue=False)
+    job = queue_prep.start_prep(db, ds.id, "ann", {**DINO, **M1}, enqueue=False)
+    embed_client = FakeEmbedClient()
     score_client = FakeScoreClient({"result": [{"confidence": 0.6}]})
 
-    states = [queue_prep.step(db, job.id, score_client=score_client) for _ in range(3)]
+    states = [queue_prep.step(db, job.id, embed_client=embed_client, score_client=score_client)
+              for _ in range(3)]
 
     assert states == ["running", "running", "succeeded"]
+    assert embed_client.requests[0].model_registry_key == "dinov3"
+    assert db.query(ImageVectors).filter_by(model_key="dinov3").count() == 2
     assert db.query(ImageScores).filter_by(model_key="m1").count() == 2
-    assert queue_prep.missing_work(db, ds.id, "uncertainty", "m1") == []
+    assert queue_prep.missing_work(db, ds.id, {**DINO, **M1}) == []
     assert sorted(job.image_ids) == sorted([a.id, b.id])
-
-    vectors = queue_prep.start_prep(db, ds.id, "ann", "density", None, enqueue=False)
-    for _ in range(3):
-        queue_prep.step(db, vectors.id, embed_client=FakeEmbedClient())
-    assert queue_prep.missing_work(db, ds.id, "density", None) == []
 
 
 def test_step_records_failures_and_ends_partial(db):
     ds = make_dataset(db)
     make_image(db, ds, "a.png", state="none")
     db.commit()
-    job = queue_prep.start_prep(db, ds.id, "ann", "uncertainty", "m1", enqueue=False)
+    job = queue_prep.start_prep(db, ds.id, "ann", M1, enqueue=False)
 
     class Broken:
         def segment(self, request):
@@ -280,7 +319,7 @@ def test_cancel_stops_the_job(db):
     ds = make_dataset(db)
     make_image(db, ds, "a.png", state="none")
     db.commit()
-    job = queue_prep.start_prep(db, ds.id, "ann", "uncertainty", "m1", enqueue=False)
+    job = queue_prep.start_prep(db, ds.id, "ann", M1, enqueue=False)
     queue_prep.cancel(db, job)
     assert queue_prep.step(db, job.id) == "cancelled"
     assert db.get(QueuePrepJobs, job.id).finished_at is not None

@@ -115,13 +115,6 @@ def k_center_order(candidates: Mapping[int, np.ndarray], seeds: Sequence[np.ndar
     return order
 
 
-def order_by_score(scores: Mapping[int, object]) -> list[int]:
-    """Highest score first (scores may be tuples for tie-breaks); unscored last, in order."""
-    scored = [k for k, s in scores.items() if s is not None]
-    scored.sort(key=lambda k: scores[k], reverse=True)
-    return scored + [k for k, s in scores.items() if s is None]
-
-
 def binary_entropy(confidence: float) -> float:
     """How torn the model is about one prediction, from 0 (sure either way) to 1 (50/50).
 
@@ -154,3 +147,23 @@ def density_scores(vectors: Mapping[int, np.ndarray],
     k = min(neighbours, len(keys) - 1)
     top = -np.sort(-similarity, axis=1)[:, :k]
     return {key: float(value) for key, value in zip(keys, top.mean(axis=1))}
+
+
+def round_robin(*orders: Sequence[tuple[int, ...]]) -> list[tuple[int, ...]]:
+    """Interleave orders, one entry from each in turn, skipping units already taken.
+
+    Entries are tuples whose first item is the unit key (the rest is carried along).
+    """
+    taken: set[int] = set()
+    merged: list[tuple[int, ...]] = []
+    iterators = [iter(order) for order in orders]
+    while iterators:
+        for iterator in list(iterators):
+            for entry in iterator:
+                if entry[0] not in taken:
+                    taken.add(entry[0])
+                    merged.append(entry)
+                    break
+            else:
+                iterators.remove(iterator)
+    return merged

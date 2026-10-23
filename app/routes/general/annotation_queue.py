@@ -14,13 +14,14 @@ from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.database.queue_prep_jobs import QueuePrepJobs
-from app.schemas.annotation_queue import AnnotationQueueRequest
+from app.schemas.annotation_queue import QueueModelOption, QueueModelOptions, QueueSettings
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
 from app.services import annotation_queue, queue_prep
 from app.services.ai_tools import AiTool, is_enabled
 from app.services.model_registry import list_available_models
 from app.services.permissions import require
+from app.services.queue_methods import TRAINED_MODEL
 
 router = APIRouter(prefix="/annotation-queue", tags=["annotation-queue"])
 logger = getLogger(__name__)
@@ -61,15 +62,13 @@ async def get_annotation_queue(
 @router.post("/datasets/{dataset_id}")
 async def build_annotation_queue(
         dataset_id: int,
-        body: AnnotationQueueRequest,
+        body: QueueSettings,
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_CREATE, "dataset_id")),
 ):
-    """Build the image order for the chosen strategy and save it (overwriting any
-    earlier queue for this dataset+user)."""
-    queue = annotation_queue.build_and_save_queue(
-        dataset_id, user.username, body.strategy, db, model_key=body.model_key
-    )
+    """Build the queue for the settings and save it (overwriting any earlier queue for this
+    dataset+user)."""
+    queue = annotation_queue.build_and_save_queue(dataset_id, user.username, body, db)
     return {
         "success": True,
         "message": f"Built an annotation queue of {queue.total} images.",
@@ -77,43 +76,47 @@ async def build_annotation_queue(
     }
 
 
-@router.get("/datasets/{dataset_id}/scoring-models")
-async def get_scoring_models(
+@router.get("/datasets/{dataset_id}/models")
+async def get_queue_models(
         dataset_id: int,
         user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_CREATE, "dataset_id")),
 ):
-    """Models trained on this dataset, which the model-based orderings can score with."""
-    listing = await asyncio.to_thread(list_available_models, "instance-segmentation")
-    models = annotation_queue.scoring_models_for_dataset(listing.get("result", []), dataset_id)
-    return {"success": True, "models": models}
+    """Embedding models, and models trained on this dataset, that the builder can offer."""
+    embedding, trained = await asyncio.gather(
+        asyncio.to_thread(list_available_models, "embed"),
+        asyncio.to_thread(list_available_models, "instance-segmentation"),
+    )
+    models = QueueModelOptions(
+        embedding=[QueueModelOption(registry_key=m["registry_key"],
+                                    name=m.get("name") or m["registry_key"])
+                   for m in embedding.get("result", [])],
+        trained=annotation_queue.trained_models_for_dataset(trained.get("result", []), dataset_id),
+    )
+    return {"success": True, "models": models.model_dump()}
 
 
 @router.post("/datasets/{dataset_id}/prepare")
 async def prepare_annotation_queue(
         dataset_id: int,
-        body: AnnotationQueueRequest,
+        body: QueueSettings,
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_CREATE, "dataset_id")),
 ):
-    """Fill in what the ordering needs. ``ready: true`` means build now; otherwise poll the job.
+    """Fill in what the settings need. ``ready: true`` means build now; otherwise poll the job.
 
-    Scoring runs a model over the dataset's images, so it obeys the dataset's batch
+    Scoring runs a trained model over the dataset's images, so it obeys the dataset's batch
     inference switch.
     """
-    strategy = annotation_queue.get_strategy(body.strategy)
-    if strategy.needs_model and not body.model_key:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"The '{body.strategy}' ordering needs a trained model.")
-    if strategy.needs_scores and not is_enabled(dataset_id, AiTool.BATCH_INFERENCE, db):
+    needs = annotation_queue.required_models(body)
+    if TRAINED_MODEL in needs and not is_enabled(dataset_id, AiTool.BATCH_INFERENCE, db):
         # Said in the annotator's terms, with where to switch it back on; the generic
         # message names the tool by its internal key.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"{strategy.label} needs Batch inference, which is switched off for this "
-                   "dataset. It can be switched on in Manage access, under Review policy.",
+            detail="Using a trained model needs Batch inference, which is switched off for "
+                   "this dataset. It can be switched on in Manage access, under Review policy.",
         )
-    job = queue_prep.start_prep(db, dataset_id, user.username, body.strategy,
-                                body.model_key if strategy.needs_model else None)
+    job = queue_prep.start_prep(db, dataset_id, user.username, needs)
     return {
         "success": True,
         "ready": job is None,

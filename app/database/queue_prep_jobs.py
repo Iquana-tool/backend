@@ -1,7 +1,8 @@
 """Background jobs that fill in what an annotation-queue ordering needs.
 
-Diversity and Density need an image vector for every image; Uncertainty needs a model score
-for every unfinished image. A job walks its image list one image per Celery task (see
+A job fills what an ordering's methods need (see app.services.queue_methods): vectors from an
+embedding model for every image, and/or a trained model's scores for every unfinished image.
+A job walks its image list one image per Celery task (see
 app.services.queue_prep), so it can be cancelled between images and resumes from
 ``next_index`` after a worker crash.
 """
@@ -24,8 +25,8 @@ class QueuePrepJobs(database):
                         nullable=False, index=True)
     created_by = Column(String, ForeignKey("users.username", ondelete="SET NULL",
                                            onupdate="CASCADE"), nullable=True)
-    strategy = Column(String(32), nullable=False)
-    model_key = Column(String(255), nullable=True)
+    #: What to prepare: {"embedding_model": key, "trained_model": key}, either optional.
+    needs = Column(JSON, nullable=False)
     #: The images to prepare, in processing order.
     image_ids = Column(JSON, nullable=False, default=list)
     #: Index into image_ids of the next image to process; the job's cursor.

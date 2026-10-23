@@ -65,6 +65,8 @@ def test_k_center_handles_empty_input():
     assert r.k_center_order({}, seeds=[]) == []
 
 
-def test_order_by_score_puts_unscored_last_and_uses_tie_breaks():
-    assert r.order_by_score({1: 0.2, 2: None, 3: 0.9, 4: 0.5}) == [3, 4, 1, 2]
-    assert r.order_by_score({1: (0.9, 1), 2: (0.9, 3)}) == [2, 1]
+def test_round_robin_alternates_and_skips_taken_units():
+    first = [(1, "a"), (2, "a"), (3, "a")]
+    second = [(3, "b"), (1, "b"), (4, "b")]
+    assert r.round_robin(first, second) == [(1, "a"), (3, "b"), (2, "a"), (4, "b")]
+    assert r.round_robin(first) == first
