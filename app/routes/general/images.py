@@ -1,9 +1,10 @@
 import json
 import logging
 
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.database import get_session
 from app.database.images import KIND_FRAME, Images
@@ -203,6 +204,13 @@ async def get_image_file(
     """
     row = db.query(Images.file_path, Images.thumbnail_file_path).filter(Images.id == image_id).first()
     path = row.thumbnail_file_path if thumbnail else row.file_path
+    preview = await run_in_threadpool(images_db.tiff_preview_bytes, path)
+    if preview is not None:
+        return Response(
+            preview,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
     return FileResponse(path, headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 

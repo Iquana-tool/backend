@@ -12,12 +12,12 @@ import pandas as pd
 from PIL import Image as PILImage
 from iquana_toolbox.quantification import METRIC_REGISTRY, UnitKind, get_metric, resolve_unit
 from iquana_toolbox.schemas.database.contours import Contour
-from iquana_toolbox.schemas.database.image import Image
 from iquana_toolbox.schemas.database.labels import LabelHierarchy
 from iquana_toolbox.schemas.user import User
 from sqlalchemy import and_, case, func
 from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session, aliased
+from starlette.concurrency import run_in_threadpool
 
 from app.database.contour_metrics import ContourMetrics
 from app.database.contours import Contours
@@ -29,6 +29,7 @@ from app.database.users import Users
 from app.exceptions import InvalidLabelFilterError
 from app.services import image_status
 from app.services.database_access.image_metadata import get_metadata_for_dataset
+from app.services.database_access.images import load_images_for_display
 from app.services.database_access.labels import get_hierarchical_label_name
 from app.services.database_access import derived_metrics as derived_db
 from app.services.database_access import scene_graph as graph_db
@@ -259,15 +260,10 @@ async def get_images_of_dataset(
         as_base64: bool = False,
 
 ):
-    response = {}
     images_query = db.query(Images).filter_by(dataset_id=dataset_id).limit(limit).all()
-    images = [Image.from_db(img) for img in images_query]
-    for img in images:
-        if as_thumbnail:
-            response[img.id] = img.load_thumbnail(as_base64=as_base64)
-        else:
-            response[img.id] = img.load_image(as_base64=as_base64)
-    return response
+    return await run_in_threadpool(
+        load_images_for_display, images_query, as_thumbnail, as_base64
+    )
 
 
 async def get_dataset_as_df(
