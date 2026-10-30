@@ -1,3 +1,5 @@
+import os
+
 from celery import Celery
 from config import REDIS_URL
 
@@ -23,7 +25,7 @@ celery_app = Celery(
 #
 # A dedicated queue removes the race entirely: the ai-service worker never sees these
 # messages, whatever it is subscribed to.
-BACKEND_QUEUE = "backend.jobs"
+BACKEND_QUEUE = os.getenv("BACKEND_QUEUE", "backend.jobs")
 
 celery_app.conf.update(
     task_track_started=True,

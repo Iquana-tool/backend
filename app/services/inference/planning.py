@@ -28,7 +28,12 @@ from sqlalchemy.orm import Session
 
 from app.database.contours import Contours
 from app.database.images import Images
-from app.database.inference_jobs import InferenceJobItems, InferenceJobs, TERMINAL_JOB_STATUSES
+from app.database.inference_jobs import (
+    InferenceJobItems,
+    InferenceJobs,
+    TERMINAL_JOB_STATUSES,
+    set_result_mode,
+)
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.schemas.inference import (
@@ -140,11 +145,13 @@ def model_catalog(
 
             label_ids = [int(lid) for lid in info.get("label_ids") or []]
             classes = model_label_mapping.classes_of(info)
+            class_mappings = []
             if classes:
                 # A fixed label space reaches this dataset's labels through its mapping.
-                label_ids = model_label_mapping.mapped_label_ids(model_label_mapping.resolve(
+                class_mappings = model_label_mapping.resolve(
                     db, dataset_id, info.get("registry_key") or info.get("name"), classes,
-                ))
+                )
+                label_ids = model_label_mapping.mapped_label_ids(class_mappings)
             options.append(ModelOption(
                 registry_key=info.get("registry_key") or info.get("name"),
                 name=info.get("name") or info.get("registry_key"),
@@ -155,10 +162,12 @@ def model_catalog(
                 architecture=info.get("architecture"),
                 label_ids=label_ids,
                 classes=classes,
+                class_mappings=class_mappings,
                 # A model whose classes are labels of this dataset was fine-tuned on it.
                 trained_on_dataset=not classes and bool(set(label_ids) & dataset_labels),
                 input_contract=contract,
                 provenance=provenance,
+                roi_input=(info.get("tags") or {}).get("roi_input") or None,
             ))
 
     options.sort(key=lambda option: (not option.trained_on_dataset, option.name.lower()))
@@ -315,7 +324,9 @@ def resolve_steps(
             inputs=normalized_inputs,
             input_contract=option.input_contract,
             provenance=option.provenance,
+            roi_input=option.roi_input,
             min_confidence=step.min_confidence,
+            roi_contour_ids=list(step.roi_contour_ids),
         ))
 
     resolved.sort(key=lambda step: (step.level, step.label_name.lower()))
@@ -444,6 +455,11 @@ def create_job(
             status.HTTP_400_BAD_REQUEST, "No images match the selected scope."
         )
 
+    if body.result_mode.value == "preview":
+        if len(image_ids) != 1:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Preview jobs must resolve to one image.")
+        _validate_preview_roi(db, dataset_id, image_ids[0], steps[0])
+
     job = InferenceJobs(
         dataset_id=dataset_id,
         created_by=username,
@@ -451,7 +467,9 @@ def create_job(
         status="pending",
         write_mode=body.options.write_mode.value,
         plan_steps=[step.model_dump(mode="json") for step in steps],
-        options=body.options.model_dump(mode="json"),
+        options=set_result_mode(
+            body.options.model_dump(mode="json"), body.result_mode.value
+        ),
         image_ids=image_ids,
         total_units=len(steps) * len(image_ids),
     )
@@ -472,3 +490,84 @@ def create_job(
     db.commit()
     db.refresh(job)
     return job
+
+
+def _preview_roi_label_ids(db: Session, dataset_id: int, step: ResolvedStep) -> set[int]:
+    """Return the permitted labels for an explicitly selected preview ROI."""
+    if not step.roi_input or step.task != "instance-segmentation":
+        return {step.parent_label_id} if step.parent_label_id is not None else set()
+
+    # An ROI is a broad, explicitly chosen region (e.g. a coral fragment around polyps), so
+    # it may be higher than the immediate parent in the label tree.
+    # Walk only this target label's dataset-local ancestry; unrelated labels and
+    # descendants remain invalid. Stop defensively if a malformed hierarchy cycles.
+    parent_by_id = dict(
+        db.query(Labels.id, Labels.parent_id).filter(Labels.dataset_id == dataset_id).all()
+    )
+    allowed: set[int] = set()
+    visited: set[int] = set()
+    label_id: int | None = step.label_id
+    while label_id is not None:
+        if label_id in visited:
+            return set()
+        visited.add(label_id)
+        parent_id = parent_by_id.get(label_id)
+        if parent_id is None or parent_id not in parent_by_id:
+            break
+        if parent_id in visited:
+            return set()
+        allowed.add(parent_id)
+        label_id = parent_id
+    return allowed
+
+
+def _validate_preview_roi(db: Session, dataset_id: int, image_id: int, step: ResolvedStep) -> None:
+    """Ensure explicitly selected ROI contours belong to this image and an allowed label."""
+    if not step.roi_contour_ids:
+        return
+
+    if not step.roi_input:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Model '{step.model_registry_key}' does not support explicit ROI selections.",
+        )
+
+    rows = (
+        db.query(Contours)
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .filter(
+            Contours.id.in_(step.roi_contour_ids),
+            Contours.temporary.is_(False),
+            Images.id == image_id,
+            Images.dataset_id == dataset_id,
+        )
+        .all()
+    )
+    by_id = {row.id: row for row in rows}
+    missing = [contour_id for contour_id in step.roi_contour_ids if contour_id not in by_id]
+    if missing:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"ROI contours must be saved, non-temporary contours on image {image_id}: {missing[:10]}",
+        )
+
+    ancestor_mode = bool(step.roi_input) and step.task == "instance-segmentation"
+    allowed_label_ids = _preview_roi_label_ids(db, dataset_id, step)
+    if step.parent_label_id is not None or ancestor_mode:
+        wrong_label = [
+            contour_id for contour_id, contour in by_id.items()
+            if contour.label_id not in allowed_label_ids
+        ]
+        if wrong_label:
+            if ancestor_mode:
+                detail = (
+                    f"ROI contours must use an ancestor label of model label {step.label_id} "
+                    f"({sorted(allowed_label_ids)}): "
+                )
+            else:
+                detail = f"ROI contours must use the model label's parent label {step.parent_label_id}: "
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"{detail}{sorted(wrong_label)[:10]}",
+            )

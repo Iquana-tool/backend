@@ -27,12 +27,16 @@ from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.inference import (
     DatasetModelRoutingRead,
     DatasetModelRoutingWrite,
+    ImageSelection,
+    InferenceJobCreate,
+    InferenceStepRequest,
     ModelCatalog,
     ModelOption,
     ModelRoutingBinding,
     ModelRoutingSuggestRequest,
     ModelRoutingSuggestResult,
     ModelRoutingTask,
+    ResultMode,
 )
 from app.schemas.permissions import DatasetRole
 from app.services.inference import execution, planning
@@ -580,6 +584,45 @@ async def test_route_cancel_job_lifecycle(ctx):
 
 
 @pytest.mark.anyio
+async def test_cancel_after_preview_completion_drops_transient_output(ctx):
+    from app.database.inference_jobs import (
+        InferenceJobItems,
+        get_preview_predictions,
+        set_result_mode,
+        store_preview_predictions,
+    )
+
+    db = ctx["db"]
+    job = InferenceJobs(
+        dataset_id=ctx["ds"].id,
+        status="succeeded",
+        created_by="curator",
+        options=set_result_mode({}, "preview"),
+    )
+    db.add(job)
+    db.flush()
+    item = InferenceJobItems(
+        job_id=job.id,
+        image_id=ctx["img"].id,
+        step_index=0,
+        level=0,
+        status="done",
+    )
+    db.add(item)
+    db.commit()
+    store_preview_predictions(job, item.id, {"contours": [{"x": [0, 1], "y": [0, 1]}]})
+    db.commit()
+
+    snapshot = await inference_router.cancel_job(
+        job.id, db=db, user=ctx["get_auth_user"]("curator")
+    )
+
+    assert snapshot.status == "succeeded"
+    db.expire_all()
+    assert get_preview_predictions(db.get(InferenceJobs, job.id), item.id) is None
+
+
+@pytest.mark.anyio
 async def test_route_cancel_claimed_job_with_no_started_item_finishes_immediately(ctx):
     """A lost run_next task must not require a second cancel to release the dataset."""
     from datetime import datetime, timezone
@@ -742,3 +785,84 @@ async def test_model_catalog_endpoint_permissions(ctx, monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         await inference_router.get_model_catalog(dataset_id=ds_id, db=db, user=viewer_user)
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_preview_jobs_use_interactive_permissions_and_are_owner_scoped(ctx, monkeypatch):
+    """Annotators can run/read their own previews; viewers, writers, and other projects cannot."""
+    from types import SimpleNamespace
+    from app.services.inference import tasks
+
+    db = ctx["db"]
+    dataset_id = ctx["ds"].id
+    image_id = ctx["img"].id
+
+    from app.database.inference_jobs import set_result_mode
+
+    def make_job(*, owner, result_mode, for_dataset=dataset_id):
+        job = InferenceJobs(
+            dataset_id=for_dataset,
+            created_by=owner,
+            name="permission test",
+            status="pending",
+            write_mode="patch",
+            plan_steps=[],
+            options=set_result_mode({}, result_mode),
+            image_ids=[image_id],
+        )
+        db.add(job)
+        db.flush()
+        return job
+
+    def fake_create_job(db, requested_dataset_id, username, body):
+        return make_job(owner=username, result_mode=body.result_mode.value)
+
+    monkeypatch.setattr(inference_router.planning, "create_job", fake_create_job)
+    monkeypatch.setattr(inference_router, "ensure_tool_enabled", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        tasks.run_job,
+        "apply_async",
+        lambda *args, **kwargs: SimpleNamespace(id="preview-task"),
+    )
+
+    preview_body = InferenceJobCreate(
+        dataset_id=dataset_id,
+        steps=[InferenceStepRequest(label_id=ctx["cell"].id, model_registry_key="cpsam")],
+        result_mode=ResultMode.PREVIEW,
+        image_selection=ImageSelection.CUSTOM,
+        image_ids=[image_id],
+    )
+    annotator = ctx["get_auth_user"]("annotator")
+    created = await inference_router.create_job(preview_body, db=db, user=annotator)
+    assert created.result_mode == ResultMode.PREVIEW
+    assert created.created_by == "annotator"
+    assert created.status == "pending"
+
+    # The preview creator can read the job through the same loader used by snapshot, items,
+    # events, and cancellation routes.
+    assert inference_router._load_job(created.id, db, annotator).created_by == "annotator"
+
+    viewer = ctx["get_auth_user"]("viewer")
+    with pytest.raises(HTTPException) as viewer_denied:
+        await inference_router.create_job(preview_body, db=db, user=viewer)
+    assert viewer_denied.value.status_code == 403
+
+    # Annotators have AI_INTERACTIVE and ANNOTATION_CREATE, but not AI_BATCH_INFER.
+    write_body = preview_body.model_copy(update={"result_mode": ResultMode.WRITE})
+    with pytest.raises(HTTPException) as write_denied:
+        await inference_router.create_job(write_body, db=db, user=annotator)
+    assert write_denied.value.status_code == 403
+
+    # A different user cannot read a preview owned by another member, even on this dataset.
+    curator_owned_preview = make_job(owner="curator", result_mode="preview")
+    with pytest.raises(HTTPException) as other_owner:
+        inference_router._load_job(curator_owned_preview.id, db, annotator)
+    assert other_owner.value.status_code == 404
+
+    # Dataset permission is checked against the job's actual project, not the caller's current one.
+    foreign_project_preview = make_job(
+        owner="annotator", result_mode="preview", for_dataset=ctx["other_ds"].id
+    )
+    with pytest.raises(HTTPException) as other_project:
+        inference_router._load_job(foreign_project_preview.id, db, annotator)
+    assert other_project.value.status_code == 403

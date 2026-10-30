@@ -25,18 +25,31 @@ so one unreadable image cannot cost a user a six-hour job. A run that ends with 
 """
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from logging import getLogger
 
 from app.database import get_context_session
 from app.database.images import Images
-from app.database.inference_jobs import InferenceJobItems, InferenceJobs
-from app.schemas.inference import InferenceOptions, ResolvedStep, WriteMode
+from app.database.inference_jobs import (
+    InferenceJobItems,
+    InferenceJobs,
+    clear_preview_predictions,
+    store_preview_predictions,
+)
+from app.schemas.inference import InferenceOptions, ResolvedStep, ResultMode, WriteMode
 from app.services.celery_app import celery_app
-from app.services.inference.execution import InferenceUnitError, run_unit, wipe_images
+from app.services.inference.execution import (
+    InferenceUnitError,
+    run_preview_unit,
+    run_unit,
+    wipe_images,
+)
 
 logger = getLogger(__name__)
+
+MAX_PREVIEW_PAYLOAD_BYTES = 8 * 1024 * 1024
 
 
 def _utcnow() -> datetime:
@@ -134,6 +147,21 @@ def run_next(self, job_id: int) -> dict:
 
         item = _next_item(db, job_id)
         if item is None:
+            # Serialize the terminal transition against cancel_job. Without this lock, a
+            # cancel that wins after the initial status read could be overwritten by success.
+            job = (
+                db.query(InferenceJobs)
+                .populate_existing()
+                .filter(InferenceJobs.id == job_id)
+                .with_for_update()
+                .one()
+            )
+            if job.status == "cancelling":
+                abandon_pending(db, job_id)
+                finish(db, job, "cancelled")
+                return {"status": "cancelled"}
+            if job.status != "running":
+                return {"status": job.status}
             failed = db.query(InferenceJobItems).filter(
                 InferenceJobItems.job_id == job_id, InferenceJobItems.status == "failed"
             ).count()
@@ -163,6 +191,8 @@ def _run_one(
     single corrupt file or a model that chokes on one input.
     """
     item.status = "running"
+    if job.result_mode == ResultMode.PREVIEW.value:
+        clear_preview_predictions(job)
     db.commit()
 
     started = time.perf_counter()
@@ -170,6 +200,48 @@ def _run_one(
     try:
         if image is None:
             raise InferenceUnitError(f"Image {item.image_id} no longer exists.")
+        if job.result_mode == ResultMode.PREVIEW.value:
+            predictions = run_preview_unit(
+                db, step, image, job.created_by or "system", options
+            )
+            size = len(json.dumps(predictions, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            if size > MAX_PREVIEW_PAYLOAD_BYTES:
+                raise InferenceUnitError(
+                    f"Preview output exceeds the {MAX_PREVIEW_PAYLOAD_BYTES // (1024 * 1024)} MiB limit."
+                )
+
+            # Serialize completion against cancellation. If cancel wins the row lock, no
+            # predictions are stored; if completion wins, cancel clears them before returning.
+            current_job = (
+                db.query(InferenceJobs)
+                .populate_existing()
+                .filter(InferenceJobs.id == job.id)
+                .with_for_update()
+                .one()
+            )
+            item = db.get(InferenceJobItems, item.id)
+            if current_job.status != "running":
+                item.status = "skipped"
+                clear_preview_predictions(current_job)
+                item.duration_ms = (time.perf_counter() - started) * 1000
+                item.finished_at = _utcnow()
+                db.commit()
+                return
+            store_preview_predictions(current_job, item.id, predictions)
+            result_count = len(predictions.get("contours", []))
+            item.contours_created = 0
+            item.contours_suppressed = 0
+            item.contours_unparented = 0
+            item.status = "done"
+            item.duration_ms = (time.perf_counter() - started) * 1000
+            item.finished_at = _utcnow()
+            db.commit()
+            logger.info(
+                "Inference preview job %s produced %s transient contours for image %s.",
+                job.id, result_count, image.id,
+            )
+            return
+
         result = run_unit(db, step, image, options, job.created_by or "system")
         db.commit()
     except Exception as exc:
