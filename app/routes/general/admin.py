@@ -72,11 +72,10 @@ async def create_user(
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require_global(Permission.USER_MANAGE)),
 ):
-    """Create an account outright, without an invite or self-registration.
+    """Create an account outright. This is the only way an account comes to exist.
 
-    An instance is closed by default (`INSTANCE_ALLOW_REGISTRATION`), and an
-    invite only ever grants access to a single dataset -- so until now there was
-    no way to hand somebody an account at all. This is that way.
+    There is no self-registration, and an invite only ever grants access to a single
+    dataset; the first admin is created by the installer (`scripts/create_admin.py`).
 
     The password is chosen by the admin and passed on out of band, so the account
     is flagged ``must_change_password`` until its holder picks their own.

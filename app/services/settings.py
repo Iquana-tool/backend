@@ -158,19 +158,6 @@ SETTINGS: tuple[SettingSpec, ...] = (
         label="Sign-in notice",
         description="Optional one-line notice under the sign-in form, e.g. usage terms.",
     ),
-    SettingSpec(
-        key="allow_registration",
-        env_var="INSTANCE_ALLOW_REGISTRATION",
-        group="instance",
-        label="Allow self-registration",
-        description=(
-            "Whether visitors may create their own account. With it off, /auth/register is "
-            "refused by the API, not merely hidden. The first account is always allowed, so "
-            "a fresh install is never locked out."
-        ),
-        kind=KIND_BOOL,
-        default="false",
-    ),
 )
 
 BY_KEY: dict[str, SettingSpec] = {spec.key: spec for spec in SETTINGS}
