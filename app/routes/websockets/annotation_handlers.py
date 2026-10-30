@@ -52,15 +52,15 @@ from app.services.database_access import masks as masks_db
 
 logger = getLogger(__name__)
 
-# The ROI instance models are used to add polyp contours into coral hierarchies.
-# Re-running them should preserve the first saved outline instead of letting
-# hierarchy fitting cut the new one into a crescent around it.
-_POLYP_INSTANCE_MODEL_KEYS = {"cpsam_polyp_v3_b_seed17", "yolo_polyp_v3_c_seed1"}
-_POLYP_DUPLICATE_INTERSECTION_THRESHOLD = 0.3
-_POLYP_PAIR_RASTER_SIZE = 512
+# Accepted instance-segmentation predictions arrive one at a time. Re-running a model
+# should keep the first saved outline instead of letting hierarchy fitting cut the new
+# one into a crescent around it -- the interactive counterpart of batch inference's
+# patch-mode suppression, and like it independent of which model predicted.
+_DUPLICATE_INTERSECTION_THRESHOLD = 0.3
+_PAIR_RASTER_SIZE = 512
 
 
-def _polyp_intersection_over_smaller(first: Contour, second: Contour) -> float:
+def _intersection_over_smaller(first: Contour, second: Contour) -> float:
     """Return overlap / smaller area using a pair-local raster for small outlines.
 
     A whole-image raster undersamples tiny polyps, while IoU misses a smaller or
@@ -92,8 +92,8 @@ def _polyp_intersection_over_smaller(first: Contour, second: Contour) -> float:
             "y": normalized[:, 1].tolist(),
         })
         return local.to_binary_mask(
-            height=_POLYP_PAIR_RASTER_SIZE,
-            width=_POLYP_PAIR_RASTER_SIZE,
+            height=_PAIR_RASTER_SIZE,
+            width=_PAIR_RASTER_SIZE,
         )
 
     first_mask = local_mask(first, first_points)
@@ -466,10 +466,22 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
         source = provenance.MANUAL
     model_key = client_msg.data.get("model_key") if isinstance(client_msg.data, dict) else None
     added_by = client_msg.data.get("added_by") if isinstance(client_msg.data, dict) else None
-    is_polyp_instance_prediction = (
-        source == SuggestionSource.INSTANCE_SEGMENTATION
-        and model_key in _POLYP_INSTANCE_MODEL_KEYS
-    )
+    # Provenance feeds the suggestion statistics, so a client may only claim a known origin,
+    # and an AI origin only together with the model behind it.
+    provenance_error = None
+    if source != provenance.MANUAL and source not in provenance.AI_SOURCES:
+        provenance_error = f"Unknown object source '{source}'."
+    elif source in provenance.AI_SOURCES and not model_key:
+        provenance_error = f"An object from '{source}' needs the model_key that produced it."
+    elif source == provenance.MANUAL and model_key:
+        provenance_error = "A manually drawn object cannot name a model_key."
+    if provenance_error:
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id, type=ServerMessageType.ERROR, success=False,
+            message=provenance_error, data=None,
+        ))
+        return
+    is_instance_prediction = source == SuggestionSource.INSTANCE_SEGMENTATION
 
     is_manual = (
         source == provenance.MANUAL
@@ -491,7 +503,7 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
         ancestor_distance: dict[int, int] = {}
 
         needs_parent_check = (
-            is_polyp_instance_prediction
+            is_instance_prediction
             or contour.parent_id is not None
             or getattr(state, "focussed_contour_id", None) is not None
         )
@@ -586,19 +598,19 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
         # contours win when at least 30% of the smaller outline overlaps; this
         # catches shifted or smaller cross-model duplicates that IoU undercounts.
         # Manual contours and other models retain the normal fitting path.
-        if is_polyp_instance_prediction and hierarchy_is_fresh:
-            existing_polyps = hierarchy.label_id_to_contours.get(contour.label_id, [])
+        if is_instance_prediction and hierarchy_is_fresh:
+            existing_same_label = hierarchy.label_id_to_contours.get(contour.label_id, [])
             duplicate = any(
-                _polyp_intersection_over_smaller(contour, existing)
-                >= _POLYP_DUPLICATE_INTERSECTION_THRESHOLD
-                for existing in existing_polyps
+                _intersection_over_smaller(contour, existing)
+                >= _DUPLICATE_INTERSECTION_THRESHOLD
+                for existing in existing_same_label
             )
             if duplicate:
                 await send_msg(websocket, ServerMessage(
                     id=client_msg.id,
                     type=ServerMessageType.SUCCESS,
                     success=True,
-                    message="Object was skipped because it duplicates an existing polyp.",
+                    message="Object was skipped because it duplicates an existing object.",
                     data={"skipped": True, "duplicate": True},
                 ))
                 return

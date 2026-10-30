@@ -430,7 +430,7 @@ def test_yolo_patch_skips_partial_overlap_with_saved_cellpose_polyp(scratch_ctx,
         parent_id=surface.id,
     )
     assert handlers.nms([candidate], iou_threshold=0.5, existing=[existing_shape]).kept == [0]
-    assert handlers._polyp_intersection_over_smaller(candidate, existing_shape) == pytest.approx(0.55, abs=0.02)
+    assert handlers._intersection_over_smaller(candidate, existing_shape) == pytest.approx(0.55, abs=0.02)
     with test_session() as db:
         hierarchy = asyncio.run(masks_db.get_contour_hierarchy_of_mask(mask_id, db))
         fitted_rim = masks_db.add_contour_to_hierarchy(hierarchy, candidate.model_copy(deep=True))

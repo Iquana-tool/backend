@@ -60,7 +60,6 @@ logger = getLogger(__name__)
 #: of model a plan step can be bound to. Prompted segmentation is excluded on purpose: it
 #: needs a click or a box per object, which nobody is there to give in a batch run.
 BATCH_TASKS: tuple[str, ...] = ("instance-segmentation", "cross-image-suggestion")
-_POLYP_ROI_MODEL_KEYS = {"cpsam_polyp_v3_b_seed17", "yolo_polyp_v3_c_seed1"}
 
 
 # --------------------------------------------------------------------------- #
@@ -168,6 +167,7 @@ def model_catalog(
                 trained_on_dataset=not classes and bool(set(label_ids) & dataset_labels),
                 input_contract=contract,
                 provenance=provenance,
+                roi_input=(info.get("tags") or {}).get("roi_input") or None,
             ))
 
     options.sort(key=lambda option: (not option.trained_on_dataset, option.name.lower()))
@@ -324,6 +324,7 @@ def resolve_steps(
             inputs=normalized_inputs,
             input_contract=option.input_contract,
             provenance=option.provenance,
+            roi_input=option.roi_input,
             min_confidence=step.min_confidence,
             roi_contour_ids=list(step.roi_contour_ids),
         ))
@@ -493,11 +494,11 @@ def create_job(
 
 def _preview_roi_label_ids(db: Session, dataset_id: int, step: ResolvedStep) -> set[int]:
     """Return the permitted labels for an explicitly selected preview ROI."""
-    if step.model_registry_key not in _POLYP_ROI_MODEL_KEYS or step.task != "instance-segmentation":
+    if not step.roi_input or step.task != "instance-segmentation":
         return {step.parent_label_id} if step.parent_label_id is not None else set()
 
-    # Cellpose-SAM's ROI is a broad, explicitly chosen region around a polyp, so its
-    # fragment contours may be higher than the immediate parent in the label tree.
+    # An ROI is a broad, explicitly chosen region (e.g. a coral fragment around polyps), so
+    # it may be higher than the immediate parent in the label tree.
     # Walk only this target label's dataset-local ancestry; unrelated labels and
     # descendants remain invalid. Stop defensively if a malformed hierarchy cycles.
     parent_by_id = dict(
@@ -525,7 +526,7 @@ def _validate_preview_roi(db: Session, dataset_id: int, image_id: int, step: Res
     if not step.roi_contour_ids:
         return
 
-    if step.model_registry_key not in _POLYP_ROI_MODEL_KEYS:
+    if not step.roi_input:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"Model '{step.model_registry_key}' does not support explicit ROI selections.",
@@ -551,18 +552,15 @@ def _validate_preview_roi(db: Session, dataset_id: int, image_id: int, step: Res
             f"ROI contours must be saved, non-temporary contours on image {image_id}: {missing[:10]}",
         )
 
-    polyp_ancestor_mode = (
-        step.model_registry_key in _POLYP_ROI_MODEL_KEYS
-        and step.task == "instance-segmentation"
-    )
+    ancestor_mode = bool(step.roi_input) and step.task == "instance-segmentation"
     allowed_label_ids = _preview_roi_label_ids(db, dataset_id, step)
-    if step.parent_label_id is not None or polyp_ancestor_mode:
+    if step.parent_label_id is not None or ancestor_mode:
         wrong_label = [
             contour_id for contour_id, contour in by_id.items()
             if contour.label_id not in allowed_label_ids
         ]
         if wrong_label:
-            if polyp_ancestor_mode:
+            if ancestor_mode:
                 detail = (
                     f"ROI contours must use an ancestor label of model label {step.label_id} "
                     f"({sorted(allowed_label_ids)}): "

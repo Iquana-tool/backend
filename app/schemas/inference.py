@@ -149,6 +149,11 @@ class ResolvedStep(InferenceStepRequest):
         default="legacy_default",
         description="Whether the contract was declared by the model or resolved from legacy defaults.",
     )
+    roi_input: Optional[str] = Field(
+        default=None,
+        description="How the model accepts saved outlines as a region of interest, from its "
+                    "`roi_input` tag (e.g. 'parent_regions'). None: no ROI support.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -551,6 +556,11 @@ class ModelOption(BaseModel):
     class_mappings: list[ClassMappingRead] = Field(
         default_factory=list,
         description="Per-class resolution to this dataset's labels for models with fixed classes.",
+    )
+    roi_input: Optional[str] = Field(
+        default=None,
+        description="How the model accepts saved outlines as a region of interest, from its "
+                    "`roi_input` tag (e.g. 'parent_regions'). None: no ROI support.",
     )
     trained_on_dataset: bool = Field(
         default=False,

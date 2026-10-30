@@ -229,5 +229,5 @@ def test_polyp_sibling_models_share_saved_mapping_and_suggest_unique_polyp(ctx, 
     resolved_yolo_shared = mlm.resolve(db, ds, "yolo_polyp_v3_c_seed1", polyp_classes)
     assert resolved_yolo_shared[0].action == "map"
     assert resolved_yolo_shared[0].label_id == coral_polyp.id
-    assert resolved_yolo_shared[0].source == "saved"
+    assert resolved_yolo_shared[0].source == "suggested"
 

@@ -111,11 +111,15 @@ def ctx(tmp_path):
                 images=images, masks=masks, existing=existing)
 
 
-def step(label_id, *, level=0, parent_label_id=None, model_label_ids=(), key="m2f"):
+POLYP_KEY = "cpsam_polyp_v3_b_seed17"
+ROI_INPUT = "parent_regions"
+
+
+def step(label_id, *, level=0, parent_label_id=None, model_label_ids=(), key="m2f", roi_input=None):
     return ResolvedStep(
         label_id=label_id, model_registry_key=key, task="instance-segmentation",
         level=level, parent_label_id=parent_label_id, label_name="l", model_name="M",
-        model_label_ids=list(model_label_ids),
+        model_label_ids=list(model_label_ids), roi_input=roi_input,
     )
 
 
@@ -337,8 +341,8 @@ def test_preview_request_is_opt_in_single_image_and_non_destructive(ctx):
 
 
 def test_preview_roi_must_be_same_image_and_correct_parent_label(ctx, monkeypatch):
-    model_key = execution._CELLPOSE_POLYP_MODEL_KEY
-    _stub_catalog(monkeypatch, ctx, registry_key=execution._CELLPOSE_POLYP_MODEL_KEY)
+    model_key = POLYP_KEY
+    _stub_catalog(monkeypatch, ctx, registry_key=model_key, roi_input=ROI_INPUT)
     body = InferenceJobCreate(
         dataset_id=ctx["dataset"].id,
         steps=[InferenceStepRequest(
@@ -374,7 +378,7 @@ def test_preview_roi_must_be_same_image_and_correct_parent_label(ctx, monkeypatc
 
 @pytest.mark.parametrize("model_key", ["cpsam_polyp_v3_b_seed17", "yolo_polyp_v3_c_seed1"])
 def test_cellpose_preview_roi_accepts_only_target_ancestors(ctx, monkeypatch, model_key):
-    _stub_catalog(monkeypatch, ctx, registry_key=model_key)
+    _stub_catalog(monkeypatch, ctx, registry_key=model_key, roi_input=ROI_INPUT)
     db = ctx["db"]
 
     fragment = Labels(id=41, dataset_id=ctx["dataset"].id, name="fragment", value=4,
@@ -490,6 +494,7 @@ def test_cellpose_preview_roi_accepts_only_target_ancestors(ctx, monkeypatch, mo
         ResolvedStep(
             label_id=polyp.id,
             model_registry_key=model_key,
+            roi_input=ROI_INPUT,
             task="instance-segmentation",
             level=3,
             parent_label_id=surface.id,
@@ -506,6 +511,7 @@ def test_preview_unit_rasterizes_roi_and_returns_normalized_transient_contours(c
         level=1,
         parent_label_id=ctx["cell"].id,
         key=model_key,
+        roi_input=ROI_INPUT,
     ).model_copy(update={"roi_contour_ids": [ctx["existing"].id]})
     captured = {}
 
@@ -955,13 +961,14 @@ def test_preserve_reviewed_spares_approved_objects_and_their_subtree(ctx):
 from app.services.inference.contract_resolver import LEGACY_TASK_DEFAULTS
 
 
-def _stub_catalog(monkeypatch, ctx, label_ids=(), registry_key="m2f"):
+def _stub_catalog(monkeypatch, ctx, label_ids=(), registry_key="m2f", roi_input=None):
     """Pretend one ready instance-segmentation model exists, without touching MLflow."""
     contract = LEGACY_TASK_DEFAULTS["instance-segmentation"]
     monkeypatch.setattr(planning, "model_catalog", lambda db, dataset_id: ModelCatalog(
         models=[ModelOption(registry_key=registry_key, name="Mask2Former",
                             task="instance-segmentation", label_ids=list(label_ids),
-                            input_contract=contract, provenance="legacy_default")],
+                            input_contract=contract, provenance="legacy_default",
+                            roi_input=roi_input)],
     ))
 
 
@@ -980,3 +987,20 @@ def _job_body(ctx):
         ],
         image_selection=ImageSelection.ALL,
     )
+
+
+def test_preview_roi_is_refused_for_a_model_that_declares_none(ctx, monkeypatch):
+    """ROI support comes from the model's roi_input tag, never from its registry key."""
+    _stub_catalog(monkeypatch, ctx, registry_key=POLYP_KEY, roi_input=None)
+    body = InferenceJobCreate(
+        dataset_id=ctx["dataset"].id,
+        steps=[InferenceStepRequest(label_id=ctx["nucleus"].id, model_registry_key=POLYP_KEY,
+                                    roi_contour_ids=[ctx["existing"].id])],
+        result_mode="preview",
+        image_selection=ImageSelection.CUSTOM,
+        image_ids=[ctx["images"][0].id],
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        planning.create_job(ctx["db"], ctx["dataset"].id, "tester", body)
+    assert excinfo.value.status_code == 400
+    assert "does not support explicit ROI" in excinfo.value.detail

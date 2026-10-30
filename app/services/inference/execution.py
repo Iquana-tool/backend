@@ -166,8 +166,6 @@ def _preview_roi_regions(db: Session, step: ResolvedStep, image: Images) -> list
     return regions
 
 
-_CELLPOSE_POLYP_MODEL_KEY = "cpsam_polyp_v3_b_seed17"
-_POLYP_ROI_MODEL_KEYS = {_CELLPOSE_POLYP_MODEL_KEY, "yolo_polyp_v3_c_seed1"}
 
 
 def run_preview_unit(
@@ -180,7 +178,7 @@ def run_preview_unit(
     """Predict one image and return bounded-ready geometry without writing annotation rows."""
     parameters = dict((step.inputs or {}).get("parameters") or {})
     if step.roi_contour_ids:
-        if step.model_registry_key in _POLYP_ROI_MODEL_KEYS:
+        if step.roi_input == "parent_regions":
             parameters["parent_regions"] = _preview_roi_regions(db, step, image)
         else:
             raise InferenceUnitError(

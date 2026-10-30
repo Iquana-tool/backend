@@ -655,7 +655,7 @@ def test_polyp_instance_add_suppresses_duplicate_across_parent_branches(
 
     candidate = Contour(x=candidate_x, y=candidate_y, label_id=43)
     assert handlers.nms([candidate], iou_threshold=0.5, existing=[existing]).kept == [0]
-    assert handlers._polyp_intersection_over_smaller(candidate, existing) >= 0.3
+    assert handlers._intersection_over_smaller(candidate, existing) >= 0.3
 
     asyncio.run(handlers.handle_object_add(object(), client_msg, state))
 
@@ -746,7 +746,7 @@ def test_polyp_instance_add_keeps_slight_same_label_edge_overlap(monkeypatch):
         return hierarchy
 
     candidate = Contour(x=[0.275, 0.375, 0.375, 0.275], y=[0.20, 0.20, 0.30, 0.30], label_id=43)
-    assert handlers._polyp_intersection_over_smaller(candidate, existing) < 0.3
+    assert handlers._intersection_over_smaller(candidate, existing) < 0.3
 
     monkeypatch.setattr(handlers, "get_context_session", context_session)
     monkeypatch.setattr(handlers.masks_db, "get_contour_hierarchy_of_mask", get_hierarchy)
@@ -1176,3 +1176,29 @@ def test_handle_object_add_refreshes_hierarchy_from_storage_when_state_is_stale(
     assert contour_arg.parent_id == 21060
 
 
+
+
+@pytest.mark.parametrize("data, error", [
+    ({"source": "made_up"}, "Unknown object source"),
+    ({"source": "instance_segmentation"}, "needs the model_key"),
+    ({"source": "manual", "model_key": "m2f"}, "cannot name a model_key"),
+])
+def test_handle_object_add_rejects_unverifiable_provenance(monkeypatch, data, error):
+    """Provenance feeds the suggestion statistics: unknown or inconsistent claims are refused."""
+    state = SimpleNamespace(focussed_contour_id=None, mask_id=7, user_id="alice")
+    client_msg = ClientMessage(id="req-prov", type="object_add_manual", data={
+        "x": [0.1, 0.2, 0.2, 0.1], "y": [0.1, 0.1, 0.2, 0.2], "label_id": 43, **data,
+    })
+    mock_add = AsyncMock()
+    sent = []
+
+    async def fake_send(_ws, message):
+        sent.append(message)
+
+    monkeypatch.setattr(handlers, "add_object", mock_add)
+    monkeypatch.setattr(handlers, "send_msg", fake_send)
+
+    asyncio.run(handlers.handle_object_add(object(), client_msg, state))
+
+    assert mock_add.await_count == 0
+    assert sent and sent[0].success is False and error in sent[0].message
