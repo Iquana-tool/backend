@@ -153,7 +153,6 @@ list and `config.py` the defaults. The ones that matter most:
 | `IQUANA_SECRETS_KEY_FILE` | `data/secrets.key` | That key file, generated on first use. **Back it up apart from the database** |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `480` | There is no refresh flow, so this is the whole session |
 | `INSTANCE_NAME` / `_ORG` / `_CONTACT` / `_NOTICE` | empty | Shown on the sign-in page, served from `GET /instance/` |
-| `INSTANCE_ALLOW_REGISTRATION` | `false` | Self-registration, enforced by the API rather than merely hidden in the UI |
 | `LABEL_SPACE_LLM_MODEL` / `_API_KEY` | — | LiteLLM `<provider>/<model>`; the label-space assistant stays disabled until the key is set |
 | `EMBEDDING_LIFECYCLE_ENABLED` | `false` | Opt-in on-write embedding; otherwise the store is filled by `scripts/backfill_embeddings.py` |
 

@@ -9,49 +9,32 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.users import Users, utc_now
 from app.schemas.account import MAX_PREFERENCES_BYTES, PasswordChange, ProfileUpdate
+from app.schemas.account_invites import InviteRegistration
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.credentials import CredentialKind, LlmCredentialSet
 from app.services import credentials as credentials_service
 from app.services.auth import create_access_token, get_current_user, verify_password, get_password_hash
-from app.services.database_access.organizations import join_default_organization
-from app.services.instance import get_instance_config
 from app.services.activity_log.emit import emit_navigation
+from app.services.database_access import account_invites as invites_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+# There is no open self-registration: registering needs a link an admin sent
+# (``POST /admin/account-invites``). Both routes are public -- the invitee has no
+# account yet -- and the token is the whole authorisation.
+@router.get("/invites/{token}")
+def preview_registration_link(token: str, db: Session = Depends(get_session)):
+    """Whether a registration link can still be used, before showing the form."""
+    return {"success": True, "invite": invites_db.preview(token, db).model_dump(mode="json")}
+
+
 @router.post("/register")
-def register_user(name, password, db: Session = Depends(get_session)):
-    # Instances hold real research data and mostly hand out accounts by hand, so
-    # self-registration is refused unless this deployment opted in. Checked here
-    # rather than only hidden on the sign-in page: a link the frontend declines
-    # to render is not a closed door.
-    #
-    # The exception is the very first account. Nothing else creates users — there
-    # is no seeding script and no admin bootstrap — so a closed instance with an
-    # empty user table could never be signed into at all. Allowing exactly the
-    # first registration keeps "closed by default" from meaning "unusable by
-    # default", and the window shuts the moment that account exists.
-    if not get_instance_config().allow_registration:
-        if db.query(Users).first() is not None:
-            raise HTTPException(
-                status_code=403,
-                detail="Self-registration is disabled on this instance. Ask its administrator for an account.",
-            )
-    # Check if user already exists
-    existing_user = db.query(Users).filter(Users.username == name).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Username already exists")
-    # Create new user
-    new_user = Users(username=name, hashed_password=get_password_hash(password))
-    db.add(new_user)
-    join_default_organization(new_user.username, db)
-    db.commit()
-    db.refresh(new_user)
-    return {
-        "success": True,
-        "message": "User registered successfully",
-        "name": new_user.username}
+def register_with_link(body: InviteRegistration, db: Session = Depends(get_session)):
+    """Create your own account with a registration link."""
+    account = invites_db.register(body, db)
+    return {"success": True, "message": "Account created.", "name": account.username}
+
 
 
 @router.post("/login")
