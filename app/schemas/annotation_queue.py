@@ -37,6 +37,12 @@ class QueueSettings(BaseModel):
     metadata_filters: dict[str, list[str] | dict] = Field(
         default_factory=dict, description="Image metadata filter, as in the gallery."
     )
+    balance_by: str | None = Field(
+        None,
+        description="Metadata key to take turns over, e.g. species: one image of each value in "
+                    "turn, every value in the method's order, so no one annotates one species "
+                    "to the end before the next. Images without the key form their own group.",
+    )
     max_confidence: float | None = Field(
         None, ge=0.0, le=1.0,
         description="Keep only images whose most confident detection is below this value. "

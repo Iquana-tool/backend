@@ -323,3 +323,67 @@ def test_cancel_stops_the_job(db):
     queue_prep.cancel(db, job)
     assert queue_prep.step(db, job.id) == "cancelled"
     assert db.get(QueuePrepJobs, job.id).finished_at is not None
+
+
+# -- Review fixes: cancel mid-image, stale jobs, ownership, balance by metadata --------
+
+def test_cancel_landing_mid_image_is_not_overwritten(db, monkeypatch):
+    """The worker must not write "running" back over a cancel the API set meanwhile."""
+    from sqlalchemy.orm import sessionmaker
+    ds = make_dataset(db)
+    imgs = [make_image(db, ds, f"c{i}.png") for i in range(3)]
+    job = QueuePrepJobs(dataset_id=ds.id, created_by="ann", needs=DINO,
+                        image_ids=[i.id for i in imgs], status="running")
+    db.add(job)
+    db.commit()
+    api = sessionmaker(bind=db.get_bind())()
+
+    def unit_while_cancelled(session, j, image_id, *_):
+        queue_prep.cancel(api, api.get(QueuePrepJobs, j.id))
+
+    monkeypatch.setattr(queue_prep, "_run_unit", unit_while_cancelled)
+    queue_prep.step(db, job.id)
+    api.expire_all()
+    assert api.get(QueuePrepJobs, job.id).status == "cancelling"
+    assert queue_prep.step(db, job.id) == "cancelled"
+    api.close()
+
+
+def test_stale_job_is_given_up_and_restarted(db):
+    from datetime import datetime, timedelta, timezone
+    ds = make_dataset(db)
+    make_image(db, ds, "s.png")
+    old = datetime.now(timezone.utc) - queue_prep.STALE_AFTER - timedelta(minutes=1)
+    stuck = QueuePrepJobs(dataset_id=ds.id, created_by="ann", needs=DINO, image_ids=[1],
+                          status="running", created_at=old, heartbeat_at=old)
+    db.add(stuck)
+    db.commit()
+    fresh = queue_prep.start_prep(db, ds.id, "bob", DINO, enqueue=False)
+    assert fresh.id != stuck.id
+    db.refresh(stuck)
+    assert stuck.status == "failed" and "stopped responding" in stuck.error
+
+
+def test_live_job_is_shared_and_only_its_starter_may_cancel(db):
+    ds = make_dataset(db)
+    make_image(db, ds, "l.png")
+    first = queue_prep.start_prep(db, ds.id, "ann", DINO, enqueue=False)
+    assert queue_prep.start_prep(db, ds.id, "bob", DINO, enqueue=False).id == first.id
+    assert queue_prep.can_cancel(first, "ann")
+    assert not queue_prep.can_cancel(first, "bob")
+
+
+def test_balance_by_metadata_takes_turns_between_values(db):
+    from app.database.image_metadata import ImageMetadata
+    ds = make_dataset(db)
+    species = ["apal", "apal", "apal", "ofav", "ofav", "ssid"]
+    imgs = [make_image(db, ds, f"b{i}.png", state="none") for i in range(len(species))]
+    for img, value in zip(imgs, species):
+        db.add(ImageMetadata(image_id=img.id, key="species", value=value))
+    db.commit()
+    settings = QueueSettings(method="as_uploaded", balance_by="species")
+    queue = build_and_save_queue(ds.id, "ann", settings, db)
+    by_id = {img.id: value for img, value in zip(imgs, species)}
+    assert [by_id[i] for i in queue.image_ids] == ["apal", "ofav", "ssid", "apal", "ofav", "apal"]
+    # Within a value the method's order holds.
+    assert [i for i in queue.image_ids if by_id[i] == "apal"] == [imgs[0].id, imgs[1].id, imgs[2].id]

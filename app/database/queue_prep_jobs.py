@@ -31,10 +31,14 @@ class QueuePrepJobs(database):
     image_ids = Column(JSON, nullable=False, default=list)
     #: Index into image_ids of the next image to process; the job's cursor.
     next_index = Column(Integer, nullable=False, default=0)
-    #: pending, running, cancelling, cancelled, succeeded, partial (finished with failures).
+    #: pending, running, cancelling, cancelled, succeeded, partial (finished with failures),
+    #: failed (the worker stopped and the job was given up; see ``app.services.queue_prep``).
     status = Column(String(16), nullable=False, default="pending", index=True)
     failed_image_ids = Column(JSON, nullable=False, default=list)
     error = Column(Text, nullable=True)
     celery_task_id = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
+    #: Last time a worker finished an image of this job. A job that is active but has not
+    #: beaten for a while lost its worker, and must not block new preparation forever.
+    heartbeat_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)

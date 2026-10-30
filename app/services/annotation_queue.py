@@ -14,6 +14,8 @@ How a queue is built (:func:`build_order`):
 3. Score the rest with the chosen method (``app.services.queue_methods``) and sort them in
    the chosen direction -- or alternate two methods (round robin). Units a method cannot
    score (missing data) follow its scored ones.
+4. Optionally balance by a metadata key: take turns between its values (one species after
+   another), each value keeping the order of step 3.
 
 The data methods need is filled beforehand by ``app.services.queue_prep``; building never
 waits for it.
@@ -36,7 +38,11 @@ from app.schemas.annotation_queue import (
     QueueSettings,
 )
 from app.services import al_ranking
-from app.services.database_access.image_metadata import filter_image_ids
+from app.services.database_access.image_metadata import (
+    filter_image_ids,
+    get_metadata_for_dataset,
+    normalize_key,
+)
 from app.services.queue_methods import METHODS, TRAINED_MODEL, MethodContext, QueueMethod, load_confidences
 
 
@@ -175,6 +181,23 @@ def _rank(method: QueueMethod, direction: str,
             + [(key, "no_data", None) for key in unscored])
 
 
+def _balance(db: Session, dataset_id: int, ranked: list[tuple[int, str, float | None]],
+             units_by_key: dict[int, al_ranking.Unit], key: str) -> list[tuple[int, str, float | None]]:
+    """Take turns between the values of a metadata key, keeping each value's own order.
+
+    A unit's value is its first image's (a scan's frames share the scan's metadata). Values
+    take turns in the order they first appear in ``ranked``, so the best-ranked image still
+    comes first; units without the key are one more group.
+    """
+    wanted = normalize_key(key)
+    metadata = get_metadata_for_dataset(db, dataset_id)
+    groups: dict[str | None, list[tuple[int, str, float | None]]] = {}
+    for entry in ranked:
+        first_image = units_by_key[entry[0]].image_ids[0]
+        groups.setdefault(metadata.get(first_image, {}).get(wanted), []).append(entry)
+    return al_ranking.round_robin(*groups.values())
+
+
 def build_order(db: Session, dataset_id: int, username: str,
                 settings: QueueSettings) -> tuple[list[int], dict[str, dict]]:
     """The queue's image ids and why each sits where it does."""
@@ -195,10 +218,12 @@ def build_order(db: Session, dataset_id: int, username: str,
         secondary = get_method(settings.round_robin_with)
         orders.append(_rank(secondary, secondary.directions[0], ctx))
     ranked = al_ranking.round_robin(*orders)
+    by_key = {unit.key: unit for unit in units}
+    if settings.balance_by:
+        ranked = _balance(db, dataset_id, ranked, by_key, settings.balance_by)
     ranked += [(u.key, "started_by_other", None) for u in by_state["others"]]
     ranked += [(u.key, "finished", None) for u in by_state["finished"]]
 
-    by_key = {unit.key: unit for unit in units}
     image_ids: list[int] = []
     details: dict[str, dict] = {}
     for key, reason, score in ranked:

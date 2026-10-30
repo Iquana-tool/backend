@@ -150,7 +150,17 @@ async def cancel_prep_job(
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_CREATE, "dataset_id")),
 ):
-    """Stop a preparation job after the image it is working on."""
+    """Stop a preparation job after the image it is working on.
+
+    Jobs are shared: a second annotator asking for the same preparation waits on the first
+    one's job. So only whoever started it may stop it; everyone else just stops waiting.
+    """
     job = _job_in_dataset(db, dataset_id, job_id)
+    if not queue_prep.can_cancel(job, user.username):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{job.created_by} started this preparation, so it keeps running for them. "
+                   "Closing this window only stops waiting for it.",
+        )
     queue_prep.cancel(db, job)
     return {"success": True, "job": queue_prep.to_read(job).model_dump()}

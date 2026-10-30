@@ -121,3 +121,14 @@ def test_prepare_without_the_needed_model_is_a_clear_400(client):
     response = http.post(f"/annotation-queue/datasets/{ds.id}/prepare", json={"method": "density"})
     assert response.status_code == 400
     assert response.json()["detail"] == "Choose an embedding model first."
+
+
+def test_only_the_starter_may_cancel_a_shared_job(client):
+    """Another annotator may be waiting on the same job; theirs is not ours to stop."""
+    http, db, ds, _ = client
+    job = queue_prep.start_prep(db, ds.id, "bob", {"trained_model": "m1"}, enqueue=False)
+    response = http.post(f"/annotation-queue/datasets/{ds.id}/prep-jobs/{job.id}/cancel")
+    assert response.status_code == 403
+    assert "bob started this preparation" in response.json()["detail"]
+    db.refresh(job)
+    assert job.status == "pending"
