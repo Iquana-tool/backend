@@ -3,9 +3,9 @@
 IQUANA is self-hosted: every research group runs its own instance against its own
 datasets and its own user list. Two surfaces need to know which instance this is
 — the sign-in page, which greets a visitor who was handed a bare hostname and
-tells them who to ask for an account. There is no self-registration: the installer
-creates the first admin (``scripts/create_admin.py --bootstrap``), and the admin
-creates every other account from the admin page.
+tells them who to ask for an account. There is no open self-registration: the
+installer creates the first admin (``scripts/create_admin.py --bootstrap``), and the
+admin creates accounts on the admin page or sends a registration link.
 
 The values live on the backend rather than in the frontend's build because Vite
 substitutes ``import.meta.env`` at build time, so frontend-held branding would be

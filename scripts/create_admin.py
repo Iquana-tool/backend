@@ -1,7 +1,8 @@
 """Create (or promote) a platform admin from the command line.
 
-There is no self-registration: accounts are created by an admin on the admin page
-(``POST /admin/users``), which needs an admin to call it. This is how the *first*
+There is no open self-registration: accounts are created by an admin on the admin page
+(``POST /admin/users``) or through a registration link an admin sent, and both need an
+admin to exist first. This is how the *first*
 admin gets onto an instance. It talks to the database directly, on purpose: it is
 the bootstrap step that runs *before* there is anyone to authenticate as.
 

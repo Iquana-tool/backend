@@ -9,13 +9,32 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.users import Users, utc_now
 from app.schemas.account import MAX_PREFERENCES_BYTES, PasswordChange, ProfileUpdate
+from app.schemas.account_invites import InviteRegistration
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.credentials import CredentialKind, LlmCredentialSet
 from app.services import credentials as credentials_service
 from app.services.auth import create_access_token, get_current_user, verify_password, get_password_hash
 from app.services.activity_log.emit import emit_navigation
+from app.services.database_access import account_invites as invites_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+# There is no open self-registration: registering needs a link an admin sent
+# (``POST /admin/account-invites``). Both routes are public -- the invitee has no
+# account yet -- and the token is the whole authorisation.
+@router.get("/invites/{token}")
+def preview_registration_link(token: str, db: Session = Depends(get_session)):
+    """Whether a registration link can still be used, before showing the form."""
+    return {"success": True, "invite": invites_db.preview(token, db).model_dump(mode="json")}
+
+
+@router.post("/register")
+def register_with_link(body: InviteRegistration, db: Session = Depends(get_session)):
+    """Create your own account with a registration link."""
+    account = invites_db.register(body, db)
+    return {"success": True, "message": "Account created.", "name": account.username}
+
 
 
 @router.post("/login")
