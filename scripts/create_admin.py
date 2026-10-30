@@ -15,8 +15,9 @@ password is reset only when one is given.
 
 ``--bootstrap`` is what the installer runs. It does nothing when the instance already
 has an active admin; otherwise it creates (or promotes) the account with a generated
-password, flagged ``must_change_password``, and prints *only that password* on stdout
-so the installer can show it once. Generating it here keeps it off the command line,
+password, flagged ``must_change_password``, and prints it on stdout as the line
+``IQUANA_ADMIN_PASSWORD=<password>`` so the installer can show it once. (A marked line,
+because migrations run first and anything else they print must not be taken for it.) Generating it here keeps it off the command line,
 where every other user of the machine could read it from the process list.
 
 Because it bypasses the API it also bypasses the API's password rules. That is
@@ -25,14 +26,21 @@ instance should not also be locked out by a length check — but it means the
 password you pass is the password you get. Choose accordingly.
 """
 import argparse
+import os
 import secrets
 import sys
 
-from app.database import get_context_session, init_db
-from app.database.users import Users
-from app.schemas.permissions import GlobalRole
-from app.services.auth import get_password_hash
-from app.services.database_access.organizations import join_default_organization
+# Make ``import app...`` work however the script is invoked (the docstring's
+# ``python scripts/create_admin.py`` puts scripts/, not the backend root, on the path).
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, _BACKEND_ROOT)
+
+from app.database import get_context_session, init_db  # noqa: E402
+from app.database.users import Users  # noqa: E402
+from app.schemas.permissions import GlobalRole  # noqa: E402
+from app.services.auth import get_password_hash  # noqa: E402
+from app.services.database_access.organizations import join_default_organization  # noqa: E402
 
 
 def main() -> int:
@@ -96,18 +104,19 @@ def bootstrap(username: str) -> int:
             return 0
 
         password = secrets.token_urlsafe(12)
+        fields = dict(hashed_password=get_password_hash(password), global_role=GlobalRole.ADMIN.value,
+                      is_active=True, must_change_password=True)
         account = db.query(Users).filter_by(username=username).first()
         if account is None:
-            account = Users(username=username)
-            db.add(account)
+            # Complete before it is added: joining the organisation flushes the row.
+            db.add(Users(username=username, **fields))
             join_default_organization(username, db)
-        account.hashed_password = get_password_hash(password)
-        account.global_role = GlobalRole.ADMIN.value
-        account.is_active = True
-        account.must_change_password = True
+        else:
+            for name, value in fields.items():
+                setattr(account, name, value)
         db.commit()
     print(f"Created {username!r} as the first platform admin.", file=sys.stderr)
-    print(password)
+    print(f"IQUANA_ADMIN_PASSWORD={password}")
     return 0
 
 

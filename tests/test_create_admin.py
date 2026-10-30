@@ -50,8 +50,10 @@ def _run(monkeypatch, capsys, *argv):
 def test_bootstrap_creates_one_admin_with_a_generated_password(factory, monkeypatch, capsys):
     code, out = _run(monkeypatch, capsys, "--bootstrap", "admin")
     assert code == 0
-    password = out.out.strip()
-    assert len(password) >= 12 and "\n" not in password
+    lines = out.out.strip().splitlines()
+    assert len(lines) == 1 and lines[0].startswith("IQUANA_ADMIN_PASSWORD=")
+    password = lines[0].removeprefix("IQUANA_ADMIN_PASSWORD=")
+    assert len(password) >= 12
     db = factory()
     admin = db.query(Users).filter_by(username="admin").one()
     assert admin.global_role == GlobalRole.ADMIN.value
