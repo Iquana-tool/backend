@@ -1,6 +1,8 @@
 import base64
+import hashlib
 import io
 import os
+import tempfile
 from logging import getLogger
 from pathlib import Path
 from typing import Union
@@ -19,6 +21,14 @@ from app.services.database_access.masks import create_new_mask
 from config import THUMBNAILS_DIR
 
 logger = getLogger(__name__)
+_TIFF_PREVIEW_CACHE_VERSION = "v2"
+_TIFF_SUFFIXES = {".tif", ".tiff"}
+_TIFF_IMAGE_ERRORS = (
+    OSError,
+    UnidentifiedImageError,
+    ValueError,
+    Image.DecompressionBombError,
+)
 
 
 class TIFFPreviewError(HTTPException):
@@ -29,7 +39,7 @@ class TIFFPreviewError(HTTPException):
 
 
 def _tiff_png_bytes(image: Image.Image) -> bytes:
-    """Encode one TIFF page as PNG without clipping high-bit-depth grayscale data."""
+    """Encode one TIFF page as a browser-friendly PNG display copy."""
     if getattr(image, "n_frames", 1) != 1:
         raise TIFFPreviewError("Multi-page TIFF images are not supported; upload one page per image.")
 
@@ -40,13 +50,13 @@ def _tiff_png_bytes(image: Image.Image) -> bytes:
     if max(bits_per_sample, default=8) > 8 and mode not in {"I;16", "I;16L", "I;16B", "I", "F"}:
         raise TIFFPreviewError("Multi-channel high-bit-depth TIFF previews are not supported.")
     if mode in {"I;16", "I;16L", "I;16B"}:
-        # Rebuild with a native-endian mode so Pillow writes the samples as 16-bit PNG.
-        preview = Image.fromarray(np.asarray(image).astype(np.uint16), mode="I;16")
+        pixels = np.asarray(image).astype(np.uint16)
+        preview = _stretch_integer_preview(pixels)
     elif mode == "I":
         pixels = np.asarray(image)
         if pixels.min() < 0 or pixels.max() > 65535:
             raise TIFFPreviewError("TIFF integer pixels must be in the unsigned 16-bit range for preview.")
-        preview = Image.fromarray(pixels.astype(np.uint16), mode="I;16")
+        preview = _stretch_integer_preview(pixels)
     elif mode == "F":
         pixels = np.asarray(image, dtype=np.float64)
         if not np.isfinite(pixels).all():
@@ -74,25 +84,209 @@ def _tiff_png_bytes(image: Image.Image) -> bytes:
     return output.getvalue()
 
 
-def tiff_preview_bytes(file_path: Union[str, Path]) -> bytes | None:
-    """Return a PNG display copy for TIFF files, or ``None`` for other formats."""
+def _stretch_integer_preview(pixels: np.ndarray) -> Image.Image:
+    minimum, maximum = int(pixels.min()), int(pixels.max())
+    if minimum == maximum:
+        return Image.fromarray(np.zeros(pixels.shape, dtype=np.uint8), mode="L")
+    stretched = np.rint(
+        (pixels.astype(np.float64) - minimum) * (255.0 / (maximum - minimum))
+    ).astype(np.uint8)
+    return Image.fromarray(stretched, mode="L")
+
+
+def _preview_cache_path(
+        source_path: Union[str, Path],
+        thumbnail_path: Union[str, Path] | None,
+) -> tuple[Path, str]:
+    source = Path(source_path)
+    anchor = Path(thumbnail_path) if thumbnail_path is not None else source
+    path_key = _source_path_key(source)
+    anchor_key = _source_path_key(anchor)
+    source_stat = source.stat()
+    stat_key = (
+        f"{source_stat.st_dev:x}-{source_stat.st_ino:x}-{source_stat.st_size:x}-"
+        f"{source_stat.st_mtime_ns:x}-{source_stat.st_ctime_ns:x}"
+    )
+    prefix = (
+        f".tiff-preview-{_TIFF_PREVIEW_CACHE_VERSION}-{anchor_key}-{path_key}-"
+    )
+    cache_path = anchor.parent / f"{prefix}{stat_key}.png"
+    return cache_path, prefix
+
+
+def _source_path_key(source_path: Union[str, Path]) -> str:
+    source = Path(source_path)
+    return hashlib.sha256(os.fsencode(str(source.resolve()))).hexdigest()[:16]
+
+
+def _atomic_write(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as temporary_file:
+            temporary_file.write(content)
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def _write_tiff_preview_cache(
+        source_path: Union[str, Path],
+        thumbnail_path: Union[str, Path] | None,
+        preview: bytes,
+) -> Path:
+    cache_path, prefix = _preview_cache_path(source_path, thumbnail_path)
+    _atomic_write(cache_path, preview)
+    for old_cache in cache_path.parent.glob(f"{prefix}*.png"):
+        if old_cache != cache_path:
+            try:
+                old_cache.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Could not remove stale TIFF preview %s: %s", old_cache, exc)
+    return cache_path
+
+
+def clear_tiff_preview_cache(
+        thumbnail_path: Union[str, Path],
+        source_paths: tuple[Union[str, Path], ...],
+) -> None:
+    anchor = Path(thumbnail_path)
+    for source_path in source_paths:
+        prefix = (
+            f".tiff-preview-{_TIFF_PREVIEW_CACHE_VERSION}-"
+            f"{_source_path_key(anchor)}-{_source_path_key(source_path)}-"
+        )
+        for cache_path in anchor.parent.glob(f"{prefix}*.png"):
+            try:
+                cache_path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Could not remove TIFF preview cache %s: %s", cache_path, exc)
+
+
+def tiff_preview_file(
+        file_path: Union[str, Path],
+        thumbnail_path: Union[str, Path] | None = None,
+) -> Path | None:
+    """Return the cached PNG preview path for TIFFs, or ``None`` for other suffixes."""
     path = Path(file_path)
+    if path.suffix.lower() not in _TIFF_SUFFIXES:
+        return None
+
+    try:
+        cache_path, _ = _preview_cache_path(path, thumbnail_path)
+    except OSError as exc:
+        raise TIFFPreviewError("Could not read this TIFF image for browser preview.") from exc
+
+    try:
+        if cache_path.is_file():
+            with cache_path.open("rb") as cached_preview:
+                if cached_preview.read(8) == b"\x89PNG\r\n\x1a\n":
+                    return cache_path
+    except OSError:
+        pass
+
     try:
         image = Image.open(path)
-    except (OSError, UnidentifiedImageError, ValueError) as exc:
-        if path.suffix.lower() in {".tif", ".tiff"}:
-            raise TIFFPreviewError("Could not read this TIFF image for browser preview.") from exc
-        return None
+    except _TIFF_IMAGE_ERRORS as exc:
+        raise TIFFPreviewError("Could not read this TIFF image for browser preview.") from exc
 
     with image:
         if image.format != "TIFF":
             return None
         try:
-            return _tiff_png_bytes(image)
+            preview = _tiff_png_bytes(image)
         except TIFFPreviewError:
             raise
-        except (OSError, ValueError, SyntaxError) as exc:
+        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
             raise TIFFPreviewError("Could not decode this TIFF image for browser preview.") from exc
+    try:
+        return _write_tiff_preview_cache(path, thumbnail_path, preview)
+    except OSError as exc:
+        raise TIFFPreviewError("Could not save the TIFF browser preview.") from exc
+
+
+def ensure_tiff_thumbnail_preview(
+        image_path: Union[str, Path],
+        thumbnail_path: Union[str, Path],
+) -> None:
+    """Repair prior 16-bit PNG thumbnails using the current display-only preview."""
+    source, thumbnail = Path(image_path), Path(thumbnail_path)
+    if source.suffix.lower() not in _TIFF_SUFFIXES:
+        return
+
+    try:
+        with Image.open(source) as original:
+            if original.format != "TIFF":
+                return
+            integer_gray = original.mode in {"I", "I;16", "I;16L", "I;16B"}
+    except _TIFF_IMAGE_ERRORS as exc:
+        raise TIFFPreviewError("Could not read this TIFF image for browser preview.") from exc
+
+    # Validate/cache the full source too, so legacy constant-float thumbnails do
+    # not bypass the preview policy through their PNG suffix.
+    full_preview = tiff_preview_file(source, thumbnail)
+    if full_preview is None or not integer_gray or thumbnail.suffix.lower() != ".png":
+        return
+
+    try:
+        with Image.open(thumbnail) as existing:
+            needs_refresh = existing.mode in {"I", "I;16", "I;16L", "I;16B"}
+    except _TIFF_IMAGE_ERRORS:
+        needs_refresh = True
+    if not needs_refresh:
+        return
+
+    try:
+        with Image.open(full_preview) as preview:
+            preview.thumbnail((500, 500))
+            output = io.BytesIO()
+            preview.save(output, format="PNG")
+        _atomic_write(thumbnail, output.getvalue())
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise TIFFPreviewError("Could not repair the TIFF thumbnail preview.") from exc
+
+
+def tiff_preview_bytes(
+        file_path: Union[str, Path],
+        thumbnail_path: Union[str, Path] | None = None,
+) -> bytes | None:
+    """Return cached PNG display bytes for TIFFs, or ``None`` for other formats."""
+    preview_path = tiff_preview_file(file_path, thumbnail_path)
+    if preview_path is None:
+        return None
+    try:
+        return preview_path.read_bytes()
+    except OSError as exc:
+        raise TIFFPreviewError("Could not read the cached TIFF preview.") from exc
+
+
+def _validate_tiff_upload_file(file_object, filename: str) -> None:
+    try:
+        decoded = Image.open(file_object)
+    except _TIFF_IMAGE_ERRORS as exc:
+        if Path(filename).suffix.lower() in _TIFF_SUFFIXES:
+            raise TIFFPreviewError("Could not read this TIFF image.") from exc
+        return
+    with decoded:
+        if decoded.format != "TIFF":
+            return
+        try:
+            _tiff_png_bytes(decoded)
+        except TIFFPreviewError:
+            raise
+        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
+            raise TIFFPreviewError("Could not decode this TIFF image for browser preview.") from exc
+
+
+async def validate_tiff_upload(image: UploadFile) -> None:
+    """Preflight TIFF decoding so batch upload cannot partially save TIFF batches."""
+    await image.seek(0)
+    try:
+        await run_in_threadpool(_validate_tiff_upload_file, image.file, image.filename)
+    finally:
+        await image.seek(0)
 
 
 def load_image_for_display(image, as_thumbnail: bool, as_base64: bool):
@@ -103,8 +297,10 @@ def load_image_for_display(image, as_thumbnail: bool, as_base64: bool):
             return model.load_thumbnail(as_base64=False)
         return model.load_image(as_base64=False)
 
+    if as_thumbnail:
+        ensure_tiff_thumbnail_preview(image.file_path, image.thumbnail_file_path)
     file_path = image.thumbnail_file_path if as_thumbnail else image.file_path
-    preview = tiff_preview_bytes(file_path)
+    preview = tiff_preview_bytes(file_path, image.thumbnail_file_path)
     if preview is None:
         if as_thumbnail:
             return model.load_thumbnail(as_base64=as_base64)
@@ -113,10 +309,15 @@ def load_image_for_display(image, as_thumbnail: bool, as_base64: bool):
 
 
 def load_images_for_display(images, as_thumbnail: bool, as_base64: bool):
-    return {
-        image.id: load_image_for_display(image, as_thumbnail, as_base64)
-        for image in images
-    }
+    image_data = {}
+    for image in images:
+        try:
+            image_data[image.id] = load_image_for_display(image, as_thumbnail, as_base64)
+        except TIFFPreviewError as exc:
+            if not as_base64:
+                raise
+            logger.warning("Skipping image %s with unsupported TIFF preview: %s", image.id, exc.detail)
+    return image_data
 
 
 async def save_image_to_disk(
@@ -148,7 +349,7 @@ async def save_image_to_disk(
         content = await image.read()
         try:
             img = Image.open(io.BytesIO(content))
-        except (OSError, UnidentifiedImageError, ValueError) as exc:
+        except _TIFF_IMAGE_ERRORS as exc:
             if Path(image.filename).suffix.lower() in {".tif", ".tiff"}:
                 raise TIFFPreviewError("Could not read this TIFF image.") from exc
             raise
@@ -159,7 +360,7 @@ async def save_image_to_disk(
             except TIFFPreviewError:
                 img.close()
                 raise
-            except (OSError, ValueError, SyntaxError) as exc:
+            except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
                 img.close()
                 raise TIFFPreviewError("Could not decode this TIFF image for browser preview.") from exc
     elif isinstance(image, np.ndarray):
@@ -181,6 +382,11 @@ async def save_image_to_disk(
     thumbnail.thumbnail((500, 500))
     thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
     thumbnail.save(thumbnail_path)
+    if is_tiff:
+        try:
+            _write_tiff_preview_cache(file_path, thumbnail_path, display_preview)
+        except OSError as exc:
+            logger.warning("Could not cache TIFF preview for %s: %s", file_path, exc)
 
     logger.info(f"Saved image to disk at {file_path} and thumbnail at {thumbnail_path}.")
     return native_width, native_height, color_mode
@@ -313,6 +519,10 @@ async def delete_image(
         os.remove(image.file_path)  # Remove the original image file
     if os.path.exists(image.thumbnail_file_path):
         os.remove(image.thumbnail_file_path)  # Remove the thumbnail
+    clear_tiff_preview_cache(
+        image.thumbnail_file_path,
+        (image.file_path, image.thumbnail_file_path),
+    )
     db.delete(image)
     db.commit()
 

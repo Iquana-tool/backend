@@ -1,7 +1,7 @@
 import json
 import logging
 
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Response
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -61,6 +61,9 @@ async def upload_images(
         user: AuthenticatedUser = Depends(require(Permission.IMAGE_UPLOAD)),
 ):
     dataset = await datasets_db.get_dataset(dataset_id, db=db)
+    for file in files:
+        await images_db.validate_tiff_upload(file)
+
     image_ids = []
 
     for file in files:
@@ -204,10 +207,18 @@ async def get_image_file(
     """
     row = db.query(Images.file_path, Images.thumbnail_file_path).filter(Images.id == image_id).first()
     path = row.thumbnail_file_path if thumbnail else row.file_path
-    preview = await run_in_threadpool(images_db.tiff_preview_bytes, path)
-    if preview is not None:
-        return Response(
-            preview,
+    if thumbnail:
+        await run_in_threadpool(
+            images_db.ensure_tiff_thumbnail_preview,
+            row.file_path,
+            row.thumbnail_file_path,
+        )
+    preview_path = await run_in_threadpool(
+        images_db.tiff_preview_file, path, row.thumbnail_file_path
+    )
+    if preview_path is not None:
+        return FileResponse(
+            preview_path,
             media_type="image/png",
             headers={"Cache-Control": "private, max-age=31536000, immutable"},
         )
@@ -255,10 +266,13 @@ async def get_base64_images(
     """
     image_ids = json.loads(image_ids)
     _check_image_batch(image_ids, user, Permission.IMAGE_READ, db)
+    images = await images_db.get_images_data(
+        image_ids, as_thumbnail=False, as_base64=True, db=db
+    )
     return {
         "success": True,
-        "message": f"Successfully retrieved {len(image_ids)} images.",
-        "images": await images_db.get_images_data(image_ids, as_thumbnail=False, as_base64=True, db=db)
+        "message": f"Successfully retrieved {len(images)} images.",
+        "images": images,
     }
 
 
@@ -280,10 +294,13 @@ async def get_base64_thumbnails(
     """
     image_ids = json.loads(image_ids)
     _check_image_batch(image_ids, user, Permission.IMAGE_READ, db)
+    images = await images_db.get_images_data(
+        image_ids, as_thumbnail=True, as_base64=True, db=db
+    )
     return {
         "success": True,
-        "message": f"Successfully retrieved {len(image_ids)} images.",
-        "images": await images_db.get_images_data(image_ids, as_thumbnail=True, as_base64=True, db=db)
+        "message": f"Successfully retrieved {len(images)} images.",
+        "images": images,
     }
 
 
