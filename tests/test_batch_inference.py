@@ -1004,3 +1004,211 @@ def test_preview_roi_is_refused_for_a_model_that_declares_none(ctx, monkeypatch)
         planning.create_job(ctx["db"], ctx["dataset"].id, "tester", body)
     assert excinfo.value.status_code == 400
     assert "does not support explicit ROI" in excinfo.value.detail
+
+
+@pytest.mark.parametrize("task", planning.PREVIEW_TASKS)
+def test_concept_preview_accepts_every_instance_producing_task(ctx, monkeypatch, task):
+    from app.services.inference.contract_resolver import resolve_input_contract
+
+    contract, provenance = resolve_input_contract(None, task)
+    monkeypatch.setattr(planning, "model_catalog", lambda *args, **kwargs: ModelCatalog(
+        models=[ModelOption(registry_key="concept", name="Concept", task=task,
+                            input_contract=contract, provenance=provenance)],
+    ))
+    body = InferenceJobCreate(
+        dataset_id=ctx["dataset"].id,
+        steps=[InferenceStepRequest(label_id=ctx["cell"].id, model_registry_key="concept",
+                                    task=task, use_hierarchy=False)],
+        result_mode="preview", image_selection="custom", image_ids=[ctx["images"][0].id],
+    )
+    job = planning.create_job(ctx["db"], ctx["dataset"].id, "cur", body)
+    assert job.plan_steps[0]["task"] == task
+    assert job.plan_steps[0]["use_hierarchy"] is False
+    assert job.plan_steps[0]["input_contract"]["task"] == task
+
+
+def test_hierarchy_preview_missing_parents_is_explicit_before_scheduling(ctx, monkeypatch):
+    _stub_catalog(monkeypatch, ctx)
+    body = InferenceJobCreate(
+        dataset_id=ctx["dataset"].id,
+        steps=[InferenceStepRequest(label_id=ctx["nucleus"].id, model_registry_key="m2f",
+                                    use_hierarchy=True)],
+        result_mode="preview", image_selection="custom", image_ids=[ctx["images"][1].id],
+    )
+    with pytest.raises(HTTPException, match="requires at least one saved immediate parent"):
+        planning.create_job(ctx["db"], ctx["dataset"].id, "cur", body)
+    assert ctx["db"].query(InferenceJobs).count() == 0
+
+
+def test_hierarchy_preview_uses_immediate_parents_and_selected_ancestor_scope(ctx):
+    db = ctx["db"]
+    grandchild = Labels(dataset_id=ctx["dataset"].id, name="subnucleus", value=4,
+                        parent_id=ctx["nucleus"].id)
+    db.add(grandchild)
+    other_cell = db_contour(ctx["masks"][0].id, box(0.6, 0.6, 0.9, 0.9), label_id=ctx["cell"].id)
+    db.add(other_cell)
+    db.flush()
+    parents = [
+        db_contour(ctx["masks"][0].id, box(0.15, 0.15, 0.25, 0.25),
+                   label_id=ctx["nucleus"].id, parent_id=ctx["existing"].id),
+        db_contour(ctx["masks"][0].id, box(0.65, 0.65, 0.75, 0.75),
+                   label_id=ctx["nucleus"].id, parent_id=other_cell.id),
+    ]
+    db.add_all(parents)
+    db.commit()
+    request = step(grandchild.id, level=2, parent_label_id=ctx["nucleus"].id).model_copy(
+        update={"use_hierarchy": True},
+    )
+    resolve = lambda current: planning.preview_parent_contours(
+        db, ctx["dataset"].id, ctx["images"][0].id, current,
+    )
+    assert [parent.id for parent in resolve(request)] == [parent.id for parent in parents]
+    assert [parent.id for parent in resolve(request.model_copy(update={
+        "roi_contour_ids": [ctx["existing"].id],
+    }))] == [parents[0].id]
+    assert [parent.id for parent in resolve(request.model_copy(update={
+        "roi_contour_ids": [parents[1].id],
+    }))] == [parents[1].id]
+    with pytest.raises(HTTPException, match="saved, non-temporary contours"):
+        planning.preview_parent_contours(db, ctx["dataset"].id, ctx["images"][1].id,
+                                        request.model_copy(update={"roi_contour_ids": [parents[0].id]}))
+    unrelated = db_contour(ctx["masks"][0].id, box(0.1, 0.1, 0.9, 0.9), label_id=ctx["debris"].id)
+    db.add(unrelated)
+    db.flush()
+    with pytest.raises(HTTPException, match="ancestor label"):
+        resolve(request.model_copy(update={"roi_contour_ids": [unrelated.id]}))
+
+
+@pytest.mark.parametrize("task,response_function", [
+    ("instance-segmentation", "_instance_segmentation_response"),
+    ("instance-suggestion", "_instance_suggestion_response"),
+    ("cross-image-suggestion", "_cross_image_response"),
+])
+def test_hierarchy_preview_transports_individual_regions_and_parent_ids(ctx, monkeypatch, task, response_function):
+    from app.services.inference.contract_resolver import resolve_input_contract
+
+    db = ctx["db"]
+    second = db_contour(ctx["masks"][0].id, box(0.6, 0.6, 0.9, 0.9), label_id=ctx["cell"].id)
+    db.add(second)
+    db.commit()
+    request = ResolvedStep(
+        label_id=ctx["nucleus"].id, model_registry_key="concept", task=task,
+        level=1, parent_label_id=ctx["cell"].id, label_name="nucleus", model_name="Concept",
+        input_contract=resolve_input_contract(None, task)[0], use_hierarchy=True,
+    )
+    captured = {}
+
+    def response(_db, current, _image, _username):
+        captured["parameters"] = current.inputs["parameters"]
+        result = []
+        for index, parent in enumerate([ctx["existing"], second]):
+            contour = box(parent.x[0] + 0.02, parent.y[0] + 0.02,
+                          parent.x[1] - 0.02, parent.y[2] - 0.02)
+            contour.parent_id = parent.id
+            result.append({**contour.model_dump(), "source_instance_id": f"instance-{index}"})
+        return {"result": result, "prediction_metadata": {
+            "instances": [{"source_instance_id": "instance-0"}, {"source_instance_id": "instance-1"}],
+        }}
+
+    monkeypatch.setattr(execution, response_function, response)
+    before = db.query(Contours).count()
+    result = execution.run_preview_unit(db, request, ctx["images"][0], "cur")
+    regions = captured["parameters"]["hierarchy_regions"]
+    assert [region["parent_id"] for region in regions] == [ctx["existing"].id, second.id]
+    assert all(region["mask"]["size"] == [100, 100] for region in regions)
+    assert "parent_regions" not in captured["parameters"]
+    assert [contour["parent_id"] for contour in result["contours"]] == [ctx["existing"].id, second.id]
+    assert [contour["source_instance_id"] for contour in result["contours"]] == ["instance-0", "instance-1"]
+    assert len(result["prediction_metadata"]["instances"]) == 2
+    assert db.query(Contours).count() == before
+
+
+@pytest.mark.parametrize("use_hierarchy,label", [(True, "cell"), (False, "nucleus")])
+def test_root_or_disabled_hierarchy_runs_whole_image(ctx, monkeypatch, use_hierarchy, label):
+    request = step(ctx[label].id, level=0 if label == "cell" else 1,
+                   parent_label_id=None if label == "cell" else ctx["cell"].id).model_copy(
+        update={"use_hierarchy": use_hierarchy,
+                "inputs": {"parameters": {"parent_regions": ["stale"], "hierarchy_regions": ["stale"]}}},
+    )
+    captured = {}
+    monkeypatch.setattr(execution, "_instance_segmentation_response",
+                        lambda db, current, image, username: captured.update(parameters=current.inputs["parameters"]) or [])
+    execution.run_preview_unit(ctx["db"], request, ctx["images"][0], "cur")
+    assert "parent_regions" not in captured["parameters"]
+    assert "hierarchy_regions" not in captured["parameters"]
+
+
+def test_hierarchy_preview_rechecks_parents_at_execution(ctx, monkeypatch):
+    request = step(ctx["nucleus"].id, level=1, parent_label_id=ctx["cell"].id).model_copy(
+        update={"use_hierarchy": True},
+    )
+    monkeypatch.setattr(execution, "_instance_segmentation_response",
+                        lambda *args: pytest.fail("Must not call the model without a saved parent"))
+    with pytest.raises(execution.InferenceUnitError, match="requires at least one saved immediate parent"):
+        execution.run_preview_unit(ctx["db"], request, ctx["images"][1], "cur")
+
+
+def test_instance_suggestion_preview_uses_same_image_label_exemplars(ctx, monkeypatch):
+    from app.services.inference.contract_resolver import resolve_input_contract
+
+    db = ctx["db"]
+    seeds = [
+        db_contour(ctx["masks"][index].id, box(0.15, 0.15, 0.25, 0.25), label_id=ctx["nucleus"].id)
+        for index in (0, 1)
+    ]
+    db.add_all(seeds)
+    db.commit()
+    captured = {}
+
+    class Service:
+        async def inference(self, request):
+            captured["request"] = request
+            return {"result": [box(0.25, 0.25, 0.3, 0.3).model_dump()]}
+
+    monkeypatch.setattr("app.services.ai_services.instance_suggestion.SuggestionService", Service)
+    request = ResolvedStep(
+        label_id=ctx["nucleus"].id, model_registry_key="same-image", task="instance-suggestion",
+        level=1, parent_label_id=ctx["cell"].id, label_name="nucleus", model_name="Same Image",
+        input_contract=resolve_input_contract(None, "instance-suggestion")[0], use_hierarchy=False,
+    )
+    result = execution.run_preview_unit(db, request, ctx["images"][0], "cur")
+    assert captured["request"].contour_ids == [seeds[0].id]
+    assert len(captured["request"].positive_exemplars) == 1
+    assert captured["request"].concept.id == ctx["nucleus"].id
+    assert captured["request"].exemplars[0].image_url == ctx["images"][0].file_path
+    assert result["contours"][0]["label_id"] == ctx["nucleus"].id
+
+
+def test_concept_preview_rejects_client_hierarchy_masks_and_off_roi(ctx):
+    def body(**fields):
+        return InferenceJobCreate(
+            dataset_id=ctx["dataset"].id,
+            steps=[InferenceStepRequest(label_id=ctx["nucleus"].id, model_registry_key="concept", **fields)],
+            result_mode="preview", image_selection="custom", image_ids=[ctx["images"][0].id],
+        )
+
+    with pytest.raises(ValueError, match="saved application outlines"):
+        body(inputs={"parameters": {"hierarchy_regions": [{"parent_id": 42}]}})
+    with pytest.raises(ValueError, match="enable use_hierarchy"):
+        body(use_hierarchy=False, roi_contour_ids=[ctx["existing"].id])
+
+
+def test_same_image_preview_does_not_borrow_required_exemplars_from_other_images(ctx, monkeypatch):
+    from app.services.inference.contract_resolver import resolve_input_contract
+
+    ctx["db"].add(db_contour(ctx["masks"][1].id, box(0.15, 0.15, 0.25, 0.25),
+                            label_id=ctx["nucleus"].id))
+    ctx["db"].commit()
+
+    class Service:
+        async def inference(self, request):
+            pytest.fail("Same-image conditioning must fail before calling the provider")
+
+    monkeypatch.setattr("app.services.ai_services.instance_suggestion.SuggestionService", Service)
+    request = ResolvedStep(
+        label_id=ctx["nucleus"].id, model_registry_key="same-image", task="instance-suggestion",
+        level=1, parent_label_id=ctx["cell"].id, label_name="nucleus", model_name="Same Image",
+        input_contract=resolve_input_contract(None, "instance-suggestion")[0], use_hierarchy=False,
+    )
+    with pytest.raises(execution.InferenceUnitError, match="Resolved 0 instance exemplar"):
+        execution.run_preview_unit(ctx["db"], request, ctx["images"][0], "cur")

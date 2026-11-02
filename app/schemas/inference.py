@@ -70,10 +70,9 @@ class ImageSelection(StrEnum):
     """The explicit `image_ids` given in the request."""
 
 
-#: Task surfaces a plan step may target. Both produce whole-image instance predictions;
-#: `cross-image-suggestion` additionally pulls exemplars from the embedding store, which is
-#: why it needs a retrieval strategy.
-InferenceTask = Literal["instance-segmentation", "cross-image-suggestion"]
+#: Instance-producing surfaces for batch or single-image concept segmentation. Interactive
+#: previews additionally support same-image instance suggestion; write jobs retain batch tasks.
+InferenceTask = Literal["instance-segmentation", "instance-suggestion", "cross-image-suggestion"]
 
 
 class InferenceStepRequest(BaseModel):
@@ -97,6 +96,11 @@ class InferenceStepRequest(BaseModel):
         default_factory=list,
         max_length=32,
         description="Saved same-image contours that explicitly bound preview inference.",
+    )
+    use_hierarchy: Optional[bool] = Field(
+        default=None,
+        description="Preview: run separately inside each saved immediate parent. False runs "
+                    "whole-image; omitted preserves legacy explicit ROI behavior.",
     )
 
     @field_validator("roi_contour_ids")
@@ -402,16 +406,20 @@ class InferenceJobCreate(BaseModel):
         if self.result_mode != ResultMode.PREVIEW:
             if any(step.roi_contour_ids for step in self.steps):
                 raise ValueError("roi_contour_ids are only supported for preview jobs.")
+            if any(step.use_hierarchy is not None for step in self.steps):
+                raise ValueError("use_hierarchy is only supported for preview jobs.")
             return self
 
         if self.options.write_mode != WriteMode.PATCH or self.confirm_replace:
             raise ValueError("Preview jobs cannot use replace mode or confirm_replace.")
         if self.image_selection != ImageSelection.CUSTOM or len(self.image_ids) != 1:
             raise ValueError("Preview jobs require image_selection='custom' and exactly one image_id.")
-        if len(self.steps) != 1 or self.steps[0].task != "instance-segmentation":
-            raise ValueError("Preview jobs require exactly one instance-segmentation step.")
+        if len(self.steps) != 1:
+            raise ValueError("Preview jobs require exactly one concept segmentation step.")
+        if self.steps[0].use_hierarchy is False and self.steps[0].roi_contour_ids:
+            raise ValueError("Whole-image inference cannot include roi_contour_ids; enable use_hierarchy.")
         parameters = (self.steps[0].inputs or {}).get("parameters") or {}
-        if "parent_regions" in parameters:
+        if {"parent_regions", "hierarchy_regions"}.intersection(parameters):
             raise ValueError("Preview ROIs must use roi_contour_ids from saved application outlines.")
         return self
 

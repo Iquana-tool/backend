@@ -159,7 +159,12 @@ async def create_job(
     """Validate an orchestration, freeze it into a work list, and hand it to Celery."""
     _ensure_job_permission(user, body.dataset_id, body.result_mode)
     if body.result_mode == ResultMode.PREVIEW:
-        ensure_tool_enabled(body.dataset_id, AiTool.INSTANCE_SEGMENTATION, db)
+        tool = {
+            "instance-segmentation": AiTool.INSTANCE_SEGMENTATION,
+            "instance-suggestion": AiTool.INSTANCE_SUGGESTION,
+            "cross-image-suggestion": AiTool.CROSS_IMAGE,
+        }[body.steps[0].task]
+        ensure_tool_enabled(body.dataset_id, tool, db)
     else:
         ensure_tool_enabled(body.dataset_id, AiTool.BATCH_INFERENCE, db)
     if body.options.write_mode == WriteMode.REPLACE:
@@ -313,7 +318,12 @@ async def cancel_job(
         .first()
         is not None
     )
-    unreachable = job.started_at is None or job.status == "cancelling" or not has_started_item
+    unreachable = (
+        job.started_at is None
+        or job.status == "cancelling"
+        or not has_started_item
+        or job.result_mode == ResultMode.PREVIEW.value
+    )
     if job.result_mode == ResultMode.PREVIEW.value:
         clear_preview_predictions(job)
     if unreachable:

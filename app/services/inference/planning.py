@@ -60,6 +60,7 @@ logger = getLogger(__name__)
 #: of model a plan step can be bound to. Prompted segmentation is excluded on purpose: it
 #: needs a click or a box per object, which nobody is there to give in a batch run.
 BATCH_TASKS: tuple[str, ...] = ("instance-segmentation", "cross-image-suggestion")
+PREVIEW_TASKS: tuple[str, ...] = (*BATCH_TASKS, "instance-suggestion")
 
 
 # --------------------------------------------------------------------------- #
@@ -257,7 +258,8 @@ def resolve_scope(db: Session, dataset_id: int, body: InferenceJobCreate) -> lis
 # Steps
 # --------------------------------------------------------------------------- #
 def resolve_steps(
-    db: Session, dataset_id: int, steps: list[InferenceStepRequest]
+    db: Session, dataset_id: int, steps: list[InferenceStepRequest],
+    *, tasks: tuple[str, ...] = BATCH_TASKS,
 ) -> list[ResolvedStep]:
     """Validate each step against the dataset and the registry, then order by hierarchy.
 
@@ -280,10 +282,10 @@ def resolve_steps(
 
     resolved: list[ResolvedStep] = []
     for step in steps:
-        if step.task not in BATCH_TASKS:
+        if step.task not in tasks:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
-                f"Task '{step.task}' is not a valid batch inference task. Batch tasks: {BATCH_TASKS}.",
+                f"Task '{step.task}' is not available for this run. Allowed tasks: {tasks}.",
             )
         label = labels.get(step.label_id)
         if label is None or step.label_id not in levels:
@@ -327,6 +329,7 @@ def resolve_steps(
             roi_input=option.roi_input,
             min_confidence=step.min_confidence,
             roi_contour_ids=list(step.roi_contour_ids),
+            use_hierarchy=step.use_hierarchy,
         ))
 
     resolved.sort(key=lambda step: (step.level, step.label_name.lower()))
@@ -448,7 +451,10 @@ def create_job(
             "Wait for it to finish or cancel it first.",
         )
 
-    steps = resolve_steps(db, dataset_id, body.steps)
+    steps = resolve_steps(
+        db, dataset_id, body.steps,
+        tasks=PREVIEW_TASKS if body.result_mode.value == "preview" else BATCH_TASKS,
+    )
     image_ids = resolve_scope(db, dataset_id, body)
     if not image_ids:
         raise HTTPException(
@@ -459,6 +465,8 @@ def create_job(
         if len(image_ids) != 1:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Preview jobs must resolve to one image.")
         _validate_preview_roi(db, dataset_id, image_ids[0], steps[0])
+        if steps[0].use_hierarchy and steps[0].parent_label_id is not None:
+            preview_parent_contours(db, dataset_id, image_ids[0], steps[0])
 
     job = InferenceJobs(
         dataset_id=dataset_id,
@@ -494,7 +502,7 @@ def create_job(
 
 def _preview_roi_label_ids(db: Session, dataset_id: int, step: ResolvedStep) -> set[int]:
     """Return the permitted labels for an explicitly selected preview ROI."""
-    if not step.roi_input or step.task != "instance-segmentation":
+    if not step.use_hierarchy and (not step.roi_input or step.task != "instance-segmentation"):
         return {step.parent_label_id} if step.parent_label_id is not None else set()
 
     # An ROI is a broad, explicitly chosen region (e.g. a coral fragment around polyps), so
@@ -526,7 +534,7 @@ def _validate_preview_roi(db: Session, dataset_id: int, image_id: int, step: Res
     if not step.roi_contour_ids:
         return
 
-    if not step.roi_input:
+    if not step.roi_input and not step.use_hierarchy:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"Model '{step.model_registry_key}' does not support explicit ROI selections.",
@@ -552,7 +560,7 @@ def _validate_preview_roi(db: Session, dataset_id: int, image_id: int, step: Res
             f"ROI contours must be saved, non-temporary contours on image {image_id}: {missing[:10]}",
         )
 
-    ancestor_mode = bool(step.roi_input) and step.task == "instance-segmentation"
+    ancestor_mode = bool(step.use_hierarchy) or (bool(step.roi_input) and step.task == "instance-segmentation")
     allowed_label_ids = _preview_roi_label_ids(db, dataset_id, step)
     if step.parent_label_id is not None or ancestor_mode:
         wrong_label = [
@@ -571,3 +579,46 @@ def _validate_preview_roi(db: Session, dataset_id: int, image_id: int, step: Res
                 status.HTTP_400_BAD_REQUEST,
                 f"{detail}{sorted(wrong_label)[:10]}",
             )
+
+
+def preview_parent_contours(
+    db: Session, dataset_id: int, image_id: int, step: ResolvedStep,
+) -> list[Contours]:
+    """Resolve saved immediate parents, narrowed by selected ancestor instances."""
+    _validate_preview_roi(db, dataset_id, image_id, step)
+    if step.parent_label_id is None:
+        return []
+    rows = (
+        db.query(Contours)
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .filter(
+            Images.dataset_id == dataset_id,
+            Images.id == image_id,
+            Contours.temporary.is_(False),
+        )
+        .order_by(Contours.id)
+        .all()
+    )
+    by_id = {row.id: row for row in rows}
+    selected = set(step.roi_contour_ids)
+
+    def in_scope(row: Contours) -> bool:
+        if not selected:
+            return True
+        visited: set[int] = set()
+        while row is not None and row.id not in visited:
+            if row.id in selected:
+                return True
+            visited.add(row.id)
+            row = by_id.get(row.parent_id)
+        return False
+
+    parents = [row for row in rows if row.label_id == step.parent_label_id and in_scope(row)]
+    if not parents:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Use hierarchy requires at least one saved immediate parent in the selected scope. "
+            "Draw a parent first or turn off Use hierarchy for whole-image inference.",
+        )
+    return parents

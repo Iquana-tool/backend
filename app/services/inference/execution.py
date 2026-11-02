@@ -69,13 +69,15 @@ class InferenceUnitError(RuntimeError):
 def predict(db: Session, step: ResolvedStep, image: Images, username: str) -> list[Contour]:
     """Ask the AI service for this step's instances on one image.
 
-    Both supported tasks return a list of contours in normalized coordinates. The difference
-    is only in how the request is built: an instance-segmentation model runs on the image
-    alone, while a cross-image model additionally needs exemplars retrieved from the
-    embedding store (which the gateway's cross-image orchestration assembles).
+    All task surfaces return contours in normalized coordinates. Each model's contract
+    determines whether conditioning comes from the label, this image, or dataset exemplars.
     """
     if step.task == "cross-image-suggestion":
         return _predict_cross_image(db, step, image, username)
+    if step.task == "instance-suggestion":
+        response = _instance_suggestion_response(db, step, image, username)
+        contours, _, _ = _mapped_instance_response(db, step, image, response)
+        return contours
     return _predict_instance_segmentation(db, step, image, username)
 
 
@@ -103,14 +105,47 @@ def _instance_segmentation_response(
         model_registry_key=step.model_registry_key,
         # Multiclass models honour this and return only the asked-for class; models that
         # ignore it are filtered gateway-side anyway (see filter_for_step).
-        label=Label.from_db(label_row) if label_row is not None else None,
+        label=cond_result.get("concept") or (Label.from_db(label_row) if label_row is not None else None),
         parameters=parameters,
         contour_ids=cond_result.get("contour_ids", []),
         positive_exemplars=cond_result.get("positive_exemplars", []),
         exemplars=cond_result.get("exemplars", []),
-        embeddings=cond_result.get("vectors", {}),
+        embeddings=cond_result.get("vectors", {}) if not cond_result.get("vectors_by_kind") else {},
+        exemplar_embeddings=cond_result.get("vectors_by_kind", {}),
     )
     return asyncio.run(InstanceSegmentationService().inference(request))
+
+
+def _instance_suggestion_response(
+    db: Session, step: ResolvedStep, image: Images, username: str,
+) -> dict[str, Any]:
+    from app.services.ai_services.instance_suggestion import SuggestionService
+    from app.services.inference.conditioning_dispatcher import dispatch_conditioning
+    from iquana_toolbox.schemas.networking.http.services import InstanceSuggestionRequest
+
+    conditioning = dispatch_conditioning(db, step, image, username)
+    label_row = db.get(Labels, step.label_id)
+    request = InstanceSuggestionRequest(
+        image_url=str(image.file_path),
+        user_id=username,
+        model_registry_key=step.model_registry_key,
+        concept=conditioning.get("concept") or (Label.from_db(label_row) if label_row is not None else None),
+        parameters=step.inputs.get("parameters", {}),
+        contour_ids=conditioning.get("contour_ids", []),
+        positive_exemplars=conditioning.get("positive_exemplars", []),
+        exemplars=conditioning.get("exemplars", []),
+        embeddings=conditioning.get("vectors", {}) if not conditioning.get("vectors_by_kind") else {},
+        exemplar_embeddings=conditioning.get("vectors_by_kind", {}),
+    )
+    return asyncio.run(SuggestionService().inference(request))
+
+
+def _preview_response(db: Session, step: ResolvedStep, image: Images, username: str):
+    if step.task == "instance-suggestion":
+        return _instance_suggestion_response(db, step, image, username)
+    if step.task == "cross-image-suggestion":
+        return _cross_image_response(db, step, image, username)
+    return _instance_segmentation_response(db, step, image, username)
 
 
 def _mapped_instance_response(
@@ -175,35 +210,76 @@ def run_preview_unit(
     username: str,
     options: Optional[InferenceOptions] = None,
 ) -> dict[str, Any]:
-    """Predict one image and return bounded-ready geometry without writing annotation rows."""
+    """Return mapped single-label predictions without writing annotation rows.
+
+    Explicit ``use_hierarchy=True`` resolves saved immediate parent instances and sends
+    native-size ``hierarchy_regions=[{parent_id, mask}]`` for AI-route orchestration.
+    Selected ancestor instances narrow that parent list; absent parents are an error.
+    False runs the whole image. Omitted retains the legacy provider-specific ROI path.
+    Parent IDs returned by orchestration must belong to the resolved parent list.
+    """
+    from fastapi import HTTPException
+    from app.services.inference.planning import _validate_preview_roi, preview_parent_contours
+
     parameters = dict((step.inputs or {}).get("parameters") or {})
-    if step.roi_contour_ids:
+    parameters.pop("hierarchy_regions", None)
+    parent_rows: list[Contours] = []
+    try:
+        _validate_preview_roi(db, image.dataset_id, image.id, step)
+        if step.use_hierarchy:
+            parameters.pop("parent_regions", None)
+            parent_rows = preview_parent_contours(db, image.dataset_id, image.id, step)
+            if parent_rows:
+                parameters["hierarchy_regions"] = [
+                    {
+                        "parent_id": parent.id,
+                        "mask": Contour(x=parent.x or [], y=parent.y or []).to_rle_encoding(
+                            image.height, image.width,
+                        ),
+                    }
+                    for parent in parent_rows
+                ]
+        elif step.use_hierarchy is False:
+            if step.roi_contour_ids:
+                raise InferenceUnitError("Whole-image inference cannot include ROI contours.")
+            parameters.pop("parent_regions", None)
+    except HTTPException as exc:
+        raise InferenceUnitError(str(exc.detail)) from exc
+
+    if step.use_hierarchy is None and step.roi_contour_ids:
         if step.roi_input == "parent_regions":
             parameters["parent_regions"] = _preview_roi_regions(db, step, image)
         else:
             raise InferenceUnitError(
                 f"Model '{step.model_registry_key}' does not support explicit ROI selections."
             )
-    else:
+    elif step.use_hierarchy is None:
         parameters.pop("parent_regions", None)
 
     preview_step = step.model_copy(update={
         "inputs": {**(step.inputs or {}), "parameters": parameters},
     })
     try:
-        response = _instance_segmentation_response(db, preview_step, image, username)
+        response = _preview_response(db, preview_step, image, username)
         contours, metadata, source_ids = _mapped_instance_response(
             db, preview_step, image, response
         )
     except Exception as exc:
         raise InferenceUnitError(_prediction_error(exc, step)) from exc
 
+    eligible_parent_ids = {parent.id for parent in parent_rows}
+    supplied_parents = {
+        id(contour): contour.parent_id for contour in contours
+        if contour.parent_id in eligible_parent_ids
+    }
     candidates = filter_for_step(
         contours, step, min_confidence=step.min_confidence or 0.0
     )
 
-    parent_rows: list[Contours] = []
-    if step.roi_contour_ids:
+    if step.use_hierarchy:
+        for candidate in candidates:
+            candidate.parent_id = supplied_parents.get(id(candidate))
+    elif step.roi_contour_ids:
         parent_rows = (
             db.query(Contours)
             .join(Masks, Masks.id == Contours.mask_id)
@@ -235,15 +311,16 @@ def run_preview_unit(
                     )
 
     if parent_rows and candidates:
-        if len(parent_rows) == 1 and step.roi_contour_ids:
+        if len(parent_rows) == 1 and step.roi_contour_ids and step.use_hierarchy is None:
             for candidate in candidates:
                 candidate.parent_id = parent_rows[0].id
         else:
             containment = 0.05
             if options is not None and "min_parent_containment" in options.model_fields_set:
                 containment = max(0.05, min(1.0, float(options.min_parent_containment)))
-            candidates, _ = attach_parents(
-                candidates,
+            unresolved = [candidate for candidate in candidates if candidate.parent_id is None]
+            attach_parents(
+                unresolved,
                 parent_rows,
                 options=InferenceOptions(
                     min_parent_containment=containment,
@@ -273,6 +350,12 @@ def run_preview_unit(
 def _predict_cross_image(
     db: Session, step: ResolvedStep, image: Images, username: str
 ) -> list[Contour]:
+    return _as_contours(_cross_image_response(db, step, image, username))
+
+
+def _cross_image_response(
+    db: Session, step: ResolvedStep, image: Images, username: str,
+):
     from app.services.ai_services.cross_image import CrossImageService
     from app.services.inference.conditioning_dispatcher import dispatch_conditioning
     from iquana_toolbox.schemas.networking.http.services import CrossImageSuggestionRequest
@@ -316,7 +399,7 @@ def _predict_cross_image(
         step.label_id,
         cond_kind,
     )
-    return _as_contours(asyncio.run(CrossImageService().inference(request)))
+    return asyncio.run(CrossImageService().inference(request))
 
 
 def _as_contours(response) -> list[Contour]:

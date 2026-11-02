@@ -788,7 +788,12 @@ async def test_model_catalog_endpoint_permissions(ctx, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_preview_jobs_use_interactive_permissions_and_are_owner_scoped(ctx, monkeypatch):
+@pytest.mark.parametrize("task,tool", [
+    ("instance-segmentation", "instance_segmentation"),
+    ("instance-suggestion", "instance_suggestion"),
+    ("cross-image-suggestion", "cross_image"),
+])
+async def test_preview_jobs_use_interactive_permissions_and_are_owner_scoped(ctx, monkeypatch, task, tool):
     """Annotators can run/read their own previews; viewers, writers, and other projects cannot."""
     from types import SimpleNamespace
     from app.services.inference import tasks
@@ -818,7 +823,8 @@ async def test_preview_jobs_use_interactive_permissions_and_are_owner_scoped(ctx
         return make_job(owner=username, result_mode=body.result_mode.value)
 
     monkeypatch.setattr(inference_router.planning, "create_job", fake_create_job)
-    monkeypatch.setattr(inference_router, "ensure_tool_enabled", lambda *args, **kwargs: None)
+    checked_tools = []
+    monkeypatch.setattr(inference_router, "ensure_tool_enabled", lambda dataset_id, tool, db: checked_tools.append(tool.value))
     monkeypatch.setattr(
         tasks.run_job,
         "apply_async",
@@ -827,7 +833,7 @@ async def test_preview_jobs_use_interactive_permissions_and_are_owner_scoped(ctx
 
     preview_body = InferenceJobCreate(
         dataset_id=dataset_id,
-        steps=[InferenceStepRequest(label_id=ctx["cell"].id, model_registry_key="cpsam")],
+        steps=[InferenceStepRequest(label_id=ctx["cell"].id, model_registry_key="concept", task=task)],
         result_mode=ResultMode.PREVIEW,
         image_selection=ImageSelection.CUSTOM,
         image_ids=[image_id],
@@ -837,6 +843,7 @@ async def test_preview_jobs_use_interactive_permissions_and_are_owner_scoped(ctx
     assert created.result_mode == ResultMode.PREVIEW
     assert created.created_by == "annotator"
     assert created.status == "pending"
+    assert checked_tools == [tool]
 
     # The preview creator can read the job through the same loader used by snapshot, items,
     # events, and cancellation routes.
@@ -866,3 +873,25 @@ async def test_preview_jobs_use_interactive_permissions_and_are_owner_scoped(ctx
     with pytest.raises(HTTPException) as other_project:
         inference_router._load_job(foreign_project_preview.id, db, annotator)
     assert other_project.value.status_code == 403
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("task,tool", [
+    ("instance-segmentation", "instance_segmentation"),
+    ("instance-suggestion", "instance_suggestion"),
+    ("cross-image-suggestion", "cross_image"),
+])
+async def test_preview_jobs_enforce_the_selected_task_tool_switch(ctx, monkeypatch, task, tool):
+    ctx["ds"].disabled_ai_tools = tool
+    ctx["db"].commit()
+    monkeypatch.setattr(inference_router.planning, "create_job",
+                        lambda *args: pytest.fail("Disabled task must be rejected before scheduling"))
+    body = InferenceJobCreate(
+        dataset_id=ctx["ds"].id,
+        steps=[InferenceStepRequest(label_id=ctx["cell"].id, model_registry_key="concept", task=task)],
+        result_mode="preview", image_selection="custom", image_ids=[ctx["img"].id],
+    )
+    with pytest.raises(HTTPException) as denied:
+        await inference_router.create_job(body, db=ctx["db"], user=ctx["get_auth_user"]("annotator"))
+    assert denied.value.status_code == 403
+    assert tool in denied.value.detail
