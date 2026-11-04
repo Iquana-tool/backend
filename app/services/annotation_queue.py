@@ -90,20 +90,24 @@ def image_states(db: Session, dataset_id: int) -> dict[int, str]:
     return dict(db.query(status_sq.c.image_id, status_sq.c.status).all())
 
 
-def _image_authors(db: Session, dataset_id: int) -> dict[int, set[str]]:
-    """Who has drawn on each image (non-temporary objects with a known author)."""
+def _image_makers(db: Session, dataset_id: int) -> tuple[dict[int, set[str]],
+                                                         dict[int, set[str]]]:
+    """Who has made objects on each image, and which models (non-temporary objects)."""
     rows = (
-        db.query(Masks.image_id, Contours.author_username)
+        db.query(Masks.image_id, Contours.author_username, Contours.added_by)
         .join(Contours, Contours.mask_id == Masks.id)
         .join(Images, Images.id == Masks.image_id)
-        .filter(Images.dataset_id == dataset_id, Contours.temporary.is_(False),
-                Contours.author_username.isnot(None))
+        .filter(Images.dataset_id == dataset_id, Contours.temporary.is_(False))
         .distinct()
     )
     authors: dict[int, set[str]] = {}
-    for image_id, author in rows:
-        authors.setdefault(image_id, set()).add(author)
-    return authors
+    models: dict[int, set[str]] = {}
+    for image_id, author, added_by in rows:
+        if author:
+            authors.setdefault(image_id, set()).add(author)
+        if model := queue_core.model_of(added_by):
+            models.setdefault(image_id, set()).add(model)
+    return authors, models
 
 
 def _unit_state(unit: al_ranking.Unit, states: dict[int, str],
@@ -124,14 +128,15 @@ def _uploaded_units(db: Session, dataset_id: int) -> list[al_ranking.Unit]:
 
 
 def _filter_units(db: Session, dataset_id: int, units: list[al_ranking.Unit],
-                  settings: QueueSettings, username: str,
-                  authors: dict[int, set[str]]) -> list[al_ranking.Unit]:
+                  settings: QueueSettings, username: str, authors: dict[int, set[str]],
+                  models: dict[int, set[str]]) -> list[al_ranking.Unit]:
     """Keep units matching the metadata filter, the "By" filter and the confidence ceiling."""
     units = queue_core.filter_by_metadata(db, dataset_id, units, settings.metadata_filters,
                                           lambda u: u.image_ids)
     units = queue_core.filter_by_author(
         units, settings, username,
-        lambda u: set().union(*(authors.get(i, set()) for i in u.image_ids)))
+        lambda u: set().union(*(authors.get(i, set()) for i in u.image_ids)),
+        lambda u: set().union(*(models.get(i, set()) for i in u.image_ids)))
     if settings.max_confidence is not None:
         confidences = load_confidences(db, [i for u in units for i in u.image_ids],
                                        settings.trained_model)
@@ -148,15 +153,15 @@ def build_order(db: Session, dataset_id: int, username: str,
     """The queue's image ids and why each sits where it does."""
     models = required_models(settings)
     states = image_states(db, dataset_id)
-    authors = _image_authors(db, dataset_id)
+    authors, makers = _image_makers(db, dataset_id)
     units = _filter_units(db, dataset_id, _uploaded_units(db, dataset_id), settings,
-                          username, authors)
+                          username, authors, makers)
     by_state: dict[str, list[al_ranking.Unit]] = {"open": [], "others": [], "finished": []}
     for unit in units:
         state = _unit_state(unit, states, authors, username)
-        # Picking one person's work asks for images someone else started: sort them rather
-        # than set them aside.
-        if state == "others" and settings.by == "person":
+        # Picking one person's or one model's work asks for images someone else may have
+        # started: sort them rather than set them aside.
+        if state == "others" and settings.by in ("person", "model"):
             state = "open"
         by_state[state].append(unit)
 
@@ -271,5 +276,6 @@ def summarize(dataset_id: int, username: str, db: Session) -> AnnotationQueueSum
         saved_settings=_settings_of(row) if row else None,
         methods=queue_core.method_options(IMAGES),
         authors=queue_core.dataset_authors(db, dataset_id, exclude=username),
+        models=queue_core.dataset_models(db, dataset_id),
         recommended=queue_core.recommended_queue(db, dataset_id, "annotation"),
     )

@@ -17,9 +17,9 @@ Direction = Literal["ascending", "descending"]
 Need = Literal["embedding_model", "trained_model"]
 #: What a method sorts: whole images (a scan counts as one) or single objects.
 Sorts = Literal["images", "objects"]
-#: Whose work to keep. Relative to the person building the queue, so a recommended queue
-#: means the same for everyone who uses it.
-By = Literal["everyone", "mine", "others", "person"]
+#: Whose work to keep: people relative to the person building the queue (so a recommended
+#: queue means the same for everyone who uses it), or one person or model by name.
+By = Literal["everyone", "mine", "others", "person", "model"]
 
 #: The two queues, as keys of a dataset's recommended queues.
 QueueKind = Literal["annotation", "review"]
@@ -68,11 +68,16 @@ class SortSettings(BaseModel):
     )
     by: By = Field(
         "everyone",
-        description="Whose work to keep: 'mine' (I drew on it), 'others' (I did not), or "
-                    "'person' (``by_person`` drew on it). An image counts as someone's when "
-                    "they drew at least one object on it; an object, when they drew it.",
+        description="Whose work to keep: 'mine' (I drew on it), 'others' (I did not), "
+                    "'person' (``by_person`` drew on it) or 'model' (``by_model`` made it). "
+                    "An image counts as someone's when they made at least one object on it; "
+                    "an object, when they made it. A model's object stays the model's after "
+                    "a person edits or accepts it.",
     )
     by_person: str | None = Field(None, description="Username, for ``by='person'``.")
+    by_model: str | None = Field(
+        None, description="Model name as objects record it (``added_by``), for ``by='model'``."
+    )
 
     @field_validator("direction", mode="before")
     @classmethod
@@ -84,6 +89,8 @@ class SortSettings(BaseModel):
     def _person_needs_a_name(self):
         if self.by == "person" and not self.by_person:
             raise ValueError("Choose whose work to keep.")
+        if self.by == "model" and not self.by_model:
+            raise ValueError("Choose which model's work to keep.")
         return self
 
 

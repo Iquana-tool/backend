@@ -428,6 +428,18 @@ def test_by_filter_keeps_whose_objects_were_asked_for(ctx):
     assert ids() == [c["a"], c["b"], c["c"]]
 
 
+def test_by_model_keeps_what_a_model_made_even_once_accepted(ctx):
+    db, c = ctx["db"], ctx["contours"]
+    # A person accepted (and so authored) the model's object; it still counts as the model's.
+    db.query(Contours).filter_by(id=c["c"]).one().added_by = "sam3"
+    db.commit()
+
+    queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
+        granularity=ReviewGranularity.HIERARCHY, by="model", by_model="sam3"), db, "rev")
+    assert [i.contour_id for i in queue.instances] == [c["c"]]
+    assert summarize(ctx["dataset_id"], db, "rev").models == ["sam3"]
+
+
 def test_summary_names_other_authors_and_the_independent_review_rule(ctx):
     db = ctx["db"]
     db.query(Datasets).filter_by(id=ctx["dataset_id"]).one().require_independent_review = True

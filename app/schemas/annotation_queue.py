@@ -70,6 +70,9 @@ class AnnotationQueueSummary(BaseModel):
     authors: list[str] = Field(
         default_factory=list, description="Other people who drew here, for the 'By' filter."
     )
+    models: list[str] = Field(
+        default_factory=list, description="Models that made objects here, for the 'By' filter."
+    )
     recommended: RecommendedQueue | None = Field(
         None, description="The settings a curator recommends for this dataset, if any."
     )

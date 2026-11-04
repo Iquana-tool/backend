@@ -28,6 +28,7 @@ from app.database.images import Images
 from app.database.masks import Masks
 from app.schemas.queue import QueueKind, QueueMethodOption, RecommendedQueue, SortSettings
 from app.services import al_ranking
+from app.services.provenance import MANUAL_ADDED_BY
 from app.services.database_access.image_metadata import (
     filter_image_ids,
     get_metadata_for_dataset,
@@ -89,31 +90,52 @@ def filter_by_confidence(units: list[T], max_confidence: float | None,
     return [u for u in units if confidence_of(u) < max_confidence]
 
 
+def model_of(added_by: str | None) -> str | None:
+    """The model that made an object, from its ``added_by``; None when a person drew it."""
+    name = (added_by or "").strip()
+    return None if name in MANUAL_ADDED_BY else name
+
+
 def filter_by_author(units: list[T], settings: SortSettings, username: str | None,
-                     authors_of: Callable[[T], set[str]]) -> list[T]:
-    """Keep units by the people the settings' ``by`` picks; ``authors_of`` is who drew the
-    unit (everyone who drew on an image, or an object's author)."""
+                     authors_of: Callable[[T], set[str]],
+                     models_of: Callable[[T], set[str]]) -> list[T]:
+    """Keep units by the people or the model the settings' ``by`` picks. ``authors_of`` is
+    who made the unit (everyone who made objects on an image, or an object's author) and
+    ``models_of`` which models made it."""
     if settings.by == "everyone":
         return units
     if settings.by == "person":
         return [u for u in units if settings.by_person in authors_of(u)]
+    if settings.by == "model":
+        return [u for u in units if settings.by_model in models_of(u)]
     mine = settings.by == "mine"
     return [u for u in units if (username in authors_of(u)) == mine]
+
+
+def _dataset_objects(db: Session, dataset_id: int, column):
+    return (
+        db.query(column)
+        .join(Masks, Masks.id == Contours.mask_id)
+        .join(Images, Images.id == Masks.image_id)
+        .filter(Images.dataset_id == dataset_id, Contours.temporary.is_(False),
+                column.isnot(None))
+        .distinct()
+    )
 
 
 def dataset_authors(db: Session, dataset_id: int, exclude: str | None = None) -> list[str]:
     """Everyone who has drawn an object in the dataset, for the builder's "By" list. Built
     from the work itself, so it needs no permission to list members and names only people
     the filter can match."""
-    rows = (
-        db.query(Contours.author_username)
-        .join(Masks, Masks.id == Contours.mask_id)
-        .join(Images, Images.id == Masks.image_id)
-        .filter(Images.dataset_id == dataset_id, Contours.temporary.is_(False),
-                Contours.author_username.isnot(None))
-        .distinct()
-    )
+    rows = _dataset_objects(db, dataset_id, Contours.author_username)
     return sorted(author for (author,) in rows if author != exclude)
+
+
+def dataset_models(db: Session, dataset_id: int) -> list[str]:
+    """Every model that has made an object in the dataset, for the builder's "By" list."""
+    models = {model_of(added_by) for (added_by,) in
+              _dataset_objects(db, dataset_id, Contours.added_by)}
+    return sorted(m for m in models if m)
 
 
 def recommended_queue(db: Session, dataset_id: int, kind: QueueKind) -> RecommendedQueue | None:

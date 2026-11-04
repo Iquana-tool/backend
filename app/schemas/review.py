@@ -267,6 +267,9 @@ class ReviewSummary(BaseModel):
     authors: list[str] = Field(
         default_factory=list, description="Other people who drew here, for the 'By' filter."
     )
+    models: list[str] = Field(
+        default_factory=list, description="Models that made objects here, for the 'By' filter."
+    )
     require_independent_review: bool = Field(
         False, description="The builder then starts on 'others': you cannot approve your own work."
     )

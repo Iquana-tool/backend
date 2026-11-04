@@ -409,10 +409,27 @@ def test_by_filter_keeps_whose_work_was_asked_for(db):
     assert summary.authors == ["bob"]
 
 
+def test_by_model_keeps_images_a_model_made_objects_on(db):
+    ds = make_dataset(db)
+    by_model = make_image(db, ds, "model.png", state="in_progress", author="bob")
+    by_hand = make_image(db, ds, "hand.png", state="in_progress", author="bob")
+    mask_id = db.query(Masks.id).filter_by(image_id=by_model.id).scalar()
+    db.query(Contours).filter_by(mask_id=mask_id).one().added_by = "sam3"
+    db.commit()
+    # Bob started the image, but asking for the model's work sorts it rather than setting
+    # it aside.
+    queue = build(db, ds, "as_uploaded", by="model", by_model="sam3")
+    assert queue.image_ids == [by_model.id]
+    assert by_hand.id not in queue.image_ids
+    assert summarize(ds.id, "ann", db).models == ["sam3"]
+
+
 def test_by_person_needs_a_name():
     import pydantic
     with pytest.raises(pydantic.ValidationError):
         QueueSettings(method="as_uploaded", by="person")
+    with pytest.raises(pydantic.ValidationError):
+        QueueSettings(method="as_uploaded", by="model")
 
 
 def test_recommended_annotation_queue_must_build_and_keeps_kinds_apart(db):

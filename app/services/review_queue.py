@@ -59,6 +59,7 @@ class QueueCandidate:
     confidence: float
     reviewed: bool  # True once anyone has approved it.
     author: str | None = None
+    model: str | None = None  # The model that made it; None when a person drew it.
 
     @property
     def key(self) -> int:
@@ -109,6 +110,7 @@ def _collect_candidates(dataset_id: int, db: Session,
             Contours.label_id,
             Contours.confidence_score,
             Contours.author_username,
+            Contours.added_by,
             Masks.image_id,
             Contours.reviewed_by.any().label("reviewed"),
         )
@@ -155,6 +157,7 @@ def _collect_candidates(dataset_id: int, db: Session,
             confidence=row.confidence_score,
             reviewed=bool(row.reviewed),
             author=row.author_username,
+            model=queue_core.model_of(row.added_by),
         )
         for row in rows
     ]
@@ -193,7 +196,8 @@ def build_queue(dataset_id: int, request: ReviewQueueRequest,
                                                request.metadata_filters,
                                                lambda c: (c.image_id,))
     candidates = queue_core.filter_by_author(candidates, request, username,
-                                             lambda c: {c.author} if c.author else set())
+                                             lambda c: {c.author} if c.author else set(),
+                                             lambda c: {c.model} if c.model else set())
     echo = dict(granularity=request.granularity, method=methods[0].key,
                 direction=direction, include_reviewed=request.include_reviewed)
 
@@ -269,6 +273,7 @@ def summarize(dataset_id: int, db: Session, username: str | None = None) -> Revi
         open_rejections=open_rejections,
         methods=queue_core.method_options(OBJECTS),
         authors=queue_core.dataset_authors(db, dataset_id, exclude=username),
+        models=queue_core.dataset_models(db, dataset_id),
         recommended=queue_core.recommended_queue(db, dataset_id, "review"),
         require_independent_review=bool(
             db.query(Datasets.require_independent_review).filter_by(id=dataset_id).scalar()),
