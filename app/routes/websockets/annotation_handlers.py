@@ -7,8 +7,10 @@ service modules (for persistence), and sends a ``ServerMessage`` back to the cli
 """
 
 from logging import getLogger
+from typing import Any
 from uuid import uuid4
 
+import numpy as np
 from fastapi.websockets import WebSocket
 from iquana_toolbox.inference import nms
 from iquana_toolbox.schemas.database.contours import Contour
@@ -23,6 +25,7 @@ from app.database import get_context_session
 from app.database.contours import Contours
 from app.database.ai_suggestions import SuggestionSource
 from app.database.masks import Masks
+from app.database.labels import Labels
 from app.routes.websockets.messaging import send_msg
 from app.services.ai_services.instance_suggestion import SuggestionService
 from app.services.ai_services.instance_segmentation import InstanceSegmentationService
@@ -48,6 +51,60 @@ from app.services.database_access import labels as labels_db
 from app.services.database_access import masks as masks_db
 
 logger = getLogger(__name__)
+
+# Accepted instance-segmentation predictions arrive one at a time. Re-running a model
+# should keep the first saved outline instead of letting hierarchy fitting cut the new
+# one into a crescent around it -- the interactive counterpart of batch inference's
+# patch-mode suppression, and like it independent of which model predicted.
+_DUPLICATE_INTERSECTION_THRESHOLD = 0.3
+_PAIR_RASTER_SIZE = 512
+
+
+def _intersection_over_smaller(first: Contour, second: Contour) -> float:
+    """Return overlap / smaller area using a pair-local raster for small outlines.
+
+    A whole-image raster undersamples tiny polyps, while IoU misses a smaller or
+    shifted prediction that mostly lands inside an existing outline. The pair's
+    shared bounding box is normalized onto a bounded raster, preserving detail
+    without allocating a full-image-sized mask.
+    """
+    first_points = np.asarray(list(zip(first.x, first.y)), dtype=np.float64)
+    second_points = np.asarray(list(zip(second.x, second.y)), dtype=np.float64)
+    if (len(first_points) < 3 or len(second_points) < 3
+            or not np.isfinite(first_points).all() or not np.isfinite(second_points).all()):
+        return 0.0
+
+    first_min, first_max = first_points.min(axis=0), first_points.max(axis=0)
+    second_min, second_max = second_points.min(axis=0), second_points.max(axis=0)
+    if np.any(first_max < second_min) or np.any(second_max < first_min):
+        return 0.0
+
+    all_points = np.vstack((first_points, second_points))
+    lower, upper = all_points.min(axis=0), all_points.max(axis=0)
+    span = upper - lower
+    if np.any(span <= 0):
+        return 0.0
+
+    def local_mask(contour: Contour, points: np.ndarray) -> np.ndarray:
+        normalized = (points - lower) / span
+        local = contour.model_copy(update={
+            "x": normalized[:, 0].tolist(),
+            "y": normalized[:, 1].tolist(),
+        })
+        return local.to_binary_mask(
+            height=_PAIR_RASTER_SIZE,
+            width=_PAIR_RASTER_SIZE,
+        )
+
+    first_mask = local_mask(first, first_points)
+    second_mask = local_mask(second, second_points)
+    first_area = int(np.count_nonzero(first_mask))
+    second_area = int(np.count_nonzero(second_mask))
+    smaller_area = min(first_area, second_area)
+    if smaller_area == 0:
+        return 0.0
+    intersection = int(np.count_nonzero(first_mask & second_mask))
+    return intersection / smaller_area
 
 
 def session_user(state: AnnotationSessionState, db):
@@ -304,11 +361,260 @@ async def handle_unselect_refinement_object(websocket: WebSocket, client_msg: Cl
     ))
 
 
+def _is_point_in_polygon(px: float, py: float, poly_x: list[float], poly_y: list[float]) -> bool:
+    inside = False
+    n = len(poly_x)
+    if n < 3 or len(poly_y) != n:
+        return False
+    j = n - 1
+    for i in range(n):
+        xi, yi = poly_x[i], poly_y[i]
+        xj, yj = poly_x[j], poly_y[j]
+        intersect = ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi) + xi)
+        if intersect:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _contour_spatially_contains(parent: Any, child: Any) -> bool:
+    px = getattr(parent, "x", None) or []
+    py = getattr(parent, "y", None) or []
+    cx_list = getattr(child, "x", None) or []
+    cy_list = getattr(child, "y", None) or []
+    if len(px) < 3 or len(py) != len(px) or not cx_list or not cy_list:
+        return False
+    cx = sum(cx_list) / len(cx_list)
+    cy = sum(cy_list) / len(cy_list)
+    return _is_point_in_polygon(cx, cy, px, py)
+
+
+def _polygon_area(poly_x: list[float], poly_y: list[float]) -> float:
+    n = len(poly_x)
+    if n < 3 or len(poly_y) != n:
+        return 0.0
+    area = 0.0
+    j = n - 1
+    for i in range(n):
+        area += (poly_x[j] + poly_x[i]) * (poly_y[j] - poly_y[i])
+        j = i
+    return abs(area) / 2.0
+
+
+def _contour_area(c: Any) -> float:
+    area = getattr(c, "area", None)
+    if area is not None and isinstance(area, (int, float)):
+        return float(area)
+    x = getattr(c, "x", None) or []
+    y = getattr(c, "y", None) or []
+    return _polygon_area(x, y)
+
+
+def _get_label_ancestors(
+    db: Any,
+    dataset_id: int | None,
+    label_id: int | None,
+    state: Any = None,
+) -> tuple[set[int], dict[int, int]]:
+    """Return (allowed_ancestor_ids, ancestor_distance_map) for label_id in dataset_id.
+
+    Distance is 0 for immediate parent, 1 for grandparent, etc.
+    Guarded against cyclic hierarchies.
+    """
+    if label_id is None:
+        return set(), {}
+
+    parent_by_id: dict[int, int | None] = {}
+
+    if hasattr(state, "label_parents") and isinstance(state.label_parents, dict):
+        parent_by_id = state.label_parents
+    elif db is not None and hasattr(db, "query") and dataset_id is not None:
+        try:
+            parent_by_id = dict(
+                db.query(Labels.id, Labels.parent_id).filter(Labels.dataset_id == dataset_id).all()
+            )
+        except Exception:
+            parent_by_id = {}
+
+    if not parent_by_id:
+        return set(), {}
+
+    ancestors: set[int] = set()
+    ancestor_distance: dict[int, int] = {}
+    visited: set[int] = set()
+    dist = 0
+    curr = parent_by_id.get(label_id)
+    while curr is not None:
+        if curr in visited or curr not in parent_by_id:
+            break
+        visited.add(curr)
+        ancestors.add(curr)
+        ancestor_distance[curr] = dist
+        dist += 1
+        curr = parent_by_id.get(curr)
+    return ancestors, ancestor_distance
+
+
 async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle adding a manually drawn object to the mask."""
+    """ Handle adding an object (manual drawing or model result) to the mask."""
     # client_msg.data is already a parsed dict (the WebSocket layer decodes the
     # JSON envelope), so validate it as an object — not as a JSON string.
     contour = Contour.model_validate(client_msg.data)
+
+    source = client_msg.data.get("source") if isinstance(client_msg.data, dict) else None
+    if not source:
+        source = provenance.MANUAL
+    model_key = client_msg.data.get("model_key") if isinstance(client_msg.data, dict) else None
+    added_by = client_msg.data.get("added_by") if isinstance(client_msg.data, dict) else None
+    # Provenance feeds the suggestion statistics, so a client may only claim a known origin,
+    # and an AI origin only together with the model behind it.
+    provenance_error = None
+    if source != provenance.MANUAL and source not in provenance.AI_SOURCES:
+        provenance_error = f"Unknown object source '{source}'."
+    elif source in provenance.AI_SOURCES and not model_key:
+        provenance_error = f"An object from '{source}' needs the model_key that produced it."
+    elif source == provenance.MANUAL and model_key:
+        provenance_error = "A manually drawn object cannot name a model_key."
+    if provenance_error:
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id, type=ServerMessageType.ERROR, success=False,
+            message=provenance_error, data=None,
+        ))
+        return
+    is_instance_prediction = source == SuggestionSource.INSTANCE_SEGMENTATION
+
+    is_manual = (
+        source == provenance.MANUAL
+        and not model_key
+        and (added_by is None or added_by in provenance.MANUAL_ADDED_BY)
+    )
+
+    if is_manual:
+        # Preserve normal manual drawing focus behavior
+        if contour.parent_id is None and state.focussed_contour_id is not None:
+            contour.parent_id = state.focussed_contour_id
+    else:
+        # Model / AI results: validate explicit parents against dataset label ancestry
+        # and spatial containment. If parent_id is missing (or invalid), resolve via
+        # valid focused contour or fallback containing objects only when focus mode is active.
+        hierarchy = None
+        hierarchy_is_fresh = False
+        allowed_ancestors: set[int] = set()
+        ancestor_distance: dict[int, int] = {}
+
+        needs_parent_check = (
+            is_instance_prediction
+            or contour.parent_id is not None
+            or getattr(state, "focussed_contour_id", None) is not None
+        )
+        if needs_parent_check:
+            with get_context_session() as db:
+                if getattr(state, "mask_id", None) is not None:
+                    try:
+                        hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
+                        state.contour_hierarchy = hierarchy
+                        hierarchy_is_fresh = True
+                    except Exception:
+                        hierarchy = getattr(state, "contour_hierarchy", None)
+                else:
+                    hierarchy = getattr(state, "contour_hierarchy", None)
+
+                dataset_id = getattr(state, "dataset_id", None)
+                if dataset_id is None and getattr(state, "image_id", None) is not None:
+                    try:
+                        dataset_id = dataset_id_for_image(state.image_id, db)
+                    except Exception:
+                        pass
+                if dataset_id is None and getattr(state, "image_db", None) is not None:
+                    dataset_id = getattr(state.image_db, "dataset_id", None)
+                if (
+                    dataset_id is None
+                    and not (hasattr(state, "label_parents") and isinstance(state.label_parents, dict))
+                    and getattr(state, "mask_id", None) is not None
+                ):
+                    if hasattr(db, "get"):
+                        try:
+                            mask_row = db.get(Masks, state.mask_id)
+                            if mask_row is not None and mask_row.image_id is not None:
+                                dataset_id = dataset_id_for_image(mask_row.image_id, db)
+                        except Exception:
+                            pass
+
+                allowed_ancestors, ancestor_distance = _get_label_ancestors(
+                    db, dataset_id, contour.label_id, state=state
+                )
+
+            # 1. Validate explicit parent_id if provided on the model result
+            if contour.parent_id is not None:
+                parent_candidate = (
+                    hierarchy.id_to_contour.get(contour.parent_id)
+                    if hierarchy and hasattr(hierarchy, "id_to_contour")
+                    else None
+                )
+                if (
+                    parent_candidate is None
+                    or parent_candidate.label_id not in allowed_ancestors
+                    or not _contour_spatially_contains(parent_candidate, contour)
+                ):
+                    # Explicit parent is invalid (e.g. root-level polyp assigned to unrelated fragment,
+                    # same-label contour, parent doesn't contain child, or parent doesn't exist).
+                    contour.parent_id = None
+
+            # 2. If parent_id is missing (or was invalidated above) and focus mode is active,
+            # resolve via allowed ancestors and spatial containment
+            if contour.parent_id is None and getattr(state, "focussed_contour_id", None) is not None:
+                focused_id = getattr(state, "focussed_contour_id", None)
+                focused_parent = (
+                    hierarchy.id_to_contour.get(focused_id)
+                    if hierarchy and focused_id is not None and hasattr(hierarchy, "id_to_contour")
+                    else None
+                )
+                if (
+                    focused_parent is not None
+                    and focused_parent.label_id in allowed_ancestors
+                    and _contour_spatially_contains(focused_parent, contour)
+                ):
+                    contour.parent_id = focused_id
+                elif hierarchy is not None and getattr(hierarchy, "id_to_contour", None) and allowed_ancestors:
+                    candidates = [
+                        candidate for cid, candidate in hierarchy.id_to_contour.items()
+                        if (focused_id is None or cid != focused_id)
+                        and candidate.label_id in allowed_ancestors
+                        and _contour_spatially_contains(candidate, contour)
+                    ]
+                    if candidates:
+                        candidates.sort(
+                            key=lambda c: (
+                                ancestor_distance.get(c.label_id, 999),
+                                _contour_area(c),
+                            )
+                        )
+                        contour.parent_id = candidates[0].id
+
+        # Patch/Add model predictions arrive one at a time, so check a fresh
+        # hierarchy for every request. Compare same-label predictions across all
+        # parent branches: a polyp can be attached through different valid ancestor
+        # levels, while its label still identifies the instance class. Existing
+        # contours win when at least 30% of the smaller outline overlaps; this
+        # catches shifted or smaller cross-model duplicates that IoU undercounts.
+        # Manual contours and other models retain the normal fitting path.
+        if is_instance_prediction and hierarchy_is_fresh:
+            existing_same_label = hierarchy.label_id_to_contours.get(contour.label_id, [])
+            duplicate = any(
+                _intersection_over_smaller(contour, existing)
+                >= _DUPLICATE_INTERSECTION_THRESHOLD
+                for existing in existing_same_label
+            )
+            if duplicate:
+                await send_msg(websocket, ServerMessage(
+                    id=client_msg.id,
+                    type=ServerMessageType.SUCCESS,
+                    success=True,
+                    message="Object was skipped because it duplicates an existing object.",
+                    data={"skipped": True, "duplicate": True},
+                ))
+                return
+
     # Persist via the shared helper, exactly like the AI add flow: it inserts the
     # contour into the DB first (which assigns the real integer id and computes
     # its SVG path) and then broadcasts the single new object.
@@ -317,7 +623,7 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
     # the DB insert, which made the client invent a bogus (decimal) id for the new
     # object and rebuild from the full hierarchy — blanking every other object's
     # label until the next page reload.
-    await add_object(contour, websocket, client_msg, state, source=provenance.MANUAL)
+    await add_object(contour, websocket, client_msg, state, source=source, model_key=model_key)
 
 
 async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -880,6 +1186,11 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
                                               username=state.user_id, run_id=group_id)
             else:
                 provenance.mark_manual(db, provenance.contour_ids_of(response), origin=source)
+            if getattr(state, "mask_id", None) is not None:
+                try:
+                    state.contour_hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
+                except Exception:
+                    pass
     if response is None:
         await send_msg(websocket, ServerMessage(
             id=client_msg.id,
@@ -894,7 +1205,7 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
         type=ServerMessageType.OBJECT_ADDED,
         success=True,
         message=f"Successfully added object with confidence score {object_to_add.confidence:.1%}",
-        data=response,
+        data=response.model_dump(mode="json") if hasattr(response, "model_dump") else response,
     ))
     return response
 

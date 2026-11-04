@@ -61,16 +61,37 @@ def classes_of(info: dict) -> list[ModelClass]:
 # --------------------------------------------------------------------------- #
 # Resolution
 # --------------------------------------------------------------------------- #
+def _whole_word_matches(class_name: str, label_by_name: dict[str, int]) -> list[int]:
+    """Labels whose name contains the class name as a whole word ("polyp" in "polyp tissue")."""
+    wanted = class_name.strip().lower()
+    return [lid for name, lid in label_by_name.items() if wanted and wanted in name.split()]
+
+
 def resolve(
     db: Session, dataset_id: int, registry_key: str, classes: Iterable[ModelClass]
 ) -> list[ClassMappingRead]:
-    """What each class means in the dataset: saved choice, else same-name label, else nothing."""
+    """What each class means in the dataset.
+
+    The model's own saved choice wins. Otherwise a label is suggested: the one other models'
+    saved choices map the same class key to (two polyp models share their "polyp"), else the
+    same-name label, else the one label whose name contains the class name as a word.
+    """
     saved = {
         row.model_class: row
         for row in db.query(ModelLabelMappings).filter_by(
             dataset_id=dataset_id, model_registry_key=registry_key
         )
     }
+    # Other models' saved choices per class key; used when they agree on one label.
+    elsewhere: dict[str, set[int]] = {}
+    for model_class_key, label_id in db.query(
+            ModelLabelMappings.model_class, ModelLabelMappings.label_id).filter(
+                ModelLabelMappings.dataset_id == dataset_id,
+                ModelLabelMappings.model_registry_key != registry_key,
+                ModelLabelMappings.action == MAP,
+                ModelLabelMappings.label_id.isnot(None)):
+        elsewhere.setdefault(model_class_key, set()).add(label_id)
+
     label_by_name = {
         name.strip().lower(): label_id
         for label_id, name in db.query(Labels.id, Labels.name).filter_by(dataset_id=dataset_id)
@@ -87,7 +108,13 @@ def resolve(
                 attribute_value=row.attribute_value if action == MAP and row.attribute_id else None,
             ))
             continue
-        suggested = label_by_name.get(model_class.name.strip().lower())
+        shared = elsewhere.get(model_class.key, set())
+        suggested = next(iter(shared)) if len(shared) == 1 else None
+        if suggested is None:
+            suggested = label_by_name.get(model_class.name.strip().lower())
+        if suggested is None:
+            matches = _whole_word_matches(model_class.name, label_by_name)
+            suggested = matches[0] if len(matches) == 1 else None
         resolved.append(ClassMappingRead(
             model_class=model_class,
             action=MAP if suggested is not None else "unmapped",
