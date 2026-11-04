@@ -433,6 +433,48 @@ async def save_image_to_disk(
     return native_width, native_height, color_mode
 
 
+def _resolve_unique_storage_filename(
+        base_name: str,
+        image_folder: Path,
+        thumbnail_dir: Path,
+        is_tiff: bool,
+        dataset_id: int,
+        db: Session,
+) -> tuple[str, Path, str, Path]:
+    """Find an unused storage filename and paths for an image and its thumbnail."""
+    path_obj = Path(base_name)
+    stem, suffix = path_obj.stem, path_obj.suffix
+
+    candidate_name = base_name
+    counter = 0
+
+    while True:
+        candidate_file_path = image_folder / candidate_name
+        candidate_thumb_name = f"{candidate_name}.png" if is_tiff else candidate_name
+        candidate_thumb_path = thumbnail_dir / candidate_thumb_name
+
+        file_exists = candidate_file_path.exists()
+        thumb_exists = candidate_thumb_path.exists()
+
+        db_conflict = False
+        if hasattr(db, "query"):
+            try:
+                db_conflict = (
+                    db.query(Images)
+                    .filter_by(dataset_id=dataset_id, file_path=str(candidate_file_path))
+                    .first()
+                    is not None
+                )
+            except Exception:
+                db_conflict = False
+
+        if not file_exists and not thumb_exists and not db_conflict:
+            return candidate_name, candidate_file_path, candidate_thumb_name, candidate_thumb_path
+
+        counter += 1
+        candidate_name = f"{stem}_{counter}{suffix}"
+
+
 async def process_and_save_image(
         file: UploadFile,
         dataset_id: int,
@@ -448,15 +490,18 @@ async def process_and_save_image(
     is_tiff = (Path(file.filename).suffix.lower() in _TIFF_SUFFIXES) or is_tiff_content(header)
 
     if is_tiff and Path(file.filename).suffix.lower() not in _TIFF_SUFFIXES:
-        stored_filename = Path(file.filename).with_suffix(".tiff").name
+        base_filename = Path(file.filename).with_suffix(".tiff").name
     else:
-        stored_filename = file.filename
+        base_filename = file.filename
 
-    file_path = image_folder / stored_filename
-    thumbnail_name = stored_filename
-    if is_tiff:
-        thumbnail_name = f"{stored_filename}.png"
-    thumbnail_path = Path(THUMBNAILS_DIR) / thumbnail_name
+    stored_filename, file_path, thumbnail_name, thumbnail_path = _resolve_unique_storage_filename(
+        base_filename,
+        image_folder,
+        Path(THUMBNAILS_DIR),
+        is_tiff,
+        dataset_id,
+        db,
+    )
 
     native_width, native_height, color_mode = await save_image_to_disk(file, file_path, thumbnail_path)
 

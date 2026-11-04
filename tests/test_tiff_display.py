@@ -640,3 +640,83 @@ def test_corrupt_tiff_with_jpg_extension_fails_preflight_and_upload(tmp_path):
     assert exc_info.value.status_code == 422
     assert "Could not read this TIFF image" in exc_info.value.detail
 
+
+def test_tiff_uploads_with_colliding_normalized_names_do_not_overwrite(tmp_path, monkeypatch):
+    # Regression test for [P1] collision between scan.jpg (normalized to scan.tiff) and scan.tiff
+    first_pixels = np.array([[[100, 0, 0], [0, 100, 0]]], dtype=np.uint8)
+    second_pixels = np.array([[[0, 0, 200], [200, 200, 0]]], dtype=np.uint8)
+
+    first_tiff = _tiff(tmp_path / "temp1.tiff", first_pixels, mode="RGB")
+    second_tiff = _tiff(tmp_path / "temp2.tiff", second_pixels, mode="RGB")
+
+    thumbnail_root = tmp_path / "thumbnails"
+    dataset_folder = tmp_path / "dataset"
+    monkeypatch.setattr(images_db, "THUMBNAILS_DIR", str(thumbnail_root))
+
+    async def no_mask(*_args):
+        return None
+
+    monkeypatch.setattr(images_db, "create_new_mask", no_mask)
+
+    class MultiInsertDB:
+        def __init__(self):
+            self.rows = []
+
+        def add(self, row):
+            row.id = len(self.rows) + 1
+            self.rows.append(row)
+
+        def flush(self):
+            pass
+
+        def commit(self):
+            pass
+
+        def query(self, *args):
+            return _Query(list(self.rows))
+
+    db = MultiInsertDB()
+
+    # Upload 1: TIFF named scan.jpg (normalizes to scan.tiff)
+    upload1 = _upload("scan.jpg", first_tiff)
+    id1 = asyncio.run(images_db.process_and_save_image(upload1, 1, str(dataset_folder), db))
+    assert id1 == 1
+
+    # Upload 2: another TIFF named scan.tiff (must NOT overwrite scan.tiff)
+    upload2 = _upload("scan.tiff", second_tiff)
+    id2 = asyncio.run(images_db.process_and_save_image(upload2, 1, str(dataset_folder), db))
+    assert id2 == 2
+
+    row1, row2 = db.rows[0], db.rows[1]
+
+    # Verify both records have distinct storage names and file paths
+    assert row1.file_path != row2.file_path
+    assert row1.file_name != row2.file_name
+    assert row1.thumbnail_file_path != row2.thumbnail_file_path
+
+    # Verify both source files exist on disk with their respective uncorrupted contents
+    path1 = Path(row1.file_path)
+    path2 = Path(row2.file_path)
+    assert path1.exists() and path2.exists()
+    assert path1.read_bytes() == first_tiff
+    assert path2.read_bytes() == second_tiff
+
+    # Verify both thumbnails exist on disk and are valid PNGs
+    thumb1 = Path(row1.thumbnail_file_path)
+    thumb2 = Path(row2.thumbnail_file_path)
+    assert thumb1.exists() and thumb2.exists()
+    with Image.open(thumb1) as img1, Image.open(thumb2) as img2:
+        assert img1.format == "PNG" and img2.format == "PNG"
+
+    # Verify preview routing serves the correct distinct PNG images for both
+    resp1 = asyncio.run(get_image_file(1, thumbnail=False, db=_DB([row1]), user=None))
+    resp2 = asyncio.run(get_image_file(2, thumbnail=False, db=_DB([row2]), user=None))
+    assert resp1.media_type == "image/png" and resp2.media_type == "image/png"
+    assert Path(resp1.path) != Path(resp2.path)
+
+    pixels1 = _png_pixels(Path(resp1.path).read_bytes())[2]
+    pixels2 = _png_pixels(Path(resp2.path).read_bytes())[2]
+    np.testing.assert_array_equal(pixels1, first_pixels)
+    np.testing.assert_array_equal(pixels2, second_pixels)
+
+
