@@ -15,6 +15,7 @@ future model-scored order look identical to the consumer that applies it.
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -22,6 +23,7 @@ from sqlalchemy import (
     JSON,
     String,
     UniqueConstraint,
+    true,
 )
 
 from app.database import database
@@ -48,5 +50,14 @@ class AnnotationQueues(database):
     strategy = Column(String(32), nullable=False)
     # Frozen list of image ids in queue order — a JSON array.
     image_order = Column(JSON, nullable=False, default=list)
+    # The settings the queue was built with (app.schemas.annotation_queue.QueueSettings), so
+    # the builder can reopen with them.
+    options = Column(JSON, nullable=True)
+    # False when the annotator ticked "Don't show this again": the Annotation card then goes
+    # straight to the editor with this queue.
+    show_builder = Column(Boolean, nullable=False, default=True, server_default=true())
+    # Why each image sits where it does: {"<image id>": {"reason": str, "score": float|None}}.
+    # Stored with the order so the queue view needs no extra query. NULL for plain orderings.
+    details = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)

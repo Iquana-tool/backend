@@ -1,11 +1,9 @@
 """Schemas for the annotation queue: the persisted order an annotator works in.
 
-The queue lets an annotator pick how a dataset's images are ordered before the
-editor opens — as uploaded, randomized, or a future active-learning ordering — and
-the choice is saved per (dataset, user) so re-entering resumes it. Ordering is
-delegated to a strategy registry (see ``app.services.annotation_queue``) so that
-active-learning scorers can be added without touching this request/response
-contract, exactly as the review queue does for its own orderings.
+The queue lets an annotator pick how a dataset's images are sorted and filtered before the
+editor opens, and the choice is saved per (dataset, user) so re-entering resumes it. Sorting
+methods come from a registry (see ``app.services.queue_methods``) that describes itself here,
+so a new method appears in the builder without touching this contract.
 """
 from __future__ import annotations
 
@@ -13,37 +11,47 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.queue import Direction, Need, QueueMethodOption, RecommendedQueue, SortSettings
 
-class AnnotationQueueRequest(BaseModel):
-    """Request body for building (and saving) an annotation queue."""
+__all__ = ["Direction", "Need", "QueueSettings", "QueueMethodOption"]
 
-    strategy: str = Field(
-        ...,
-        description="Key of the ordering strategy to build the queue with. The "
-                    "available keys are listed in the annotation-queue summary; "
-                    "only strategies flagged `available` can be built.",
+
+class QueueSettings(SortSettings):
+    """How to sort and filter the annotation queue; sent to prepare and build, saved with the
+    queue. ``max_confidence`` here is an image's most confident detection and needs a trained
+    model."""
+
+    embedding_model: str | None = Field(
+        None, description="Embedding model registry key, for methods that need one."
+    )
+    trained_model: str | None = Field(
+        None, description="Trained instance-segmentation model, for methods or filters that need one."
+    )
+    show_builder: bool = Field(
+        True, description="False skips the builder next time and opens this queue directly."
     )
 
 
-class AnnotationQueueStrategyOption(BaseModel):
-    """One selectable queue ordering, for the builder's option list."""
+class QueueModelOption(BaseModel):
+    registry_key: str
+    name: str
 
-    key: str
-    label: str
-    description: str
-    available: bool = Field(
-        True,
-        description="False for orderings shown as a placeholder (e.g. active "
-                    "learning) that cannot be built yet.",
-    )
+
+class QueueModelOptions(BaseModel):
+    """Models the builder can offer for this dataset."""
+
+    embedding: list[QueueModelOption] = Field(default_factory=list)
+    trained: list[QueueModelOption] = Field(default_factory=list)
 
 
 class AnnotationQueueRead(BaseModel):
     """A saved annotation queue: image ids in the order they will be worked."""
 
-    strategy: str
+    settings: QueueSettings
     image_ids: list[int] = Field(default_factory=list)
     total: int
+    #: {"<image id>": {"reason": str, "score": float | None}}; empty for plain orderings.
+    details: dict[str, dict] = Field(default_factory=dict)
     updated_at: datetime | None = None
 
 
@@ -55,7 +63,26 @@ class AnnotationQueueSummary(BaseModel):
     finished: int = Field(..., description="Images whose mask is finished.")
     total: int = Field(..., description="Total images in the dataset.")
     has_saved_queue: bool = Field(..., description="Whether the caller has a saved queue here.")
-    saved_strategy: str | None = Field(
-        None, description="Strategy of the saved queue, if any."
+    saved_settings: QueueSettings | None = Field(
+        None, description="Settings of the saved queue, if any."
     )
-    strategies: list[AnnotationQueueStrategyOption] = Field(default_factory=list)
+    methods: list[QueueMethodOption] = Field(default_factory=list)
+    authors: list[str] = Field(
+        default_factory=list, description="Other people who drew here, for the 'By' filter."
+    )
+    models: list[str] = Field(
+        default_factory=list, description="Models that made objects here, for the 'By' filter."
+    )
+    recommended: RecommendedQueue | None = Field(
+        None, description="The settings a curator recommends for this dataset, if any."
+    )
+
+
+class QueuePrepJobRead(BaseModel):
+    """Progress of a background job filling the data an ordering needs."""
+
+    id: int
+    status: str
+    total: int
+    done: int
+    failed: int

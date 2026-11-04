@@ -15,13 +15,14 @@ from app.database.rejections import AnnotationRejections
 from app.database.users import Users
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
+from app.schemas.queue import RecommendedQueueWrite
 from app.schemas.review import (
     CorrectionQueueRequest,
     RejectionCreate,
     RejectionResolve,
     ReviewQueueRequest,
 )
-from app.services import correction_queue, review_queue
+from app.services import correction_queue, queue_recommendation, review_queue
 from app.services.auth import get_current_user
 from app.services.database_access import contours as contours_db
 from app.services.database_access import rejections as rejections_db
@@ -51,7 +52,7 @@ async def get_review_summary(
     Backs the "There are x instances to review" line on the management card and
     the strategy dropdown on the review setup page.
     """
-    summary = review_queue.summarize(dataset_id, db)
+    summary = review_queue.summarize(dataset_id, db, user.username)
     return {
         "success": True,
         "message": f"Review summary for dataset {dataset_id}.",
@@ -73,7 +74,7 @@ async def build_review_queue(
     `app.services.review_queue` for the granularities and the sort-strategy
     registry (where active-learning orderings plug in).
     """
-    queue = review_queue.build_queue(dataset_id, body, db)
+    queue = review_queue.build_queue(dataset_id, body, db, user.username)
     return {
         "success": True,
         "message": f"Built a review queue of {queue.total} items.",
@@ -247,3 +248,31 @@ async def resolve_all_rejections(
         "message": f"Resolved {count} open rejections on mask {mask_id}.",
         "resolved_count": count,
     }
+
+
+# -- Recommended queue ------------------------------------------------------------------
+
+@router.put("/datasets/{dataset_id}/recommended")
+async def set_recommended_review_queue(
+        dataset_id: int,
+        body: RecommendedQueueWrite,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE, "dataset_id")),
+):
+    """Recommend review queue settings for the dataset, with a one-line reason. Curators and
+    owners only, like the dataset's other settings; the settings are checked as if a queue
+    were being built, so a recommendation always builds."""
+    recommended = queue_recommendation.set_recommended(db, dataset_id, "review", body, user.username)
+    return {"success": True, "message": "Recommendation saved.",
+            "recommended": recommended.model_dump(mode="json")}
+
+
+@router.delete("/datasets/{dataset_id}/recommended")
+async def clear_recommended_review_queue(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE, "dataset_id")),
+):
+    """Remove the dataset's recommended review queue."""
+    queue_recommendation.clear_recommended(db, dataset_id, "review")
+    return {"success": True, "message": "Recommendation removed."}

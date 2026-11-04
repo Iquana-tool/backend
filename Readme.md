@@ -161,6 +161,22 @@ Per-task overrides (`PROMPTED_SEGMENTATION_BACKEND_URL`, `SUGGESTION_SEGMENTATIO
 `INSTANCE_SEGMENTATION_BACKEND_URL`) exist so a single task can be routed to a satellite
 service whose dependencies cannot share the unified environment.
 
+### Active-learning annotation queue
+
+The Diversity and Density orderings read whole-image vectors from the embedding model chosen in
+the builder (stored in `image_vectors`); Uncertainty reads the detections of a model trained on
+the dataset (Confidence is a review-queue ordering). The queue builder fills missing data in the
+background (`queue_prep` Celery tasks on the `backend.jobs` queue), one image per task, so:
+
+1. Make sure the ai-service can load the embedding model. Gated models such as DINOv3 need the
+   Hugging Face login set on the admin page.
+2. On a large dataset, open the builder once with the chosen model and let preparation finish
+   before annotators start. `scripts/backfill_embeddings.py` fills the older embeddings store
+   used by cross-image search, not `image_vectors`, so it does not speed this up.
+
+Scoring uses the same ai-service surface as batch inference. Avoid scoring a large dataset
+while a training run is using the same GPU.
+
 ### Instance identity lives here, not in the frontend
 
 The sign-in page reads the instance name, organisation, contact and registration policy

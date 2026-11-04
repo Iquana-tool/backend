@@ -197,3 +197,9 @@ def test_enqueue_dispatches_when_enabled(monkeypatch):
 
     assert img_calls == [(7,)]
     assert contour_calls == [([3, 4],)]
+
+
+def test_annotation_queue_keeps_image_cls_required(monkeypatch):
+    # Even with no retrieval strategy asking for whole-image vectors, the queue still does.
+    monkeypatch.setattr(lifecycle, "RETRIEVAL_STRATEGIES", {})
+    assert lifecycle.required_kinds() == {"image_cls"}
