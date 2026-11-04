@@ -23,12 +23,38 @@ from config import THUMBNAILS_DIR
 logger = getLogger(__name__)
 _TIFF_PREVIEW_CACHE_VERSION = "v2"
 _TIFF_SUFFIXES = {".tif", ".tiff"}
+_TIFF_MAGIC = (
+    b"II*\x00",
+    b"MM\x00*",
+    b"II+\x00",
+    b"MM\x00+",
+    b"MM*\x00",
+    b"II\x00*",
+)
 _TIFF_IMAGE_ERRORS = (
     OSError,
     UnidentifiedImageError,
     ValueError,
     Image.DecompressionBombError,
 )
+
+
+def is_tiff_content(header: bytes) -> bool:
+    """Return whether raw header bytes start with a TIFF signature."""
+    return len(header) >= 4 and header[:4] in _TIFF_MAGIC
+
+
+def is_tiff_file(file_path: Union[str, Path]) -> bool:
+    """Return whether ``file_path`` points to a TIFF by extension or header bytes."""
+    path = Path(file_path)
+    if path.suffix.lower() in _TIFF_SUFFIXES:
+        return True
+    try:
+        with path.open("rb") as f:
+            header = f.read(4)
+        return is_tiff_content(header)
+    except OSError:
+        return False
 
 
 class TIFFPreviewError(HTTPException):
@@ -169,9 +195,9 @@ def tiff_preview_file(
         file_path: Union[str, Path],
         thumbnail_path: Union[str, Path] | None = None,
 ) -> Path | None:
-    """Return the cached PNG preview path for TIFFs, or ``None`` for other suffixes."""
+    """Return the cached PNG preview path for TIFFs, or ``None`` for other formats."""
     path = Path(file_path)
-    if path.suffix.lower() not in _TIFF_SUFFIXES:
+    if not is_tiff_file(path):
         return None
 
     try:
@@ -213,7 +239,7 @@ def ensure_tiff_thumbnail_preview(
 ) -> None:
     """Repair prior 16-bit PNG thumbnails using the current display-only preview."""
     source, thumbnail = Path(image_path), Path(thumbnail_path)
-    if source.suffix.lower() not in _TIFF_SUFFIXES:
+    if not is_tiff_file(source):
         return
 
     try:
@@ -266,7 +292,17 @@ def _validate_tiff_upload_file(file_object, filename: str) -> None:
     try:
         decoded = Image.open(file_object)
     except _TIFF_IMAGE_ERRORS as exc:
-        if Path(filename).suffix.lower() in _TIFF_SUFFIXES:
+        is_tiff_candidate = Path(filename).suffix.lower() in _TIFF_SUFFIXES
+        if not is_tiff_candidate and hasattr(file_object, "seek") and hasattr(file_object, "read"):
+            try:
+                pos = file_object.tell()
+                file_object.seek(0)
+                header = file_object.read(4)
+                file_object.seek(pos)
+                is_tiff_candidate = is_tiff_content(header)
+            except (OSError, ValueError):
+                pass
+        if is_tiff_candidate:
             raise TIFFPreviewError("Could not read this TIFF image.") from exc
         return
     with decoded:
@@ -350,7 +386,7 @@ async def save_image_to_disk(
         try:
             img = Image.open(io.BytesIO(content))
         except _TIFF_IMAGE_ERRORS as exc:
-            if Path(image.filename).suffix.lower() in {".tif", ".tiff"}:
+            if (Path(image.filename).suffix.lower() in _TIFF_SUFFIXES) or is_tiff_content(content):
                 raise TIFFPreviewError("Could not read this TIFF image.") from exc
             raise
         is_tiff = img.format == "TIFF"
@@ -381,6 +417,11 @@ async def save_image_to_disk(
     thumbnail = Image.open(io.BytesIO(display_preview)) if is_tiff else img.copy()
     thumbnail.thumbnail((500, 500))
     thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
+    if is_tiff and thumbnail_path.suffix.lower() not in {".png", *_TIFF_SUFFIXES}:
+        if thumbnail.mode in {"RGBA", "LA", "P"}:
+            thumbnail = thumbnail.convert("RGB")
+        elif thumbnail.mode in {"I;16", "I", "F"}:
+            thumbnail = thumbnail.convert("L")
     thumbnail.save(thumbnail_path)
     if is_tiff:
         try:
@@ -400,16 +441,27 @@ async def process_and_save_image(
 ) -> int:
     """Internal logic to save one image and its thumbnail."""
     image_folder = Path(dataset_folder) / "images"
-    file_path = image_folder / file.filename
-    thumbnail_name = file.filename
-    if Path(file.filename).suffix.lower() in {".tif", ".tiff"}:
-        thumbnail_name = f"{file.filename}.png"
+
+    await file.seek(0)
+    header = await file.read(4)
+    await file.seek(0)
+    is_tiff = (Path(file.filename).suffix.lower() in _TIFF_SUFFIXES) or is_tiff_content(header)
+
+    if is_tiff and Path(file.filename).suffix.lower() not in _TIFF_SUFFIXES:
+        stored_filename = Path(file.filename).with_suffix(".tiff").name
+    else:
+        stored_filename = file.filename
+
+    file_path = image_folder / stored_filename
+    thumbnail_name = stored_filename
+    if is_tiff:
+        thumbnail_name = f"{stored_filename}.png"
     thumbnail_path = Path(THUMBNAILS_DIR) / thumbnail_name
 
     native_width, native_height, color_mode = await save_image_to_disk(file, file_path, thumbnail_path)
 
     new_entry = Images(
-        file_name=file.filename,
+        file_name=stored_filename,
         file_path=str(file_path),
         thumbnail_file_path=str(thumbnail_path),
         dataset_id=dataset_id,

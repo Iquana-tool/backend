@@ -540,3 +540,103 @@ def test_deleting_image_removes_its_preview_cache_only(tmp_path):
     assert not first_full.exists() and not first_thumb.exists()
     assert not target_cache.exists() and not old_variant.exists()
     assert unrelated_cache.exists()
+
+
+def test_tiff_uploaded_with_jpg_filename_normalizes_and_displays_as_png(tmp_path, monkeypatch):
+    rgb_pixels = np.array([[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [255, 255, 0]]], dtype=np.uint8)
+    image = Image.fromarray(rgb_pixels, mode="RGB")
+    tiff_buffer = io.BytesIO()
+    image.save(tiff_buffer, format="TIFF")
+    tiff_bytes = tiff_buffer.getvalue()
+
+    thumbnail_root = tmp_path / "thumbnails"
+    dataset_folder = tmp_path / "dataset"
+    monkeypatch.setattr(images_db, "THUMBNAILS_DIR", str(thumbnail_root))
+
+    async def no_mask(*_args):
+        return None
+
+    monkeypatch.setattr(images_db, "create_new_mask", no_mask)
+
+    class InsertDB:
+        def add(self, row):
+            self.row = row
+            row.id = 42
+
+        def flush(self):
+            pass
+
+        def commit(self):
+            pass
+
+    db = InsertDB()
+    upload = _upload("scan.jpg", tiff_bytes)
+    image_id = asyncio.run(images_db.process_and_save_image(upload, 1, str(dataset_folder), db))
+    assert image_id == 42
+
+    # Upload preserves original TIFF source bytes and normalizes stored extension
+    stored_path = Path(db.row.file_path)
+    assert stored_path.suffix.lower() == ".tiff"
+    assert stored_path.read_bytes() == tiff_bytes
+    assert db.row.file_name == "scan.tiff"
+
+    # Thumbnail path is recorded as PNG
+    thumbnail_path = Path(db.row.thumbnail_file_path)
+    assert thumbnail_path.suffix.lower() == ".png"
+    assert thumbnail_path.name == "scan.tiff.png"
+    with Image.open(thumbnail_path) as thumb_img:
+        assert thumb_img.format == "PNG"
+
+    # File response serves PNG preview labeled image/png (not TIFF labeled image/jpeg)
+    query_db = _DB([db.row])
+    file_response = asyncio.run(get_image_file(42, thumbnail=False, db=query_db, user=None))
+    assert file_response.media_type == "image/png"
+    preview_bytes = Path(file_response.path).read_bytes()
+    assert preview_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    assert _png_pixels(preview_bytes)[0] == (2, 2)
+
+    # Base64 response contains PNG display bytes instead of TIFF
+    b64_data = asyncio.run(images_db.get_image_data(42, as_thumbnail=False, as_base64=True, db=query_db))
+    decoded_b64 = base64.b64decode(b64_data)
+    assert decoded_b64.startswith(b"\x89PNG\r\n\x1a\n")
+    assert _png_pixels(decoded_b64)[0] == (2, 2)
+
+
+def test_tiff_preview_routing_detects_tiff_format_from_bytes_when_path_has_jpg_extension(tmp_path):
+    # Regression test for preview routing on pre-existing or external TIFFs stored with a .jpg filename
+    full = tmp_path / "scan.jpg"
+    thumb = tmp_path / "scan_thumb.jpg"
+    rgb_pixels = np.array([[[10, 20, 30], [40, 50, 60]]], dtype=np.uint8)
+    _tiff(full, rgb_pixels, mode="RGB")
+    thumb.write_bytes(b"placeholder thumb")
+
+    row = _row(101, full, thumb)
+    db = _DB([row])
+
+    # tiff_preview_file recognizes TIFF content even with .jpg suffix
+    preview_path = images_db.tiff_preview_file(full, thumb)
+    assert preview_path is not None
+    assert preview_path.suffix.lower() == ".png"
+
+    # get_image_file serves PNG preview with image/png media type
+    response = asyncio.run(get_image_file(101, thumbnail=False, db=db, user=None))
+    assert response.media_type == "image/png"
+    assert Path(response.path) == preview_path
+    assert Path(response.path).read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+    # get_image_data base64 returns PNG bytes
+    b64_output = asyncio.run(images_db.get_image_data(101, as_thumbnail=False, as_base64=True, db=db))
+    decoded = base64.b64decode(b64_output)
+    assert decoded.startswith(b"\x89PNG\r\n\x1a\n")
+    assert _png_pixels(decoded)[0] == (2, 1)
+
+
+def test_corrupt_tiff_with_jpg_extension_fails_preflight_and_upload(tmp_path):
+    corrupt_bytes = b"II*\x00" + b"\xff" * 20
+    upload = _upload("corrupt.jpg", corrupt_bytes)
+
+    with pytest.raises(images_db.TIFFPreviewError) as exc_info:
+        asyncio.run(images_db.validate_tiff_upload(upload))
+    assert exc_info.value.status_code == 422
+    assert "Could not read this TIFF image" in exc_info.value.detail
+
