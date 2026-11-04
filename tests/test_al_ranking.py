@@ -42,6 +42,22 @@ def test_density_favours_images_with_many_look_alikes():
     assert r.density_scores({1: v(1, 0)}) == {1: 0.0}
 
 
+def test_density_in_blocks_matches_the_full_matrix(monkeypatch):
+    rng = np.random.default_rng(0)
+    vectors = {i: rng.normal(size=8) for i in range(50)}
+    normed = np.stack([x / np.linalg.norm(x) for x in vectors.values()])
+    full = normed @ normed.T
+    np.fill_diagonal(full, -np.inf)
+    expected = np.sort(full, axis=1)[:, -5:].mean(axis=1)
+
+    # 7 rows per block: blocks of uneven size, so every row offset is exercised.
+    monkeypatch.setattr(r, "DENSITY_BLOCK_ELEMENTS", 7 * 50)
+    scores = r.density_scores(vectors, neighbours=5)
+    assert [scores[i] for i in range(50)] == pytest.approx(list(expected))
+    # Fewer units than neighbours: every other unit counts.
+    assert r.density_scores({1: v(1, 0), 2: v(0, 1)}, neighbours=30) == {1: 0.0, 2: 0.0}
+
+
 def test_unit_vector_is_normalised_mean_and_none_without_vectors():
     unit = r.Unit(key=1, image_ids=(1, 2))
     vec = r.unit_vector(unit, {1: v(1, 0), 2: v(0, 1)})

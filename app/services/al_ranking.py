@@ -18,6 +18,9 @@ ImageRef = tuple[int, int | None, int | None]
 
 #: Density: how many most-similar neighbours define how "typical" a unit is.
 DENSITY_NEIGHBOURS = 30
+#: Density: similarities held in memory at once (rows x units). About 32 MB of float64, so a
+#: dataset of any size is scored without building the full units x units matrix.
+DENSITY_BLOCK_ELEMENTS = 4_000_000
 #: A detection counts as borderline when its confidence lies in this range.
 BORDERLINE_RANGE = (0.3, 0.7)
 
@@ -139,14 +142,22 @@ def density_scores(vectors: Mapping[int, np.ndarray],
     With fewer units than ``neighbours + 1``, every other unit is a neighbour.
     """
     keys = list(vectors)
-    if len(keys) < 2:
+    count = len(keys)
+    if count < 2:
         return {key: 0.0 for key in keys}
     matrix = np.stack([_normalise(np.asarray(vectors[k], dtype=float)) for k in keys])
-    similarity = matrix @ matrix.T
-    np.fill_diagonal(similarity, -np.inf)  # a unit is not its own neighbour
-    k = min(neighbours, len(keys) - 1)
-    top = -np.sort(-similarity, axis=1)[:, :k]
-    return {key: float(value) for key, value in zip(keys, top.mean(axis=1))}
+    k = min(neighbours, count - 1)
+    rows = max(1, DENSITY_BLOCK_ELEMENTS // count)
+    means = np.empty(count)
+    for start in range(0, count, rows):
+        stop = min(start + rows, count)
+        block = matrix[start:stop] @ matrix.T
+        # A unit is not its own neighbour.
+        block[np.arange(stop - start), np.arange(start, stop)] = -np.inf
+        # Only the k largest are needed and their order does not matter, so a partial
+        # partition (linear time) replaces a full sort of every row.
+        means[start:stop] = np.partition(block, count - k, axis=1)[:, count - k:].mean(axis=1)
+    return {key: float(value) for key, value in zip(keys, means)}
 
 
 def round_robin(*orders: Sequence[tuple[int, ...]]) -> list[tuple[int, ...]]:
