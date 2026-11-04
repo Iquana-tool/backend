@@ -3,16 +3,13 @@
 IQUANA is self-hosted: every research group runs its own instance against its own
 datasets and its own user list. Two surfaces need to know which instance this is
 — the sign-in page, which greets a visitor who was handed a bare hostname and
-tells them who to ask for an account, and the registration endpoint, which has to
-know whether this instance hands out accounts at all.
+tells them who to ask for an account. There is no open self-registration: the
+installer creates the first admin (``scripts/create_admin.py --bootstrap``), and the
+admin creates accounts on the admin page or sends a registration link.
 
-The values live on the backend rather than in the frontend's build for two
-reasons. The first is enforcement: whether self-registration is allowed is a
-policy, and a policy the frontend merely *renders* is not enforced — anyone can
-POST to ``/auth/register`` regardless of what the sign-in page chose to show. The
-second is operational: Vite substitutes ``import.meta.env`` at build time, so
-frontend-held branding would be baked into the bundle and could not be corrected
-without a rebuild.
+The values live on the backend rather than in the frontend's build because Vite
+substitutes ``import.meta.env`` at build time, so frontend-held branding would be
+baked into the bundle and could not be corrected without a rebuild.
 
 Every value is optional. With nothing configured the instance simply describes
 itself as IQUANA, which is what a single-group local install should say.
@@ -42,8 +39,6 @@ class InstanceConfig:
     contact: str | None
     #: Optional free-text notice shown under the sign-in form.
     notice: str | None
-    #: Whether visitors may create their own account.
-    allow_registration: bool
 
 
 def get_instance_config() -> InstanceConfig:
@@ -56,15 +51,11 @@ def get_instance_config() -> InstanceConfig:
     a restart.
     """
     values = settings_service.get_many(
-        "instance_name", "instance_org", "instance_contact",
-        "instance_notice", "allow_registration",
+        "instance_name", "instance_org", "instance_contact", "instance_notice",
     )
     return InstanceConfig(
         name=values["instance_name"],
         organisation=values["instance_org"],
         contact=values["instance_contact"],
         notice=values["instance_notice"],
-        # Opt-in rather than opt-out: an instance holding real research data
-        # should not start accepting strangers because a variable was misspelled.
-        allow_registration=(values["allow_registration"] or "").strip().lower() == "true",
     )

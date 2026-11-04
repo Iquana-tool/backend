@@ -18,12 +18,14 @@ from sqlalchemy.orm import Session
 from app.database import get_session
 from app.database.dataset_members import DatasetMembers
 from app.database.users import Users
+from app.schemas.account_invites import AccountInviteCreate
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import GlobalRole, Permission
 from app.schemas.review import AdminUserCreate, GlobalRoleUpdate, SettingsUpdate
 from app.services import settings as settings_service
 from app.services.ai_services import ai_config
 from app.services.auth import get_password_hash
+from app.services.database_access import account_invites as invites_db
 from app.services.database_access.organizations import join_default_organization
 from app.services.permissions import ensure_global_permission, require_global
 
@@ -72,11 +74,11 @@ async def create_user(
         db: Session = Depends(get_session),
         user: AuthenticatedUser = Depends(require_global(Permission.USER_MANAGE)),
 ):
-    """Create an account outright, without an invite or self-registration.
+    """Create an account outright, with a password the admin chooses.
 
-    An instance is closed by default (`INSTANCE_ALLOW_REGISTRATION`), and an
-    invite only ever grants access to a single dataset -- so until now there was
-    no way to hand somebody an account at all. This is that way.
+    The other way in is a registration link (``POST /admin/account-invites``), with which
+    the person picks their own. There is no open self-registration; the first admin is
+    created by the installer (`scripts/create_admin.py`).
 
     The password is chosen by the admin and passed on out of band, so the account
     is flagged ``must_change_password`` until its holder picks their own.
@@ -115,6 +117,49 @@ async def create_user(
         "message": f"Account {account.username} created.",
         "user": _account_summary(account, 0),
     }
+
+
+@router.post("/account-invites", status_code=status.HTTP_201_CREATED)
+async def create_account_invite(
+        body: AccountInviteCreate,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require_global(Permission.USER_MANAGE)),
+):
+    """Mint a registration link: whoever follows it may create their own account.
+
+    The raw token is returned here once and only its hash is stored, so the link must be
+    copied now. The account it creates is a plain member in no dataset.
+    """
+    invite, token = invites_db.create(body, user.username, db)
+    logger.info("Registration link %s created by %r.", invite.id, user.username)
+    return {
+        "success": True,
+        "message": "Registration link created. Copy it now; it cannot be shown again.",
+        "invite": invites_db.to_read(invite).model_dump(mode="json"),
+        "token": token,
+        "invite_path": f"/join/{token}",
+    }
+
+
+@router.get("/account-invites")
+async def list_account_invites(
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require_global(Permission.USER_MANAGE)),
+):
+    """Registration links that can still be used (metadata only, never the tokens)."""
+    return {"success": True,
+            "invites": [read.model_dump(mode="json") for read in invites_db.list_active(db)]}
+
+
+@router.delete("/account-invites/{invite_id}")
+async def revoke_account_invite(
+        invite_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require_global(Permission.USER_MANAGE)),
+):
+    """Revoke a registration link; accounts already created with it are unaffected."""
+    invites_db.revoke(invite_id, db)
+    return {"success": True, "message": "Registration link revoked."}
 
 
 @router.patch("/users/{username}/global_role")

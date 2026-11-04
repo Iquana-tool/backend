@@ -1,21 +1,25 @@
 """Create (or promote) a platform admin from the command line.
 
-There is otherwise no way to get the *first* admin onto an instance. Nothing
-seeds one; ``POST /auth/register`` only ever makes a plain member and shuts as
-soon as any account exists; and ``POST /admin/users`` — the endpoint behind the
-admin page — needs an admin to call it. An instance whose accounts were all
-created by self-registration therefore has nobody who can administer it, and no
-way to fix that from inside the application.
-
-This is the way in. It talks to the database directly, on purpose: it is the
-bootstrap step that runs *before* there is anyone to authenticate as.
+There is no open self-registration: accounts are created by an admin on the admin page
+(``POST /admin/users``) or through a registration link an admin sent, and both need an
+admin to exist first. This is how the *first*
+admin gets onto an instance. It talks to the database directly, on purpose: it is
+the bootstrap step that runs *before* there is anyone to authenticate as.
 
 Usage::
 
     python scripts/create_admin.py <username> <password>
+    python scripts/create_admin.py --bootstrap <username>
 
 Idempotent: an existing account is promoted to admin and reactivated, and its
 password is reset only when one is given.
+
+``--bootstrap`` is what the installer runs. It does nothing when the instance already
+has an active admin; otherwise it creates (or promotes) the account with a generated
+password, flagged ``must_change_password``, and prints it on stdout as the line
+``IQUANA_ADMIN_PASSWORD=<password>`` so the installer can show it once. (A marked line,
+because migrations run first and anything else they print must not be taken for it.) Generating it here keeps it off the command line,
+where every other user of the machine could read it from the process list.
 
 Because it bypasses the API it also bypasses the API's password rules. That is
 the right trade for a recovery tool — an operator locked out of their own
@@ -23,13 +27,21 @@ instance should not also be locked out by a length check — but it means the
 password you pass is the password you get. Choose accordingly.
 """
 import argparse
+import os
+import secrets
 import sys
 
-from app.database import get_context_session, init_db
-from app.database.users import Users
-from app.schemas.permissions import GlobalRole
-from app.services.auth import get_password_hash
-from app.services.database_access.organizations import join_default_organization
+# Make ``import app...`` work however the script is invoked (the docstring's
+# ``python scripts/create_admin.py`` puts scripts/, not the backend root, on the path).
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, _BACKEND_ROOT)
+
+from app.database import get_context_session, init_db  # noqa: E402
+from app.database.users import Users  # noqa: E402
+from app.schemas.permissions import GlobalRole  # noqa: E402
+from app.services.auth import get_password_hash  # noqa: E402
+from app.services.database_access.organizations import join_default_organization  # noqa: E402
 
 
 def main() -> int:
@@ -37,10 +49,18 @@ def main() -> int:
     parser.add_argument("username")
     parser.add_argument("password", nargs="?",
                         help="Omit to promote an existing account without touching its password.")
+    parser.add_argument("--bootstrap", action="store_true",
+                        help="Installer mode: only if there is no active admin yet; generates the "
+                             "password and prints it alone on stdout.")
     args = parser.parse_args()
+    if args.bootstrap and args.password:
+        parser.error("--bootstrap generates the password; do not pass one.")
 
     # A fresh deployment may not have been booted through create_app yet.
     init_db()
+
+    if args.bootstrap:
+        return bootstrap(args.username)
 
     with get_context_session() as db:
         account = db.query(Users).filter_by(username=args.username).first()
@@ -72,6 +92,33 @@ def main() -> int:
         reset = ", password reset" if args.password else ""
         print(f"{args.username!r}: {changed}{reset}.")
         return 0
+
+
+def bootstrap(username: str) -> int:
+    """Create the first admin unless the instance already has one (see module docstring)."""
+    with get_context_session() as db:
+        has_admin = db.query(Users).filter(
+            Users.global_role == GlobalRole.ADMIN.value, Users.is_active.is_(True)
+        ).first() is not None
+        if has_admin:
+            print("An active admin already exists; nothing to do.", file=sys.stderr)
+            return 0
+
+        password = secrets.token_urlsafe(12)
+        fields = dict(hashed_password=get_password_hash(password), global_role=GlobalRole.ADMIN.value,
+                      is_active=True, must_change_password=True)
+        account = db.query(Users).filter_by(username=username).first()
+        if account is None:
+            # Complete before it is added: joining the organisation flushes the row.
+            db.add(Users(username=username, **fields))
+            join_default_organization(username, db)
+        else:
+            for name, value in fields.items():
+                setattr(account, name, value)
+        db.commit()
+    print(f"Created {username!r} as the first platform admin.", file=sys.stderr)
+    print(f"IQUANA_ADMIN_PASSWORD={password}")
+    return 0
 
 
 if __name__ == "__main__":

@@ -138,12 +138,20 @@ def test_an_empty_secret_field_leaves_the_stored_one_alone(ctx):
     assert _find(payload, "llm_model")["value"] == "openai/gpt-4o"
 
 
-def test_booleans_are_normalised(ctx):
-    ctx["client"].patch("/admin/settings", json={"values": {"allow_registration": "yes"}})
-    assert _find(ctx["client"].get("/admin/settings").json(), "allow_registration")["value"] == "true"
+def test_booleans_are_normalised(ctx, monkeypatch):
+    # No shipped setting is a boolean at the moment; the kind is still supported.
+    from app.services import settings as settings_service
+    flag = settings_service.SettingSpec(key="test_flag", env_var="IQUANA_TEST_FLAG", group="instance",
+                                        label="Flag", description="", kind=settings_service.KIND_BOOL,
+                                        default="false")
+    monkeypatch.setattr(settings_service, "SETTINGS", (*settings_service.SETTINGS, flag))
+    monkeypatch.setitem(settings_service.BY_KEY, flag.key, flag)
 
-    ctx["client"].patch("/admin/settings", json={"values": {"allow_registration": "false"}})
-    assert _find(ctx["client"].get("/admin/settings").json(), "allow_registration")["value"] == "false"
+    ctx["client"].patch("/admin/settings", json={"values": {"test_flag": "yes"}})
+    assert _find(ctx["client"].get("/admin/settings").json(), "test_flag")["value"] == "true"
+
+    ctx["client"].patch("/admin/settings", json={"values": {"test_flag": "false"}})
+    assert _find(ctx["client"].get("/admin/settings").json(), "test_flag")["value"] == "false"
 
 
 def test_an_unknown_key_is_refused_rather_than_ignored(ctx):
