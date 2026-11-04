@@ -720,3 +720,88 @@ def test_tiff_uploads_with_colliding_normalized_names_do_not_overwrite(tmp_path,
     np.testing.assert_array_equal(pixels2, second_pixels)
 
 
+def test_concurrent_same_name_uploads_atomically_reserve_distinct_files(tmp_path, monkeypatch):
+    first_pixels = np.full((16, 16), 31, dtype=np.uint8)
+    second_pixels = np.full((16, 16), 219, dtype=np.uint8)
+    first_tiff = _tiff(tmp_path / "t1.tif", first_pixels, mode="L")
+    second_tiff = _tiff(tmp_path / "t2.tif", second_pixels, mode="L")
+
+    thumbnail_root = tmp_path / "thumbnails"
+    dataset_folder = tmp_path / "dataset"
+    monkeypatch.setattr(images_db, "THUMBNAILS_DIR", str(thumbnail_root))
+
+    async def no_mask(*_args):
+        return None
+
+    monkeypatch.setattr(images_db, "create_new_mask", no_mask)
+
+    class MultiInsertDB:
+        def __init__(self):
+            self.rows = []
+
+        def add(self, row):
+            row.id = len(self.rows) + 1
+            self.rows.append(row)
+
+        def flush(self):
+            pass
+
+        def commit(self):
+            pass
+
+        def query(self, *args):
+            return _Query(list(self.rows))
+
+    db1 = MultiInsertDB()
+    db2 = MultiInsertDB()
+
+    upload1 = _upload("same.tif", first_tiff)
+    upload2 = _upload("same.tif", second_tiff)
+
+    arrivals = []
+    gate = asyncio.Event()
+    original_save = images_db.save_image_to_disk
+
+    async def pause_after_allocation(upload, image_path, thumbnail_path):
+        arrivals.append((str(image_path), str(thumbnail_path)))
+        if len(arrivals) == 2:
+            gate.set()
+        await asyncio.wait_for(gate.wait(), timeout=5)
+        return await original_save(upload, image_path, thumbnail_path)
+
+    monkeypatch.setattr(images_db, "save_image_to_disk", pause_after_allocation)
+
+    async def runner():
+        return await asyncio.gather(
+            images_db.process_and_save_image(upload1, 1, str(dataset_folder), db1),
+            images_db.process_and_save_image(upload2, 1, str(dataset_folder), db2),
+        )
+
+    results = asyncio.run(runner())
+
+    assert len(results) == 2
+    assert db1.rows[0].file_path != db2.rows[0].file_path
+    assert Path(db1.rows[0].file_path).read_bytes() == first_tiff
+    assert Path(db2.rows[0].file_path).read_bytes() == second_tiff
+    assert Path(db1.rows[0].thumbnail_file_path).exists()
+    assert Path(db2.rows[0].thumbnail_file_path).exists()
+
+
+def test_corrupt_cached_preview_is_unlinked_and_regenerated(tmp_path):
+    source = tmp_path / "source.tif"
+    thumbnail = tmp_path / "source.tif.png"
+    _tiff(source, np.array([[10, 20], [30, 40]], dtype=np.uint8), mode="L")
+    cache_path, _ = images_db._preview_cache_path(source, thumbnail)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"corrupted truncated data")
+
+    returned = images_db.tiff_preview_file(source, thumbnail)
+    assert returned == cache_path
+    assert returned.exists()
+    with Image.open(returned) as img:
+        img.load()
+        assert img.format == "PNG"
+        assert img.size == (2, 2)
+
+
+

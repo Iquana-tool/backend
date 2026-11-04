@@ -207,11 +207,15 @@ def tiff_preview_file(
 
     try:
         if cache_path.is_file():
-            with cache_path.open("rb") as cached_preview:
-                if cached_preview.read(8) == b"\x89PNG\r\n\x1a\n":
+            with Image.open(cache_path) as cached_preview:
+                if cached_preview.format == "PNG":
+                    cached_preview.verify()
                     return cache_path
-    except OSError:
-        pass
+    except (OSError, ValueError, SyntaxError):
+        try:
+            cache_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     try:
         image = Image.open(path)
@@ -441,7 +445,10 @@ def _resolve_unique_storage_filename(
         dataset_id: int,
         db: Session,
 ) -> tuple[str, Path, str, Path]:
-    """Find an unused storage filename and paths for an image and its thumbnail."""
+    """Atomically reserve and return an unused storage filename and paths for an image and thumbnail."""
+    image_folder.mkdir(parents=True, exist_ok=True)
+    thumbnail_dir.mkdir(parents=True, exist_ok=True)
+
     path_obj = Path(base_name)
     stem, suffix = path_obj.stem, path_obj.suffix
 
@@ -452,9 +459,6 @@ def _resolve_unique_storage_filename(
         candidate_file_path = image_folder / candidate_name
         candidate_thumb_name = f"{candidate_name}.png" if is_tiff else candidate_name
         candidate_thumb_path = thumbnail_dir / candidate_thumb_name
-
-        file_exists = candidate_file_path.exists()
-        thumb_exists = candidate_thumb_path.exists()
 
         db_conflict = False
         if hasattr(db, "query"):
@@ -468,11 +472,39 @@ def _resolve_unique_storage_filename(
             except Exception:
                 db_conflict = False
 
-        if not file_exists and not thumb_exists and not db_conflict:
-            return candidate_name, candidate_file_path, candidate_thumb_name, candidate_thumb_path
+        if db_conflict:
+            counter += 1
+            candidate_name = f"{stem}_{counter}{suffix}"
+            continue
 
-        counter += 1
-        candidate_name = f"{stem}_{counter}{suffix}"
+        try:
+            file_fd = os.open(
+                candidate_file_path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o666,
+            )
+        except FileExistsError:
+            counter += 1
+            candidate_name = f"{stem}_{counter}{suffix}"
+            continue
+
+        if candidate_file_path != candidate_thumb_path:
+            try:
+                thumb_fd = os.open(
+                    candidate_thumb_path,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o666,
+                )
+            except FileExistsError:
+                os.close(file_fd)
+                candidate_file_path.unlink(missing_ok=True)
+                counter += 1
+                candidate_name = f"{stem}_{counter}{suffix}"
+                continue
+            os.close(thumb_fd)
+
+        os.close(file_fd)
+        return candidate_name, candidate_file_path, candidate_thumb_name, candidate_thumb_path
 
 
 async def process_and_save_image(
@@ -503,26 +535,33 @@ async def process_and_save_image(
         db,
     )
 
-    native_width, native_height, color_mode = await save_image_to_disk(file, file_path, thumbnail_path)
+    try:
+        native_width, native_height, color_mode = await save_image_to_disk(file, file_path, thumbnail_path)
 
-    new_entry = Images(
-        file_name=stored_filename,
-        file_path=str(file_path),
-        thumbnail_file_path=str(thumbnail_path),
-        dataset_id=dataset_id,
-        width=native_width,
-        height=native_height,
-        color_mode=color_mode,
-    )
+        new_entry = Images(
+            file_name=stored_filename,
+            file_path=str(file_path),
+            thumbnail_file_path=str(thumbnail_path),
+            dataset_id=dataset_id,
+            width=native_width,
+            height=native_height,
+            color_mode=color_mode,
+        )
 
-    # Add to session but DON'T commit yet
-    db.add(new_entry)
-    db.flush()  # This populates new_entry.id without ending the transaction
+        # Add to session but DON'T commit yet
+        db.add(new_entry)
+        db.flush()  # This populates new_entry.id without ending the transaction
 
-    # Mask logic
-    await create_new_mask(new_entry.id, dataset_folder, db)
+        # Mask logic
+        await create_new_mask(new_entry.id, dataset_folder, db)
 
-    db.commit()
+        db.commit()
+    except BaseException:
+        file_path.unlink(missing_ok=True)
+        thumbnail_path.unlink(missing_ok=True)
+        clear_tiff_preview_cache(thumbnail_path, (file_path, thumbnail_path))
+        raise
+
     return new_entry.id
 
 
