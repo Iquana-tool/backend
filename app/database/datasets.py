@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, Boolean, Column, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
 
 from . import database
@@ -36,6 +36,10 @@ class Datasets(database):
     # AI tools switched off for this dataset, comma-separated (see app.services.ai_tools).
     # Empty or NULL means every tool is available.
     disabled_ai_tools = Column(String(255), nullable=True)
+    # The queue settings a curator recommends, per queue ("annotation", "review"): each
+    # {"settings", "reason", "updated_by", "updated_at"} (see app.services.queue_recommendation).
+    # NULL when nothing is recommended.
+    recommended_queues = Column(JSON, nullable=True)
 
     owner = relationship("Users", back_populates="owned_datasets", foreign_keys=[created_by])
     memberships = relationship("DatasetMembers",

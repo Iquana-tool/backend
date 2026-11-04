@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, EmailStr, Field, field_validator, model_validator
 
 from app.schemas.account import normalise_email
 from app.schemas.permissions import DatasetRole, GlobalRole, Permission
+from app.schemas.queue import Direction, QueueMethodOption, RecommendedQueue, SortSettings
 
 
 class RejectionReason(StrEnum):
@@ -151,24 +153,20 @@ class ReviewGranularity(StrEnum):
     CUSTOM = "custom"
 
 
-class ReviewSortDirection(StrEnum):
-    ASCENDING = "asc"
-    DESCENDING = "desc"
+class ReviewQueueRequest(SortSettings):
+    """Request body for building a review queue.
 
-
-class ReviewQueueRequest(BaseModel):
-    """Request body for building a review queue."""
+    The sort settings are shared with the annotation queue (see ``SortSettings``); they order
+    instance items, and the metadata filter also narrows image items. ``max_confidence`` here
+    is an object's own confidence score. ``sort_strategy`` is still accepted for ``method``.
+    """
 
     granularity: ReviewGranularity = Field(..., description="What one queue item spans.")
-    sort_strategy: str = Field(
+    method: str = Field(
         "hierarchy",
-        description="Key of the scoring strategy that orders instance items. "
+        validation_alias=AliasChoices("method", "sort_strategy"),
+        description="Key of the object sorting method that orders instance items. "
                     "The available keys are listed in the review summary.",
-    )
-    direction: ReviewSortDirection = Field(
-        ReviewSortDirection.ASCENDING,
-        description="Ascending replays the strategy's natural order "
-                    "(for 'hierarchy': root instances first).",
     )
     label_ids: list[int] | None = Field(
         None,
@@ -196,6 +194,16 @@ class ReviewQueueRequest(BaseModel):
         return self
 
 
+class ReviewRecommendedSettings(SortSettings):
+    """What a recommended review queue fixes: the sort settings and what one item spans.
+
+    Custom selection is left out: which labels to sweep is the reviewer's own choice.
+    """
+
+    granularity: Literal["images", "hierarchy"] = "hierarchy"
+    method: str = "hierarchy"
+
+
 class ReviewQueueImageItem(BaseModel):
     """One whole-image work item."""
 
@@ -219,7 +227,10 @@ class ReviewQueueInstanceItem(BaseModel):
     label_id: int | None
     parent_id: int | None
     depth: int = Field(..., description="0 for root instances.")
-    score: float = Field(..., description="The sort strategy's score for this instance.")
+    score: float | None = Field(None, description="The placing method's score for this instance.")
+    reason: str | None = Field(
+        None, description="Key of the method that placed this instance (round robin has two)."
+    )
 
 
 class ReviewQueueRead(BaseModel):
@@ -231,23 +242,14 @@ class ReviewQueueRead(BaseModel):
     """
 
     granularity: ReviewGranularity
-    sort_strategy: str
-    direction: ReviewSortDirection
+    method: str
+    direction: Direction
     # Echoed back so the session can keep acting under the same rules it was
     # built with (e.g. the image-level Accept must match the queue's eligibility).
     include_reviewed: bool = False
     total: int
     images: list[ReviewQueueImageItem] = Field(default_factory=list)
     instances: list[ReviewQueueInstanceItem] = Field(default_factory=list)
-
-
-class ReviewSortStrategyOption(BaseModel):
-    """One selectable queue ordering, for the setup page's dropdown."""
-
-    key: str
-    label: str
-    description: str
-    default_direction: ReviewSortDirection = ReviewSortDirection.ASCENDING
 
 
 class ReviewSummary(BaseModel):
@@ -261,7 +263,16 @@ class ReviewSummary(BaseModel):
                     "via the queue's include_reviewed option.",
     )
     open_rejections: int = Field(..., description="Sent-back items the annotators have not addressed yet.")
-    strategies: list[ReviewSortStrategyOption] = Field(default_factory=list)
+    methods: list[QueueMethodOption] = Field(default_factory=list)
+    authors: list[str] = Field(
+        default_factory=list, description="Other people who drew here, for the 'By' filter."
+    )
+    require_independent_review: bool = Field(
+        False, description="The builder then starts on 'others': you cannot approve your own work."
+    )
+    recommended: RecommendedQueue | None = Field(
+        None, description="The settings a curator recommends for this dataset, if any."
+    )
 
 
 # -- Correction queue -------------------------------------------------------

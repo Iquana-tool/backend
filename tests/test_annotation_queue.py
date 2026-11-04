@@ -29,10 +29,14 @@ from app.schemas.annotation_queue import QueueSettings
 from app.services.annotation_queue import (
     build_and_save_queue,
     get_saved_queue,
-    method_options,
     summarize,
     trained_models_for_dataset,
 )
+from app.services.queue_core import method_options as all_method_options
+
+
+def method_options():
+    return all_method_options("images")
 
 
 def settings(method, **kwargs):
@@ -147,7 +151,7 @@ def test_a_registered_method_appears_without_other_changes(ctx, monkeypatch):
     from app.services import queue_methods
 
     score = lambda c: {u.key: u.key for u in c.units}  # noqa: E731
-    monkeypatch.setitem(queue_methods.METHODS, "reverse_id",
+    monkeypatch.setitem(queue_methods.METHODS["images"], "reverse_id",
                         queue_methods.QueueMethod("reverse_id", "Reverse",
                                                   {"descending": "Highest id first."}, score))
     assert "reverse_id" in {o.key for o in method_options()}

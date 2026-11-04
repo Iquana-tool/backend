@@ -8,61 +8,28 @@ so a new method appears in the builder without touching this contract.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Direction = Literal["ascending", "descending"]
-#: What a method needs prepared before it can rank: vectors from an embedding model, or a
-#: trained model's detections.
-Need = Literal["embedding_model", "trained_model"]
+from app.schemas.queue import Direction, Need, QueueMethodOption, RecommendedQueue, SortSettings
+
+__all__ = ["Direction", "Need", "QueueSettings", "QueueMethodOption"]
 
 
-class QueueSettings(BaseModel):
-    """How to sort and filter a queue; sent to prepare and build, saved with the queue."""
+class QueueSettings(SortSettings):
+    """How to sort and filter the annotation queue; sent to prepare and build, saved with the
+    queue. ``max_confidence`` here is an image's most confident detection and needs a trained
+    model."""
 
-    method: str = Field(..., description="Key of a sorting method from the summary.")
-    direction: Direction | None = Field(
-        None, description="Sort direction; None uses the method's default (its first)."
-    )
-    round_robin_with: str | None = Field(
-        None, description="A second method to alternate with, one pick from each in turn."
-    )
     embedding_model: str | None = Field(
         None, description="Embedding model registry key, for methods that need one."
     )
     trained_model: str | None = Field(
         None, description="Trained instance-segmentation model, for methods or filters that need one."
     )
-    metadata_filters: dict[str, list[str] | dict] = Field(
-        default_factory=dict, description="Image metadata filter, as in the gallery."
-    )
-    balance_by: str | None = Field(
-        None,
-        description="Metadata key to take turns over, e.g. species: one image of each value in "
-                    "turn, every value in the method's order, so no one annotates one species "
-                    "to the end before the next. Images without the key form their own group.",
-    )
-    max_confidence: float | None = Field(
-        None, ge=0.0, le=1.0,
-        description="Keep only images whose most confident detection is below this value. "
-                    "Needs a trained model.",
-    )
     show_builder: bool = Field(
         True, description="False skips the builder next time and opens this queue directly."
     )
-
-
-class AnnotationQueueMethodOption(BaseModel):
-    """One sorting method, as the builder shows it."""
-
-    key: str
-    label: str
-    needs: list[Need] = Field(default_factory=list)
-    #: Directions the method supports; the first is its default.
-    directions: list[Direction]
-    #: Direction -> what that order puts first.
-    descriptions: dict[Direction, str]
 
 
 class QueueModelOption(BaseModel):
@@ -99,7 +66,13 @@ class AnnotationQueueSummary(BaseModel):
     saved_settings: QueueSettings | None = Field(
         None, description="Settings of the saved queue, if any."
     )
-    methods: list[AnnotationQueueMethodOption] = Field(default_factory=list)
+    methods: list[QueueMethodOption] = Field(default_factory=list)
+    authors: list[str] = Field(
+        default_factory=list, description="Other people who drew here, for the 'By' filter."
+    )
+    recommended: RecommendedQueue | None = Field(
+        None, description="The settings a curator recommends for this dataset, if any."
+    )
 
 
 class QueuePrepJobRead(BaseModel):

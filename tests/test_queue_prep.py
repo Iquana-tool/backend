@@ -18,7 +18,7 @@ from app.database.stacks import Stacks
 from app.database.users import Users
 from app.schemas.annotation_queue import QueueSettings
 from app.services import queue_prep
-from app.services.annotation_queue import build_and_save_queue
+from app.services.annotation_queue import build_and_save_queue, summarize
 
 import_models()
 
@@ -238,8 +238,8 @@ def test_filters_keep_matching_images_only(db, monkeypatch):
     score(db, high, [0.9])
     score(db, other, [0.2])
     db.commit()
-    import app.services.annotation_queue as aq
-    monkeypatch.setattr(aq, "filter_image_ids", lambda _db, _ds, _f: [low.id, high.id])
+    import app.services.queue_core as core
+    monkeypatch.setattr(core, "filter_image_ids", lambda _db, _ds, _f: [low.id, high.id])
 
     queue = build(db, ds, "as_uploaded", trained_model="m1", max_confidence=0.5,
                   metadata_filters={"site": ["reef_a"]})
@@ -387,3 +387,57 @@ def test_balance_by_metadata_takes_turns_between_values(db):
     assert [by_id[i] for i in queue.image_ids] == ["apal", "ofav", "ssid", "apal", "ofav", "apal"]
     # Within a value the method's order holds.
     assert [i for i in queue.image_ids if by_id[i] == "apal"] == [imgs[0].id, imgs[1].id, imgs[2].id]
+
+
+# -- "By" filter ------------------------------------------------------------------------
+
+def test_by_filter_keeps_whose_work_was_asked_for(db):
+    ds = make_dataset(db)
+    mine = make_image(db, ds, "mine.png", state="in_progress", author="ann")
+    bobs = make_image(db, ds, "bob.png", state="in_progress", author="bob")
+    fresh = make_image(db, ds, "fresh.png", state="none")
+    db.commit()
+    assert build(db, ds, "as_uploaded", by="mine").image_ids == [mine.id]
+    # "Everyone but me": everything I have not drawn on, fresh images included; Bob's
+    # started image still waits at the end.
+    assert build(db, ds, "as_uploaded", by="others").image_ids == [fresh.id, bobs.id]
+    # Picking a person asks for their work, so it is sorted rather than set aside.
+    queue = build(db, ds, "as_uploaded", by="person", by_person="bob")
+    assert queue.image_ids == [bobs.id]
+    assert queue.details[str(bobs.id)]["reason"] == "as_uploaded"
+    summary = summarize(ds.id, "ann", db)
+    assert summary.authors == ["bob"]
+
+
+def test_by_person_needs_a_name():
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        QueueSettings(method="as_uploaded", by="person")
+
+
+def test_recommended_annotation_queue_must_build_and_keeps_kinds_apart(db):
+    from fastapi import HTTPException
+
+    from app.schemas.queue import RecommendedQueueWrite
+    from app.services import queue_recommendation as rec
+
+    ds = make_dataset(db)
+    db.commit()
+    with pytest.raises(HTTPException) as exc:
+        rec.set_recommended(db, ds.id, "annotation", RecommendedQueueWrite(
+            settings={"method": "diversity"}, reason="Cover the variety first."), "cur")
+    assert exc.value.status_code == 400  # Diversity needs an embedding model.
+
+    rec.set_recommended(db, ds.id, "annotation", RecommendedQueueWrite(
+        settings={"method": "diversity", "embedding_model": "dinov3", "show_builder": False},
+        reason="Cover the variety first."), "cur")
+    rec.set_recommended(db, ds.id, "review", RecommendedQueueWrite(
+        settings={"method": "uncertainty"}, reason="Borderline first."), "cur")
+    shown = summarize(ds.id, "ann", db).recommended
+    assert shown.reason == "Cover the variety first."
+    assert shown.settings["embedding_model"] == "dinov3"
+    assert "show_builder" not in shown.settings
+
+    rec.clear_recommended(db, ds.id, "annotation")
+    assert summarize(ds.id, "ann", db).recommended is None
+    assert set(db.get(type(ds), ds.id).recommended_queues) == {"review"}

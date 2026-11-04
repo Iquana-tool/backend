@@ -1,6 +1,7 @@
 """Building and persisting annotation queues: the order an annotator works images.
 
-Mirrors ``app.services.review_queue`` but with two deliberate differences:
+Shares its sorting, filters and turns with ``app.services.review_queue`` through
+``app.services.queue_core``, but differs in two deliberate ways:
 
 * **Whole-image ordering, not instance scoring.** The queue orders the dataset's images; a
   scan stack counts as one unit whose frames stay together.
@@ -22,7 +23,6 @@ waits for it.
 """
 from __future__ import annotations
 
-from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -31,33 +31,16 @@ from app.database.contours import Contours
 from app.database.images import Images
 from app.database.masks import Masks
 from app.schemas.annotation_queue import (
-    AnnotationQueueMethodOption,
     AnnotationQueueRead,
     AnnotationQueueSummary,
     QueueModelOption,
     QueueSettings,
 )
-from app.services import al_ranking
-from app.services.database_access.image_metadata import (
-    filter_image_ids,
-    get_metadata_for_dataset,
-    normalize_key,
-)
-from app.services.queue_methods import METHODS, TRAINED_MODEL, MethodContext, QueueMethod, load_confidences
+from app.services import al_ranking, queue_core
+from app.services.queue_methods import IMAGES, TRAINED_MODEL, MethodContext, load_confidences
 
 
 _NEED_NAMES = {"embedding_model": "an embedding model", "trained_model": "a trained model"}
-
-
-def _bad_request(detail: str) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
-
-
-def get_method(key: str) -> QueueMethod:
-    method = METHODS.get(key)
-    if method is None:
-        raise _bad_request(f"Unknown sorting method '{key}'. Available: {sorted(METHODS)}.")
-    return method
 
 
 def required_models(settings: QueueSettings) -> dict[str, str]:
@@ -65,27 +48,15 @@ def required_models(settings: QueueSettings) -> dict[str, str]:
 
     Raises 400 when a needed model was not chosen or a direction is not supported.
     """
-    methods = [get_method(settings.method)]
-    if settings.round_robin_with:
-        methods.append(get_method(settings.round_robin_with))
-    if settings.direction and settings.direction not in methods[0].directions:
-        raise _bad_request(f"'{methods[0].label}' cannot be sorted {settings.direction}.")
+    methods = queue_core.chosen_methods(IMAGES, settings)
     needs = {need for method in methods for need in method.needs}
     if settings.max_confidence is not None:
         needs.add(TRAINED_MODEL)
     chosen = {need: getattr(settings, need) for need in sorted(needs)}
     missing = [_NEED_NAMES[need] for need, model in chosen.items() if not model]
     if missing:
-        raise _bad_request(f"Choose {' and '.join(missing)} first.")
+        raise queue_core.bad_request(f"Choose {' and '.join(missing)} first.")
     return chosen
-
-
-def method_options() -> list[AnnotationQueueMethodOption]:
-    return [
-        AnnotationQueueMethodOption(key=m.key, label=m.label, needs=list(m.needs),
-                                    directions=list(m.directions), descriptions=m.descriptions)
-        for m in METHODS.values()
-    ]
 
 
 def trained_models_for_dataset(models: list[dict], dataset_id: int) -> list[QueueModelOption]:
@@ -153,74 +124,50 @@ def _uploaded_units(db: Session, dataset_id: int) -> list[al_ranking.Unit]:
 
 
 def _filter_units(db: Session, dataset_id: int, units: list[al_ranking.Unit],
-                  settings: QueueSettings) -> list[al_ranking.Unit]:
-    """Keep units matching the metadata filter and the confidence ceiling."""
-    if settings.metadata_filters:
-        allowed = set(filter_image_ids(db, dataset_id, settings.metadata_filters))
-        units = [u for u in units if allowed.intersection(u.image_ids)]
+                  settings: QueueSettings, username: str,
+                  authors: dict[int, set[str]]) -> list[al_ranking.Unit]:
+    """Keep units matching the metadata filter, the "By" filter and the confidence ceiling."""
+    units = queue_core.filter_by_metadata(db, dataset_id, units, settings.metadata_filters,
+                                          lambda u: u.image_ids)
+    units = queue_core.filter_by_author(
+        units, settings, username,
+        lambda u: set().union(*(authors.get(i, set()) for i in u.image_ids)))
     if settings.max_confidence is not None:
         confidences = load_confidences(db, [i for u in units for i in u.image_ids],
                                        settings.trained_model)
-        units = [u for u in units
-                 if max((c for i in u.image_ids for c in confidences.get(i, [])), default=0.0)
-                 < settings.max_confidence]
+        # A unit's confidence is its most confident detection over all frames; an unscored
+        # or empty unit counts as 0, so it stays in.
+        units = queue_core.filter_by_confidence(
+            units, settings.max_confidence,
+            lambda u: max((c for i in u.image_ids for c in confidences.get(i, [])), default=0.0))
     return units
-
-
-def _rank(method: QueueMethod, direction: str,
-          ctx: MethodContext) -> list[tuple[int, str, float | None]]:
-    """(unit key, reason, score) in queue order: scored units, then unscored ones."""
-    scores = method.score(ctx)
-    scored = sorted(scores, key=scores.get, reverse=direction == "descending")
-    unscored = [u.key for u in ctx.units if u.key not in scores]
-
-    def shown(score) -> float:
-        return round(float(score[0] if isinstance(score, tuple) else score), 4)
-
-    return ([(key, method.key, shown(scores[key])) for key in scored]
-            + [(key, "no_data", None) for key in unscored])
-
-
-def _balance(db: Session, dataset_id: int, ranked: list[tuple[int, str, float | None]],
-             units_by_key: dict[int, al_ranking.Unit], key: str) -> list[tuple[int, str, float | None]]:
-    """Take turns between the values of a metadata key, keeping each value's own order.
-
-    A unit's value is its first image's (a scan's frames share the scan's metadata). Values
-    take turns in the order they first appear in ``ranked``, so the best-ranked image still
-    comes first; units without the key are one more group.
-    """
-    wanted = normalize_key(key)
-    metadata = get_metadata_for_dataset(db, dataset_id)
-    groups: dict[str | None, list[tuple[int, str, float | None]]] = {}
-    for entry in ranked:
-        first_image = units_by_key[entry[0]].image_ids[0]
-        groups.setdefault(metadata.get(first_image, {}).get(wanted), []).append(entry)
-    return al_ranking.round_robin(*groups.values())
 
 
 def build_order(db: Session, dataset_id: int, username: str,
                 settings: QueueSettings) -> tuple[list[int], dict[str, dict]]:
     """The queue's image ids and why each sits where it does."""
     models = required_models(settings)
-    units = _filter_units(db, dataset_id, _uploaded_units(db, dataset_id), settings)
     states = image_states(db, dataset_id)
     authors = _image_authors(db, dataset_id)
+    units = _filter_units(db, dataset_id, _uploaded_units(db, dataset_id), settings,
+                          username, authors)
     by_state: dict[str, list[al_ranking.Unit]] = {"open": [], "others": [], "finished": []}
     for unit in units:
-        by_state[_unit_state(unit, states, authors, username)].append(unit)
+        state = _unit_state(unit, states, authors, username)
+        # Picking one person's work asks for images someone else started: sort them rather
+        # than set them aside.
+        if state == "others" and settings.by == "person":
+            state = "open"
+        by_state[state].append(unit)
 
     ctx = MethodContext(db, by_state["open"], by_state["finished"],
                         embedding_model=models.get("embedding_model"),
                         trained_model=models.get("trained_model"))
-    primary = get_method(settings.method)
-    orders = [_rank(primary, settings.direction or primary.directions[0], ctx)]
-    if settings.round_robin_with:
-        secondary = get_method(settings.round_robin_with)
-        orders.append(_rank(secondary, secondary.directions[0], ctx))
-    ranked = al_ranking.round_robin(*orders)
+    ranked = queue_core.sort_units(queue_core.chosen_methods(IMAGES, settings), settings, ctx)
     by_key = {unit.key: unit for unit in units}
     if settings.balance_by:
-        ranked = _balance(db, dataset_id, ranked, by_key, settings.balance_by)
+        ranked = queue_core.balance(db, dataset_id, ranked, settings.balance_by,
+                                    {key: unit.image_ids[0] for key, unit in by_key.items()})
     ranked += [(u.key, "started_by_other", None) for u in by_state["others"]]
     ranked += [(u.key, "finished", None) for u in by_state["finished"]]
 
@@ -322,5 +269,7 @@ def summarize(dataset_id: int, username: str, db: Session) -> AnnotationQueueSum
         total=total,
         has_saved_queue=row is not None,
         saved_settings=_settings_of(row) if row else None,
-        methods=method_options(),
+        methods=queue_core.method_options(IMAGES),
+        authors=queue_core.dataset_authors(db, dataset_id, exclude=username),
+        recommended=queue_core.recommended_queue(db, dataset_id, "annotation"),
     )

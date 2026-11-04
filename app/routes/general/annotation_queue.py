@@ -17,7 +17,8 @@ from app.database.queue_prep_jobs import QueuePrepJobs
 from app.schemas.annotation_queue import QueueModelOption, QueueModelOptions, QueueSettings
 from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
-from app.services import annotation_queue, queue_prep
+from app.schemas.queue import RecommendedQueueWrite
+from app.services import annotation_queue, queue_prep, queue_recommendation
 from app.services.ai_tools import AiTool, is_enabled
 from app.services.model_registry import list_available_models
 from app.services.permissions import require
@@ -164,3 +165,31 @@ async def cancel_prep_job(
         )
     queue_prep.cancel(db, job)
     return {"success": True, "job": queue_prep.to_read(job).model_dump()}
+
+
+# -- Recommended queue ------------------------------------------------------------------
+
+@router.put("/datasets/{dataset_id}/recommended")
+async def set_recommended_annotation_queue(
+        dataset_id: int,
+        body: RecommendedQueueWrite,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE, "dataset_id")),
+):
+    """Recommend annotation queue settings for the dataset, with a one-line reason. Curators and
+    owners only, like the dataset's other settings; the settings are checked as if a queue
+    were being built, so a recommendation always builds."""
+    recommended = queue_recommendation.set_recommended(db, dataset_id, "annotation", body, user.username)
+    return {"success": True, "message": "Recommendation saved.",
+            "recommended": recommended.model_dump(mode="json")}
+
+
+@router.delete("/datasets/{dataset_id}/recommended")
+async def clear_recommended_annotation_queue(
+        dataset_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.DATASET_UPDATE, "dataset_id")),
+):
+    """Remove the dataset's recommended annotation queue."""
+    queue_recommendation.clear_recommended(db, dataset_id, "annotation")
+    return {"success": True, "message": "Recommendation removed."}

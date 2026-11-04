@@ -1,12 +1,19 @@
-"""Sorting methods for the annotation queue, as plugins.
+"""Sorting methods for the annotation and review queues, as plugins.
 
-A method is one function that scores the units it is given (plain images, or whole scans
-whose frames stay together); a higher score comes first when sorting descending. Register it
-with :func:`register_method` and it appears in the queue builder, with the pickers its
-``needs`` call for. Everything around the score is shared and lives in
-``app.services.annotation_queue``: sort direction, round robin between two methods,
-filters, placing finished work last, and preparing the data methods need
-(``app.services.queue_prep``)::
+A method is one function that scores the units it is given; a higher score comes first when
+sorting descending. Each method sorts one kind of unit (``sorts``):
+
+* ``"images"`` -- the annotation queue's units: plain images, or whole scans whose frames
+  stay together (:class:`app.services.al_ranking.Unit`).
+* ``"objects"`` -- the review queue's units: single contours
+  (:class:`app.services.review_queue.QueueCandidate`).
+
+Register a method with :func:`register_method` and it appears in that queue's builder, with
+the pickers its ``needs`` call for. Everything around the score is shared and lives in
+``app.services.queue_core``: sort direction, round robin between two methods, filters and
+taking turns by a metadata key. What only one queue does stays in that queue's module
+(``app.services.annotation_queue``, ``app.services.review_queue``), and preparing the data
+image methods need lives in ``app.services.queue_prep``::
 
     @register_method("margin", "Margin", {
         "descending": "Images with the closest top-two scores first.",
@@ -61,9 +68,10 @@ class MethodContext:
     they use."""
 
     db: Session
-    #: The units to rank: unfinished, and matching the queue's filters.
-    units: list[Unit]
-    #: Finished units: what is already covered (Diversity measures distance from them).
+    #: The units to rank, matching the queue's filters: unfinished image units for the
+    #: annotation queue, objects awaiting review for the review queue. Each has a ``key``.
+    units: list[Any]
+    #: Finished image units: what is already covered (Diversity measures distance from them).
     seed_units: list[Unit] = field(default_factory=list)
     embedding_model: str | None = None
     trained_model: str | None = None
@@ -88,6 +96,10 @@ class MethodContext:
 ScoreFn = Callable[[MethodContext], dict[int, Any]]
 
 
+IMAGES = "images"
+OBJECTS = "objects"
+
+
 @dataclass(frozen=True)
 class QueueMethod:
     key: str
@@ -96,24 +108,30 @@ class QueueMethod:
     descriptions: dict[str, str]
     score: ScoreFn
     needs: tuple[str, ...] = ()
+    sorts: str = IMAGES
 
     @property
     def directions(self) -> tuple[str, ...]:
         return tuple(self.descriptions)
 
 
-METHODS: dict[str, QueueMethod] = {}
+#: What a method sorts -> key -> method. Keys are unique per kind only, so both queues can
+#: offer an "Uncertainty" that means the same idea for their own units.
+METHODS: dict[str, dict[str, QueueMethod]] = {IMAGES: {}, OBJECTS: {}}
 
 
 def register_method(key: str, label: str, descriptions: dict[str, str], *,
-                    needs: tuple[str, ...] = ()):
-    """Register a sorting method; registered methods appear in the queue builder."""
+                    sorts: str = IMAGES, needs: tuple[str, ...] = ()):
+    """Register a sorting method; registered methods appear in that queue's builder."""
 
     def decorator(fn: ScoreFn) -> ScoreFn:
-        METHODS[key] = QueueMethod(key, label, dict(descriptions), fn, tuple(needs))
+        METHODS[sorts][key] = QueueMethod(key, label, dict(descriptions), fn, tuple(needs), sorts)
         return fn
 
     return decorator
+
+
+# -- Images (annotation queue) ------------------------------------------------------
 
 
 @register_method("as_uploaded", "As uploaded", {
@@ -160,3 +178,35 @@ def _density(ctx: MethodContext) -> dict[int, float]:
 def _uncertainty(ctx: MethodContext) -> dict[int, tuple[float, int]]:
     scores = {u.key: al_ranking.unit_uncertainty(u, ctx.confidences) for u in ctx.units}
     return {key: score for key, score in scores.items() if score is not None}
+
+
+# -- Objects (review queue) ---------------------------------------------------------
+#
+# Objects arrive sorted by image, then nesting depth, then id, and sorting is stable, so
+# objects with the same score stay grouped by image with parents before their children.
+
+@register_method("hierarchy", "Hierarchy", {
+    "ascending": "Whole objects come first, then the parts inside them. "
+                 "Check containers before their contents.",
+    "descending": "The innermost parts come first, the objects that contain them last.",
+}, sorts=OBJECTS)
+def _hierarchy(ctx: MethodContext) -> dict[int, int]:
+    return {obj.key: obj.depth for obj in ctx.units}
+
+
+@register_method("confidence", "Confidence", {
+    "ascending": "The least confident objects come first, to fix likely mistakes. "
+                 "Hand-drawn objects count as fully confident.",
+    "descending": "The most confident objects come first, to accept good predictions quickly.",
+}, sorts=OBJECTS)
+def _object_confidence(ctx: MethodContext) -> dict[int, float]:
+    return {obj.key: float(obj.confidence) for obj in ctx.units}
+
+
+@register_method("uncertainty", "Uncertainty", {
+    "descending": "Objects the model was most torn about (closest to 50/50) come first, "
+                  "where mistakes are most likely. Hand-drawn objects come last.",
+    "ascending": "Objects the model was most sure about come first.",
+}, sorts=OBJECTS)
+def _object_uncertainty(ctx: MethodContext) -> dict[int, float]:
+    return {obj.key: al_ranking.binary_entropy(obj.confidence) for obj in ctx.units}

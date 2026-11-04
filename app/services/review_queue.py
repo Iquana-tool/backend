@@ -11,11 +11,12 @@ The queue has two halves:
   contour withdraws the rejecting reviewer's own approval (see
   `database_access.rejections.reject`), so a changed mind overwrites the old
   verdict instead of coexisting with it.
-* **Ordering** — a scoring strategy from `SORT_STRATEGIES` maps each candidate to a
-  float; the queue is the candidates sorted by that score. "Hierarchy" (score =
-  nesting depth, so root instances come first) is the default. Active-learning
-  orderings plug in here: registering a new strategy is all it takes for it to
-  show up in the setup page's dropdown, the API contract does not change.
+* **Ordering** — an object method from ``app.services.queue_methods`` scores each
+  candidate, and ``app.services.queue_core`` sorts, alternates two methods (round
+  robin), filters and takes turns by a metadata key, exactly as for the annotation
+  queue. "Hierarchy" (score = nesting depth, so root instances come first) is the
+  default. Registering a new object method is all it takes for it to show up in the
+  setup page, the API contract does not change.
 
 Queues are snapshots, not reservations: nothing is locked server-side, and an item
 that someone else approves mid-session simply becomes a no-op when acted on.
@@ -23,12 +24,12 @@ that someone else approves mid-session simply becomes a no-op when acted on.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database.contours import Contours
+from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.labels import Labels
 from app.database.masks import Masks
@@ -39,11 +40,10 @@ from app.schemas.review import (
     ReviewQueueInstanceItem,
     ReviewQueueRead,
     ReviewQueueRequest,
-    ReviewSortDirection,
-    ReviewSortStrategyOption,
     ReviewSummary,
 )
-from app.services import al_ranking
+from app.services import queue_core
+from app.services.queue_methods import OBJECTS, MethodContext
 
 
 @dataclass
@@ -58,6 +58,12 @@ class QueueCandidate:
     depth: int
     confidence: float
     reviewed: bool  # True once anyone has approved it.
+    author: str | None = None
+
+    @property
+    def key(self) -> int:
+        """The unit key the shared sorting code ranks by."""
+        return self.contour_id
 
     @property
     def pending(self) -> bool:
@@ -71,77 +77,6 @@ class QueueCandidate:
         reviewer can re-sweep work they already signed off on.
         """
         return include_reviewed or not self.reviewed
-
-
-#: A scoring strategy: candidate -> sort key. Lower scores are served first when
-#: the direction is ascending. Strategies must be pure and cheap — they run once
-#: per candidate at queue-build time.
-ScoreFn = Callable[[QueueCandidate], float]
-
-
-@dataclass(frozen=True)
-class SortStrategy:
-    key: str
-    label: str
-    description: str
-    score: ScoreFn
-    #: The direction the setup page preselects: the one that serves the strategy's
-    #: purpose (e.g. most uncertain first). The reviewer can still flip it.
-    default_direction: ReviewSortDirection = ReviewSortDirection.ASCENDING
-
-
-SORT_STRATEGIES: dict[str, SortStrategy] = {}
-
-
-def register_strategy(key: str, label: str, description: str,
-                      default_direction: ReviewSortDirection = ReviewSortDirection.ASCENDING):
-    """Register a queue ordering. Registered keys appear in the setup UI."""
-
-    def decorator(fn: ScoreFn) -> ScoreFn:
-        SORT_STRATEGIES[key] = SortStrategy(key=key, label=label, description=description,
-                                            score=fn, default_direction=default_direction)
-        return fn
-
-    return decorator
-
-
-@register_strategy(
-    "hierarchy",
-    "By hierarchy",
-    "Root instances first, then their children — verify containers before contents.",
-)
-def _score_by_depth(candidate: QueueCandidate) -> float:
-    return float(candidate.depth)
-
-
-@register_strategy(
-    "confidence",
-    "Confidence",
-    "Ascending: least confident instances first, to fix likely mistakes. Descending: "
-    "most confident first, to accept good predictions quickly. Manual annotations count "
-    "as fully confident. To focus on some labels, use Custom selection.",
-)
-def _score_by_confidence(candidate: QueueCandidate) -> float:
-    return float(candidate.confidence)
-
-
-@register_strategy(
-    "uncertainty",
-    "Uncertainty",
-    "Most borderline instances first (the model was closest to 50/50), where mistakes "
-    "are most likely. Manual annotations are not uncertain and come last.",
-    default_direction=ReviewSortDirection.DESCENDING,
-)
-def _score_by_uncertainty(candidate: QueueCandidate) -> float:
-    return al_ranking.binary_entropy(candidate.confidence)
-
-
-def strategy_options() -> list[ReviewSortStrategyOption]:
-    return [
-        ReviewSortStrategyOption(key=s.key, label=s.label, description=s.description,
-                                 default_direction=s.default_direction)
-        for s in SORT_STRATEGIES.values()
-    ]
 
 
 # -- Candidate collection ----------------------------------------------------
@@ -173,6 +108,7 @@ def _collect_candidates(dataset_id: int, db: Session,
             Contours.parent_id,
             Contours.label_id,
             Contours.confidence_score,
+            Contours.author_username,
             Masks.image_id,
             Contours.reviewed_by.any().label("reviewed"),
         )
@@ -208,7 +144,7 @@ def _collect_candidates(dataset_id: int, db: Session,
             depth_of[node] = base + offset
         return depth_of[contour_id]
 
-    return [
+    candidates = [
         QueueCandidate(
             contour_id=row.id,
             mask_id=row.mask_id,
@@ -218,9 +154,14 @@ def _collect_candidates(dataset_id: int, db: Session,
             depth=depth(row.id),
             confidence=row.confidence_score,
             reviewed=bool(row.reviewed),
+            author=row.author_username,
         )
         for row in rows
     ]
+    # Methods sort stably, so this is the order among equal scores: same image together,
+    # parents before their children.
+    candidates.sort(key=lambda c: (c.image_id, c.depth, c.contour_id))
+    return candidates
 
 
 # -- Queue building ----------------------------------------------------------
@@ -240,21 +181,21 @@ def _validate_labels(dataset_id: int, label_ids: list[int], db: Session) -> None
 
 
 def build_queue(dataset_id: int, request: ReviewQueueRequest,
-                db: Session) -> ReviewQueueRead:
-    """Build the ordered work list for one review session."""
-    strategy = SORT_STRATEGIES.get(request.sort_strategy)
-    if strategy is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown sort strategy '{request.sort_strategy}'. "
-                   f"Available: {sorted(SORT_STRATEGIES)}.",
-        )
+                db: Session, username: str | None = None) -> ReviewQueueRead:
+    """Build the ordered work list for one review session; ``username`` is the reviewer, for
+    the "By" filter's "mine" and "others"."""
+    methods = queue_core.chosen_methods(OBJECTS, request)
+    direction = request.direction or methods[0].directions[0]
 
     candidates = _collect_candidates(dataset_id, db,
                                      only_submitted=request.only_submitted)
-    todo = [candidate for candidate in candidates
-            if candidate.eligible(request.include_reviewed)]
-    descending = request.direction is ReviewSortDirection.DESCENDING
+    candidates = queue_core.filter_by_metadata(db, dataset_id, candidates,
+                                               request.metadata_filters,
+                                               lambda c: (c.image_id,))
+    candidates = queue_core.filter_by_author(candidates, request, username,
+                                             lambda c: {c.author} if c.author else set())
+    echo = dict(granularity=request.granularity, method=methods[0].key,
+                direction=direction, include_reviewed=request.include_reviewed)
 
     if request.granularity is ReviewGranularity.IMAGES:
         by_image: dict[int, list[QueueCandidate]] = {}
@@ -274,45 +215,41 @@ def build_queue(dataset_id: int, request: ReviewQueueRequest,
         # (ascending flips that for reviewers who want the quick wins).
         items = [item for item in items if item.pending_instances > 0]
         items.sort(key=lambda item: (item.pending_instances, item.image_id),
-                   reverse=not descending)
-        return ReviewQueueRead(granularity=request.granularity,
-                               sort_strategy=request.sort_strategy,
-                               direction=request.direction,
-                               include_reviewed=request.include_reviewed,
-                               total=len(items), images=items)
+                   reverse=direction == "ascending")
+        return ReviewQueueRead(**echo, total=len(items), images=items)
 
+    todo = [candidate for candidate in candidates
+            if candidate.eligible(request.include_reviewed)]
     if request.granularity is ReviewGranularity.CUSTOM:
         _validate_labels(dataset_id, request.label_ids, db)
         wanted = set(request.label_ids)
         todo = [candidate for candidate in todo if candidate.label_id in wanted]
+    todo = queue_core.filter_by_confidence(todo, request.max_confidence,
+                                           lambda c: c.confidence)
 
-    scored = [(strategy.score(candidate), candidate) for candidate in todo]
-    # Tiebreakers keep the order stable and group work naturally: same score ->
-    # same image together, then parents before their children.
-    scored.sort(key=lambda pair: (pair[0], pair[1].image_id,
-                                  pair[1].depth, pair[1].contour_id),
-                reverse=descending)
+    ranked = queue_core.sort_units(methods, request, MethodContext(db, todo))
+    if request.balance_by:
+        ranked = queue_core.balance(db, dataset_id, ranked, request.balance_by,
+                                    {c.key: c.image_id for c in todo})
 
+    by_key = {candidate.key: candidate for candidate in todo}
     items = [
         ReviewQueueInstanceItem(
-            contour_id=candidate.contour_id,
-            mask_id=candidate.mask_id,
-            image_id=candidate.image_id,
-            label_id=candidate.label_id,
-            parent_id=candidate.parent_id,
-            depth=candidate.depth,
+            contour_id=by_key[key].contour_id,
+            mask_id=by_key[key].mask_id,
+            image_id=by_key[key].image_id,
+            label_id=by_key[key].label_id,
+            parent_id=by_key[key].parent_id,
+            depth=by_key[key].depth,
             score=score,
+            reason=reason,
         )
-        for score, candidate in scored
+        for key, reason, score in ranked
     ]
-    return ReviewQueueRead(granularity=request.granularity,
-                           sort_strategy=request.sort_strategy,
-                           direction=request.direction,
-                           include_reviewed=request.include_reviewed,
-                           total=len(items), instances=items)
+    return ReviewQueueRead(**echo, total=len(items), instances=items)
 
 
-def summarize(dataset_id: int, db: Session) -> ReviewSummary:
+def summarize(dataset_id: int, db: Session, username: str | None = None) -> ReviewSummary:
     """The numbers behind "There are x instances to review"."""
     candidates = _collect_candidates(dataset_id, db, only_submitted=True)
     pending = [candidate for candidate in candidates if candidate.pending]
@@ -330,5 +267,9 @@ def summarize(dataset_id: int, db: Session) -> ReviewSummary:
         pending_images=len({candidate.image_id for candidate in pending}),
         reviewed_instances=len(reviewed),
         open_rejections=open_rejections,
-        strategies=strategy_options(),
+        methods=queue_core.method_options(OBJECTS),
+        authors=queue_core.dataset_authors(db, dataset_id, exclude=username),
+        recommended=queue_core.recommended_queue(db, dataset_id, "review"),
+        require_independent_review=bool(
+            db.query(Datasets.require_independent_review).filter_by(id=dataset_id).scalar()),
     )

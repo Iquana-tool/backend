@@ -30,9 +30,10 @@ from app.database.users import Users
 from app.schemas.review import (
     ReviewGranularity,
     ReviewQueueRequest,
-    ReviewSortDirection,
 )
-from app.services.review_queue import SORT_STRATEGIES, build_queue, strategy_options, summarize
+from app.services.queue_core import method_options
+from app.services.queue_methods import OBJECTS
+from app.services.review_queue import build_queue, summarize
 
 
 def _contour(mask_id, label_id=None, parent_id=None, author="ann", confidence=1.0):
@@ -118,7 +119,7 @@ def test_summary_counts_only_submitted_unreviewed_work(ctx):
     assert summary.pending_images == 1
     assert summary.reviewed_instances == 1
     assert summary.open_rejections == 1
-    assert {option.key for option in summary.strategies} >= {"hierarchy"}
+    assert {option.key for option in summary.methods} >= {"hierarchy"}
 
 
 def test_hierarchy_queue_orders_roots_first(ctx):
@@ -144,7 +145,7 @@ def test_include_reviewed_requeues_approved_work_own_included(ctx):
 def test_descending_reverses_the_order(ctx):
     queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
         granularity=ReviewGranularity.HIERARCHY,
-        direction=ReviewSortDirection.DESCENDING), ctx["db"])
+        direction="descending"), ctx["db"])
     c = ctx["contours"]
     assert [item.contour_id for item in queue.instances] == [c["c"], c["b"], c["a"]]
 
@@ -207,21 +208,19 @@ def test_confidence_strategy_orders_least_confident_first(ctx):
 
 
 def test_confidence_descending_puts_most_confident_first(ctx):
-    from app.schemas.review import ReviewSortDirection
     queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
         granularity=ReviewGranularity.HIERARCHY, sort_strategy="confidence",
-        direction=ReviewSortDirection.DESCENDING), ctx["db"])
+        direction="descending"), ctx["db"])
     c = ctx["contours"]
     assert [i.contour_id for i in queue.instances] == [c["c"], c["b"], c["a"]]
 
 
 def test_uncertainty_strategy_puts_most_borderline_first(ctx):
-    from app.schemas.review import ReviewSortDirection
-    option = {o.key: o for o in strategy_options()}["uncertainty"]
-    assert option.default_direction is ReviewSortDirection.DESCENDING
+    option = {o.key: o for o in method_options(OBJECTS)}["uncertainty"]
+    assert option.directions[0] == "descending"
     queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
         granularity=ReviewGranularity.HIERARCHY, sort_strategy="uncertainty",
-        direction=ReviewSortDirection.DESCENDING), ctx["db"])
+        direction="descending"), ctx["db"])
     c = ctx["contours"]
     # Confidence 0.4 is nearest 50/50, then 0.9; the manual 1.0 is not uncertain at all.
     assert [i.contour_id for i in queue.instances] == [c["a"], c["b"], c["c"]]
@@ -330,3 +329,142 @@ def test_bulk_approve_can_stack_a_second_opinion(ctx):
     reviewers = {user.username for user in
                  db.query(Contours).filter_by(id=ctx["contours"]["d"]).one().reviewed_by}
     assert reviewers == {"rev", "rev2"}
+
+
+# -- Shared sorting core: the same settings as the annotation queue -----------------
+
+def test_old_short_names_are_still_accepted(ctx):
+    request = ReviewQueueRequest(granularity=ReviewGranularity.HIERARCHY,
+                                 sort_strategy="confidence", direction="desc")
+    assert (request.method, request.direction) == ("confidence", "descending")
+    queue = build_queue(ctx["dataset_id"], request, ctx["db"])
+    c = ctx["contours"]
+    assert (queue.method, queue.direction) == ("confidence", "descending")
+    assert [i.contour_id for i in queue.instances] == [c["c"], c["b"], c["a"]]
+
+
+def test_summary_lists_object_methods_with_a_sentence_per_direction(ctx):
+    methods = {m.key: m for m in summarize(ctx["dataset_id"], ctx["db"]).methods}
+    assert set(methods) == {"hierarchy", "confidence", "uncertainty"}
+    for method in methods.values():
+        assert set(method.descriptions) == set(method.directions)
+
+
+def test_round_robin_alternates_two_object_methods(ctx):
+    queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
+        granularity=ReviewGranularity.HIERARCHY, method="hierarchy", direction="descending",
+        round_robin_with="uncertainty"), ctx["db"])
+    c = ctx["contours"]
+    # Hierarchy descending: c, b, a. Uncertainty (default descending): a, b, c.
+    assert [i.contour_id for i in queue.instances] == [c["c"], c["a"], c["b"]]
+    assert [i.reason for i in queue.instances] == ["hierarchy", "uncertainty", "hierarchy"]
+
+
+def test_confidence_filter_uses_each_objects_own_score(ctx):
+    queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
+        granularity=ReviewGranularity.HIERARCHY, max_confidence=0.95), ctx["db"])
+    c = ctx["contours"]
+    # The hand-drawn grandchild (1.0) is not below the ceiling.
+    assert [i.contour_id for i in queue.instances] == [c["a"], c["b"]]
+
+
+@pytest.fixture
+def two_species(ctx):
+    """A second submitted image with two roots, and species metadata on both images."""
+    from app.database.image_metadata import ImageMetadata
+
+    db = ctx["db"]
+    img = Images(dataset_id=ctx["dataset_id"], file_name="d.png", file_path="/tmp/d.png",
+                 thumbnail_file_path="/tmp/t_d.png", width=10, height=10, color_mode="RGB")
+    db.add(img)
+    db.flush()
+    mask = Masks(image_id=img.id, fully_annotated=True, file_path="/tmp/m_d.png")
+    db.add(mask)
+    db.flush()
+    e, f = _contour(mask.id, confidence=0.5), _contour(mask.id, confidence=0.6)
+    db.add_all([e, f])
+    db.add_all([ImageMetadata(image_id=ctx["images"]["submitted"], key="species", value="x"),
+                ImageMetadata(image_id=img.id, key="species", value="y")])
+    db.commit()
+    return {**ctx, "e": e.id, "f": f.id, "image": img.id}
+
+
+def test_balance_by_takes_turns_between_metadata_values(two_species):
+    ctx = two_species
+    queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
+        granularity=ReviewGranularity.HIERARCHY, balance_by="species"), ctx["db"])
+    c = ctx["contours"]
+    # Hierarchy alone: a, e, f (roots), b, c. Taking turns: x, y, x, y, x.
+    assert [i.contour_id for i in queue.instances] == [c["a"], ctx["e"], c["b"], ctx["f"], c["c"]]
+
+
+def test_metadata_filter_narrows_objects_and_images(two_species, monkeypatch):
+    import app.services.queue_core as core
+
+    ctx = two_species
+    monkeypatch.setattr(core, "filter_image_ids", lambda _db, _ds, _f: [ctx["image"]])
+    filters = {"species": ["y"]}
+    queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
+        granularity=ReviewGranularity.HIERARCHY, metadata_filters=filters), ctx["db"])
+    assert [i.contour_id for i in queue.instances] == [ctx["e"], ctx["f"]]
+    images = build_queue(ctx["dataset_id"], ReviewQueueRequest(
+        granularity=ReviewGranularity.IMAGES, metadata_filters=filters), ctx["db"])
+    assert [i.image_id for i in images.images] == [ctx["image"]]
+
+
+def test_by_filter_keeps_whose_objects_were_asked_for(ctx):
+    db, c = ctx["db"], ctx["contours"]
+    db.query(Contours).filter_by(id=c["b"]).one().author_username = "rev"
+    db.commit()
+
+    def ids(**kwargs):
+        queue = build_queue(ctx["dataset_id"], ReviewQueueRequest(
+            granularity=ReviewGranularity.HIERARCHY, **kwargs), db, "rev")
+        return [i.contour_id for i in queue.instances]
+
+    assert ids(by="mine") == [c["b"]]
+    assert ids(by="others") == [c["a"], c["c"]]
+    assert ids(by="person", by_person="ann") == [c["a"], c["c"]]
+    assert ids() == [c["a"], c["b"], c["c"]]
+
+
+def test_summary_names_other_authors_and_the_independent_review_rule(ctx):
+    db = ctx["db"]
+    db.query(Datasets).filter_by(id=ctx["dataset_id"]).one().require_independent_review = True
+    db.commit()
+    summary = summarize(ctx["dataset_id"], db, "rev")
+    assert summary.authors == ["ann"]
+    assert summary.require_independent_review is True
+    assert summarize(ctx["dataset_id"], db, "ann").authors == []
+
+
+# -- Recommended queue ------------------------------------------------------------------
+
+def test_recommended_review_queue_is_validated_saved_and_cleared(ctx):
+    from app.schemas.queue import RecommendedQueueWrite
+    from app.services import queue_recommendation as rec
+
+    db, ds = ctx["db"], ctx["dataset_id"]
+    assert summarize(ds, db, "rev").recommended is None
+    saved = rec.set_recommended(db, ds, "review", RecommendedQueueWrite(
+        settings={"method": "confidence", "direction": "desc", "granularity": "images"},
+        reason="  Check the shakiest predictions first.  "), "rev")
+    assert saved.reason == "Check the shakiest predictions first."
+
+    shown = summarize(ds, db, "ann").recommended
+    assert shown.settings["method"] == "confidence"
+    assert shown.settings["direction"] == "descending"
+    assert shown.settings["granularity"] == "images"
+    assert shown.updated_by == "rev"
+
+    with pytest.raises(HTTPException) as exc:
+        rec.set_recommended(db, ds, "review", RecommendedQueueWrite(
+            settings={"method": "diversity"}, reason="x"), "rev")
+    assert exc.value.status_code == 400
+    with pytest.raises(HTTPException) as exc:
+        rec.set_recommended(db, ds, "review", RecommendedQueueWrite(
+            settings={"granularity": "custom"}, reason="x"), "rev")
+    assert exc.value.status_code == 400
+
+    rec.clear_recommended(db, ds, "review")
+    assert summarize(ds, db, "ann").recommended is None
