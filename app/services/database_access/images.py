@@ -488,23 +488,33 @@ def _resolve_unique_storage_filename(
             candidate_name = f"{stem}_{counter}{suffix}"
             continue
 
-        if candidate_file_path != candidate_thumb_path:
-            try:
-                thumb_fd = os.open(
-                    candidate_thumb_path,
-                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                    0o666,
-                )
-            except FileExistsError:
-                os.close(file_fd)
-                candidate_file_path.unlink(missing_ok=True)
-                counter += 1
-                candidate_name = f"{stem}_{counter}{suffix}"
-                continue
-            os.close(thumb_fd)
+        try:
+            if candidate_file_path != candidate_thumb_path:
+                try:
+                    thumb_fd = os.open(
+                        candidate_thumb_path,
+                        os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                        0o666,
+                    )
+                except FileExistsError:
+                    candidate_file_path.unlink(missing_ok=True)
+                    counter += 1
+                    candidate_name = f"{stem}_{counter}{suffix}"
+                    continue
+                else:
+                    os.close(thumb_fd)
 
-        os.close(file_fd)
-        return candidate_name, candidate_file_path, candidate_thumb_name, candidate_thumb_path
+            return candidate_name, candidate_file_path, candidate_thumb_name, candidate_thumb_path
+        except BaseException:
+            candidate_file_path.unlink(missing_ok=True)
+            if candidate_file_path != candidate_thumb_path:
+                candidate_thumb_path.unlink(missing_ok=True)
+            raise
+        finally:
+            try:
+                os.close(file_fd)
+            except OSError:
+                pass
 
 
 async def process_and_save_image(

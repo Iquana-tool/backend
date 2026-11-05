@@ -804,4 +804,65 @@ def test_corrupt_cached_preview_is_unlinked_and_regenerated(tmp_path):
         assert img.size == (2, 2)
 
 
+def test_thumbnail_reservation_failure_releases_image_reservation_and_reraises(tmp_path, monkeypatch):
+    image_folder = tmp_path / "images"
+    thumbnail_dir = tmp_path / "thumbnails"
+
+    original_open = os.open
+    opened_fds = []
+
+    def mock_open(path, flags, mode=0o777):
+        if str(path).startswith(str(thumbnail_dir)):
+            raise PermissionError("injected thumbnail reservation permission error")
+        fd = original_open(path, flags, mode)
+        opened_fds.append((Path(path), fd))
+        return fd
+
+    monkeypatch.setattr(os, "open", mock_open)
+
+    with pytest.raises(PermissionError, match="injected thumbnail reservation permission error"):
+        images_db._resolve_unique_storage_filename(
+            base_name="scan.tiff",
+            image_folder=image_folder,
+            thumbnail_dir=thumbnail_dir,
+            is_tiff=True,
+            dataset_id=1,
+            db=None,
+        )
+
+    assert len(opened_fds) == 1
+    image_path, fd = opened_fds[0]
+    assert image_path == image_folder / "scan.tiff"
+    assert not image_path.exists()
+    with pytest.raises(OSError):
+        os.fstat(fd)
+
+
+def test_thumbnail_collision_releases_image_reservation_and_retries(tmp_path):
+    image_folder = tmp_path / "images"
+    thumbnail_dir = tmp_path / "thumbnails"
+    thumbnail_dir.mkdir(parents=True, exist_ok=True)
+
+    # Pre-create the first candidate thumbnail to trigger a FileExistsError during thumb reservation
+    (thumbnail_dir / "scan.tiff.png").write_bytes(b"existing thumbnail")
+
+    cand_name, file_path, thumb_name, thumb_path = images_db._resolve_unique_storage_filename(
+        base_name="scan.tiff",
+        image_folder=image_folder,
+        thumbnail_dir=thumbnail_dir,
+        is_tiff=True,
+        dataset_id=1,
+        db=None,
+    )
+
+    assert cand_name == "scan_1.tiff"
+    assert thumb_name == "scan_1.tiff.png"
+    # Initial candidate image must have been cleaned up and not left behind
+    assert not (image_folder / "scan.tiff").exists()
+    # Selected candidate paths must exist (reserved)
+    assert file_path.exists()
+    assert thumb_path.exists()
+
+
+
 
