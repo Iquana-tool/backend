@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import errno
 import io
 import os
 import tempfile
@@ -862,6 +863,51 @@ def test_thumbnail_collision_releases_image_reservation_and_retries(tmp_path):
     # Selected candidate paths must exist (reserved)
     assert file_path.exists()
     assert thumb_path.exists()
+
+
+def test_unowned_thumbnail_survives_allocation_failure(tmp_path, monkeypatch):
+    image_folder = tmp_path / "images"
+    thumbnail_dir = tmp_path / "thumbnails"
+    thumbnail_dir.mkdir(parents=True, exist_ok=True)
+    competing_thumb = thumbnail_dir / "scan.tiff.png"
+
+    original_open = os.open
+    opened_fds = []
+
+    def mock_open(path, flags, mode=0o777):
+        if str(path).startswith(str(thumbnail_dir)):
+            # Simulate another process creating the thumbnail right as EMFILE occurs
+            competing_thumb.write_bytes(b"competing process thumbnail")
+            raise OSError(errno.EMFILE, "Too many open files")
+        fd = original_open(path, flags, mode)
+        opened_fds.append((Path(path), fd))
+        return fd
+
+    monkeypatch.setattr(os, "open", mock_open)
+
+    with pytest.raises(OSError) as exc_info:
+        images_db._resolve_unique_storage_filename(
+            base_name="scan.tiff",
+            image_folder=image_folder,
+            thumbnail_dir=thumbnail_dir,
+            is_tiff=True,
+            dataset_id=1,
+            db=None,
+        )
+    assert exc_info.value.errno == errno.EMFILE
+
+    # The image placeholder reserved by this attempt must be unlinked
+    assert len(opened_fds) == 1
+    image_path, fd = opened_fds[0]
+    assert image_path == image_folder / "scan.tiff"
+    assert not image_path.exists()
+    with pytest.raises(OSError):
+        os.fstat(fd)
+
+    # The unowned thumbnail created by the competing process must survive cleanup
+    assert competing_thumb.exists()
+    assert competing_thumb.read_bytes() == b"competing process thumbnail"
+
 
 
 

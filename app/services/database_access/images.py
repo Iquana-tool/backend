@@ -488,6 +488,7 @@ def _resolve_unique_storage_filename(
             candidate_name = f"{stem}_{counter}{suffix}"
             continue
 
+        thumb_reserved = False
         try:
             if candidate_file_path != candidate_thumb_path:
                 try:
@@ -496,18 +497,22 @@ def _resolve_unique_storage_filename(
                         os.O_CREAT | os.O_EXCL | os.O_WRONLY,
                         0o666,
                     )
+                    thumb_reserved = True
                 except FileExistsError:
                     candidate_file_path.unlink(missing_ok=True)
                     counter += 1
                     candidate_name = f"{stem}_{counter}{suffix}"
                     continue
                 else:
-                    os.close(thumb_fd)
+                    try:
+                        os.close(thumb_fd)
+                    except OSError:
+                        pass
 
             return candidate_name, candidate_file_path, candidate_thumb_name, candidate_thumb_path
         except BaseException:
             candidate_file_path.unlink(missing_ok=True)
-            if candidate_file_path != candidate_thumb_path:
+            if thumb_reserved and candidate_file_path != candidate_thumb_path:
                 candidate_thumb_path.unlink(missing_ok=True)
             raise
         finally:
