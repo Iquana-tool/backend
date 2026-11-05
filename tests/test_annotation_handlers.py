@@ -1202,3 +1202,61 @@ def test_handle_object_add_rejects_unverifiable_provenance(monkeypatch, data, er
 
     assert mock_add.await_count == 0
     assert sent and sent[0].success is False and error in sent[0].message
+
+
+def test_add_object_broadcasts_reparented_children(monkeypatch):
+    """Adding a parent contour that adopts children broadcasts OBJECT_MODIFIED for each child."""
+    sent = []
+
+    async def mock_send(ws, msg):
+        sent.append(msg)
+
+    monkeypatch.setattr(handlers, "send_msg", mock_send)
+
+    state = SimpleNamespace(
+        mask_id=42,
+        user_id="alice",
+    )
+    client_msg = ClientMessage(
+        id="req-add-parent",
+        type="object_add_manual",
+        data={},
+    )
+    parent_input = box(0.2, 0.2, 0.8, 0.8)
+    parent_persisted = box(0.2, 0.2, 0.8, 0.8, contour_id=500)
+
+    db = object()
+
+    @contextmanager
+    def context_session():
+        yield db
+
+    async def mock_add_contour_to_mask(mask_id, contour_to_add, db, **kwargs):
+        if "reparented_contour_ids" in kwargs and kwargs["reparented_contour_ids"] is not None:
+            kwargs["reparented_contour_ids"].extend([101, 102])
+        return parent_persisted
+
+    monkeypatch.setattr(handlers, "get_context_session", context_session)
+    monkeypatch.setattr(handlers.masks_db, "add_contour_to_mask", mock_add_contour_to_mask)
+    monkeypatch.setattr(handlers.history_db, "record_create", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers.provenance, "mark_manual", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers.masks_db, "get_contour_hierarchy_of_mask", AsyncMock(return_value=ContourHierarchy()))
+
+    result = asyncio.run(handlers.add_object(parent_input, object(), client_msg, state))
+    assert result == parent_persisted
+
+    # Assert OBJECT_ADDED was sent first
+    assert sent[0].type == "object_added"
+    assert sent[0].id == "req-add-parent"
+
+    # Assert OBJECT_MODIFIED was sent for each adopted child
+    reparent_msgs = [m for m in sent if m.type == "object_modified"]
+    assert len(reparent_msgs) == 2
+    assert reparent_msgs[0].data == {
+        "contour_id": 101,
+        "fields_to_be_updated": {"parent_id": 500},
+    }
+    assert reparent_msgs[1].data == {
+        "contour_id": 102,
+        "fields_to_be_updated": {"parent_id": 500},
+    }

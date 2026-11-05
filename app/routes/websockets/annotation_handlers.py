@@ -969,14 +969,17 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
     persisted_contours = []
     with get_context_session() as db:
         for contour in suggested:
+            suggestion_reparented: list[dict] = []
             persisted = await masks_db.add_contour_to_mask(
                 mask_id=state.mask_id,
                 contour_to_add=contour,
                 db=db,
                 author_username=state.user_id,
+                reparented_info=suggestion_reparented,
             )
             if persisted is not None:
-                history_db.record_create(db, state.mask_id, state.user_id, persisted.id, group_id=group_id)
+                history_db.record_create(db, state.mask_id, state.user_id, persisted.id,
+                                         group_id=group_id, adopted_children=suggestion_reparented)
                 persisted_contours.append((contour, persisted))
             else:
                 logger.info(
@@ -1007,6 +1010,19 @@ async def handle_suggestion(websocket: WebSocket, client_msg: ClientMessage, sta
             message=f"Successfully added object with confidence score {original_contour.confidence:.1%}",
             data=persisted,
         ))
+        for child_id in getattr(persisted, "_reparented_ids", []):
+            await send_msg(websocket, ServerMessage(
+                id=str(uuid4()),
+                type=ServerMessageType.OBJECT_MODIFIED,
+                success=True,
+                message="Reparented object under new parent",
+                data={
+                    "contour_id": child_id,
+                    "fields_to_be_updated": {
+                        "parent_id": persisted.id,
+                    },
+                },
+            ))
 
 
 async def handle_instance_select_model(websocket: WebSocket, client_msg: ClientMessage,
@@ -1165,12 +1181,16 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
             ``SuggestionSource``, which also logs the outline as a suggestion.
         model_key: The model behind an AI source.
     """
+    reparented_ids: list[int] = []
+    reparented_info: list[dict] = []
     with get_context_session() as db:
         response = await masks_db.add_contour_to_mask(
             mask_id=state.mask_id,
             contour_to_add=object_to_add,
             db=db,
             author_username=state.user_id,
+            reparented_contour_ids=reparented_ids,
+            reparented_info=reparented_info,
         )
         if response is None:
             logger.info(
@@ -1179,7 +1199,7 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
             )
         else:
             history_db.record_create(db, state.mask_id, state.user_id, response.id,
-                                     group_id=group_id)
+                                     group_id=group_id, adopted_children=reparented_info)
             if source in provenance.AI_SOURCES:
                 provenance.record_suggestions(db, provenance.contour_ids_of(response),
                                               source=source, model_key=model_key,
@@ -1207,6 +1227,19 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
         message=f"Successfully added object with confidence score {object_to_add.confidence:.1%}",
         data=response.model_dump(mode="json") if hasattr(response, "model_dump") else response,
     ))
+    for child_id in reparented_ids:
+        await send_msg(websocket, ServerMessage(
+            id=f"{client_msg.id}_reparent_{child_id}",
+            type=ServerMessageType.OBJECT_MODIFIED,
+            success=True,
+            message="Reparented object under new parent",
+            data={
+                "contour_id": child_id,
+                "fields_to_be_updated": {
+                    "parent_id": response.id,
+                },
+            },
+        ))
     return response
 
 

@@ -44,6 +44,7 @@ from app.database.masks import Masks
 from app.schemas.inference import InferenceOptions, ResolvedStep, UnparentedPolicy
 from app.database.ai_suggestions import SuggestionSource
 from app.services import model_label_mapping, provenance
+from app.services.database_access import labels as labels_db, masks as masks_db
 from app.services.database_access.contours import invalidate_metrics_for_new_contours
 
 logger = getLogger(__name__)
@@ -543,8 +544,18 @@ def run_unit(
     # cell landing on top of an existing piece of debris is a conflict, not two objects.
     result = UnitResult(unparented=unparented)
     saved_rows: list[Contours] = []
+    label_hierarchy = labels_db.get_label_hierarchy_sync(image.dataset_id, db)
+    descendant_label_ids = (
+        labels_db.get_descendant_label_ids(label_hierarchy, step.label_id)
+        if label_hierarchy and step.label_id
+        else set()
+    )
+
     for parent_id, group in _group_by_parent(candidates).items():
         existing = _existing_contours(db, mask.id, parent_id=parent_id, same_level=True)
+        # Descendant annotations (e.g. child objects created earlier) are not colliding siblings
+        if descendant_label_ids:
+            existing = [c for c in existing if c.label_id not in descendant_label_ids]
         # In replace mode the image was already wiped, so `existing` is only what earlier
         # levels of this same run wrote -- which is exactly what should still suppress.
         decision = nms(
@@ -561,6 +572,10 @@ def run_unit(
                 db, group[index], mask.id, parent_id=parent_id,
                 author_username=username, invalidate_metrics=False,
             )
+            if label_hierarchy is not None:
+                masks_db.adopt_descendants_for_parent(
+                    db, mask.id, saved, group[index], label_hierarchy
+                )
             saved_rows.append(saved)
             result.contour_ids.append(saved.id)
             result.created += 1

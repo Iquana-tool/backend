@@ -553,8 +553,8 @@ def test_focus_mode_parent_fallback_and_unparented_clipping(scratch_ctx, monkeyp
         assert any(c.id == saved_focused_id and c.parent_id == 21060 for c in h.root_contours[0].children)
 
     # Case B: Candidate completely inside fragment, but unparented (parent_id=None and focussed_contour_id=None)
-    # The hierarchy fitting algorithm clips 100% of forbidden overlap with root fragment,
-    # returning skipped: true.
+    # Under taxonomy-aware hierarchy, an unparented child is temporarily unresolved
+    # and is not clipped by an ancestor root contour. It is successfully added.
     sent_messages.clear()
     state_unfocused = SimpleNamespace(
         mask_id=mask_id,
@@ -577,9 +577,13 @@ def test_focus_mode_parent_fallback_and_unparented_clipping(scratch_ctx, monkeyp
     )
     asyncio.run(handlers.handle_object_add(object(), msg_unparented, state_unfocused))
     assert len(sent_messages) == 1
-    # Returns ServerMessageType.SUCCESS with skipped: True
-    assert sent_messages[0].type == ServerMessageType.SUCCESS
-    assert sent_messages[0].data.get("skipped") is True
+    # Successfully added as an unparented child at root level
+    assert sent_messages[0].type == ServerMessageType.OBJECT_ADDED
+    assert sent_messages[0].success is True
+    saved_unparented_id = sent_messages[0].data["id"]
+    with test_session() as db:
+        unparented_row = db.query(Contours).filter_by(id=saved_unparented_id).one()
+        assert unparented_row.parent_id is None
 
 
 def test_open_image_draw_fragment_run_cellpose_without_reload(scratch_ctx, monkeypatch):

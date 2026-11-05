@@ -186,6 +186,10 @@ def _full_model_info(registry_key: str) -> dict:
             if reg_model.description:
                 metadata["description"] = reg_model.description
             if reg_model.tags:
+                # Display text changes independently of weights; base-model artifacts
+                # are not re-logged when the service synchronizes current metadata.
+                if reg_model.tags.get("display_name"):
+                    metadata["name"] = reg_model.tags["display_name"]
                 if "input_contracts" in reg_model.tags:
                     registered_contracts_tag = reg_model.tags["input_contracts"]
                     # Keep the registered-model tag authoritative even when it is malformed.

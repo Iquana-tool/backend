@@ -82,7 +82,7 @@ def _serialize_contour(contour: Contours) -> dict:
     }
 
 
-def snapshot_subtree(contour_id: int, db: Session) -> dict | None:
+def snapshot_subtree(contour_id: int, db: Session, exclude_contour_ids: set[int] | None = None) -> dict | None:
     """Capture a contour and everything nested under it.
 
     Called before a deletion, because afterwards the rows (and, via the CASCADE,
@@ -93,6 +93,8 @@ def snapshot_subtree(contour_id: int, db: Session) -> dict | None:
     Args:
         contour_id: The contour about to be deleted or just created.
         db: The database session.
+        exclude_contour_ids: Optional set of contour IDs to exclude from the snapshot
+            (e.g. pre-existing children adopted under a newly created parent).
 
     Returns:
         ``{"root_id": int, "contours": [...]}``, or ``None`` if the contour is gone.
@@ -101,14 +103,24 @@ def snapshot_subtree(contour_id: int, db: Session) -> dict | None:
     if root is None:
         return None
 
+    exclude = exclude_contour_ids or set()
+    if root.id in exclude:
+        return None
+
     serialized = []
     queue = [root]
     while queue:
         contour = queue.pop(0)
         serialized.append(_serialize_contour(contour))
-        queue.extend(
-            db.query(Contours).filter_by(parent_id=contour.id).order_by(Contours.id).all()
+        child_rows = (
+            db.query(Contours)
+            .filter_by(parent_id=contour.id)
+            .order_by(Contours.id)
+            .all()
         )
+        for child in child_rows:
+            if child.id not in exclude:
+                queue.append(child)
 
     # The object's scene graph goes with it: given attributes, and every named
     # relationship touching the subtree (the CASCADE removes those too).
@@ -347,13 +359,24 @@ def _record(db: Session, mask_id: int, username: str, action_type: str,
 
 
 def record_create(db: Session, mask_id: int, username: str, contour_id: int,
-                  group_id: str | None = None) -> None:
-    """Record that ``contour_id`` was just added to the mask."""
-    snapshot = snapshot_subtree(contour_id, db)
+                  group_id: str | None = None,
+                  adopted_children: list[dict] | None = None) -> None:
+    """Record that ``contour_id`` was just added to the mask.
+
+    If ``adopted_children`` is provided, those pre-existing children are excluded
+    from the new parent's snapshot and recorded separately so undo can restore
+    their previous parents rather than cascade-deleting them.
+    """
+    exclude_ids = {item["contour_id"] for item in adopted_children} if adopted_children else None
+    snapshot = snapshot_subtree(contour_id, db, exclude_contour_ids=exclude_ids)
     if snapshot is None:
         return
-    _record(db, mask_id, username, ActionType.CREATE,
-            {"contour_id": contour_id, "snapshot": snapshot}, group_id)
+    payload = {
+        "contour_id": contour_id,
+        "snapshot": snapshot,
+        "adopted_children": adopted_children or [],
+    }
+    _record(db, mask_id, username, ActionType.CREATE, payload, group_id)
 
 
 def record_delete(db: Session, mask_id: int, username: str, snapshot: dict,
@@ -420,13 +443,38 @@ def record_relationship_changes(db: Session, username: str, created: list[dict],
 
 def _apply_create(payload: dict, mask_id: int, db: Session, forward: bool) -> str:
     """Apply a ``create`` step. Forward re-adds the contour, backward removes it."""
+    from app.services.database_access.contours import _invalidate_metrics_for_modified_contour
+
     contour_id = payload["contour_id"]
     if forward:
         restored, notes = _restore_subtree(mask_id, payload["snapshot"], db)
         if not restored:
             raise HistoryError("That object is already on the image.")
+        for item in payload.get("adopted_children", []):
+            child = db.query(Contours).filter_by(id=item["contour_id"]).first()
+            if child is not None and child.parent_id == item.get("before_parent_id"):
+                old_pid = child.parent_id
+                child.parent_id = contour_id
+                _invalidate_metrics_for_modified_contour(
+                    db, child, old_pid, geometry_changed=False, parent_changed=True,
+                )
+        db.flush()
         return _with_notes("Object restored", notes)
 
+    # Undo creation:
+    # 1. Restore previous parent links for adopted children BEFORE deleting parent,
+    #    so ON DELETE CASCADE does not delete pre-existing children.
+    for item in payload.get("adopted_children", []):
+        child = db.query(Contours).filter_by(id=item["contour_id"]).first()
+        if child is not None and child.parent_id == contour_id:
+            before_pid = item.get("before_parent_id")
+            child.parent_id = before_pid
+            _invalidate_metrics_for_modified_contour(
+                db, child, contour_id, geometry_changed=False, parent_changed=True,
+            )
+    db.flush()
+
+    # 2. Check for unexpected later children added after this step
     snapshot = payload.get("snapshot") or {}
     known_ids = {entry["id"] for entry in snapshot.get("contours", [])}
     later_children = db.query(Contours.id).filter(Contours.parent_id == contour_id)

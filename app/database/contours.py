@@ -270,6 +270,7 @@ def _save_contour_subtree(session, contour_schema: Contour, mask_id: int, parent
     # 2. Add to session and flush to generate db_contour.id
     session.add(db_contour)
     session.flush()
+    contour_schema.id = db_contour.id
 
     # 3. Restore reviewed_by relationship from schema (list of usernames)
     if contour_schema.reviewed_by:

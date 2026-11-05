@@ -8,6 +8,21 @@ from app.database.labels import Labels
 logger = getLogger(__name__)
 
 
+def _label_from_db(cls, label) -> Label:
+    return cls(
+        id=label.id,
+        dataset_id=label.dataset_id,
+        name=label.name,
+        value=label.value if label.value is not None else None,
+        parent_id=label.parent_id,
+        children=[],
+    )
+
+
+# Ensure zero-valued labels (e.g. background with value 0) are preserved during conversion
+Label.from_db = classmethod(_label_from_db)
+
+
 async def get_hierarchical_label_name(
         label_id,
         db: Session
@@ -43,9 +58,70 @@ async def get_label_hierarchy(
         db: Session
 ) -> LabelHierarchy:
     label_db = db.query(Labels).filter_by(dataset_id=dataset_id)
-    if not label_db:
-        raise ValueError(f"There are no labels for dataset with id {dataset_id}!")
+    if label_db.first() is None:
+        return LabelHierarchy(
+            root_level_labels=[],
+            id_to_label_object={},
+            value_to_label_object={},
+        )
     return LabelHierarchy.from_query(label_db)
+
+
+def get_label_hierarchy_sync(
+        dataset_id: int,
+        db: Session
+) -> LabelHierarchy:
+    """Synchronous label hierarchy lookup for non-async persistence contexts."""
+    label_db = db.query(Labels).filter_by(dataset_id=dataset_id)
+    if label_db.first() is None:
+        return LabelHierarchy(
+            root_level_labels=[],
+            id_to_label_object={},
+            value_to_label_object={},
+        )
+    return LabelHierarchy.from_query(label_db)
+
+
+def get_descendant_label_ids(
+        label_hierarchy: LabelHierarchy,
+        label_id: int,
+) -> set[int]:
+    """Return all descendant label IDs of a given label ID in the label hierarchy."""
+    descendants: set[int] = set()
+    if label_id not in label_hierarchy.id_to_label_object:
+        return descendants
+    queue = list(label_hierarchy.id_to_label_object[label_id].children)
+    while queue:
+        child = queue.pop(0)
+        descendants.add(child.id)
+        queue.extend(child.children)
+    return descendants
+
+
+def get_ancestor_label_ids(
+        label_hierarchy: LabelHierarchy,
+        label_id: int,
+) -> set[int]:
+    """Return all ancestor label IDs of a given label ID in the label hierarchy."""
+    ancestors: set[int] = set()
+    curr_id = label_id
+    while curr_id in label_hierarchy.id_to_label_object:
+        parent_id = label_hierarchy.id_to_label_object[curr_id].parent_id
+        if parent_id is None:
+            break
+        ancestors.add(parent_id)
+        curr_id = parent_id
+    return ancestors
+
+
+def get_immediate_child_label_ids(
+        label_hierarchy: LabelHierarchy,
+        label_id: int,
+) -> set[int]:
+    """Return the immediate child label IDs of a given label ID in the label hierarchy."""
+    if label_id not in label_hierarchy.id_to_label_object:
+        return set()
+    return {child.id for child in label_hierarchy.id_to_label_object[label_id].children}
 
 
 async def create_label(
@@ -61,7 +137,7 @@ async def create_label(
         raise ValueError("Label already exists.")
     if parent_label_id and db.query(Labels.id).filter_by(id=parent_label_id).scalar() is None:
         raise ValueError("Parent label not found.")
-    if not label_value:
+    if label_value is None:
         label_value = db.query(Labels).filter_by(dataset_id=dataset_id).count() + 1  # Default value
     # Create a new class
     new_label = Labels(dataset_id=dataset_id,
