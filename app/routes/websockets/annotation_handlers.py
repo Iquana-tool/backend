@@ -460,6 +460,15 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
     # client_msg.data is already a parsed dict (the WebSocket layer decodes the
     # JSON envelope), so validate it as an object — not as a JSON string.
     contour = Contour.model_validate(client_msg.data)
+    use_hierarchy = client_msg.data.get("use_hierarchy", True)
+    if not isinstance(use_hierarchy, bool) or (not use_hierarchy and contour.children):
+        await send_msg(websocket, ServerMessage(
+            id=client_msg.id, type=ServerMessageType.ERROR, success=False,
+            message="use_hierarchy must be a boolean; independent objects must be saved individually.", data=None,
+        ))
+        return
+    if not use_hierarchy:
+        contour.parent_id = None
 
     source = client_msg.data.get("source") if isinstance(client_msg.data, dict) else None
     if not source:
@@ -491,7 +500,7 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
 
     if is_manual:
         # Preserve normal manual drawing focus behavior
-        if contour.parent_id is None and state.focussed_contour_id is not None:
+        if use_hierarchy and contour.parent_id is None and state.focussed_contour_id is not None:
             contour.parent_id = state.focussed_contour_id
     else:
         # Model / AI results: validate explicit parents against dataset label ancestry
@@ -545,7 +554,7 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
                 )
 
             # 1. Validate explicit parent_id if provided on the model result
-            if contour.parent_id is not None:
+            if use_hierarchy and contour.parent_id is not None:
                 parent_candidate = (
                     hierarchy.id_to_contour.get(contour.parent_id)
                     if hierarchy and hasattr(hierarchy, "id_to_contour")
@@ -562,7 +571,7 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
 
             # 2. If parent_id is missing (or was invalidated above) and focus mode is active,
             # resolve via allowed ancestors and spatial containment
-            if contour.parent_id is None and getattr(state, "focussed_contour_id", None) is not None:
+            if use_hierarchy and contour.parent_id is None and getattr(state, "focussed_contour_id", None) is not None:
                 focused_id = getattr(state, "focussed_contour_id", None)
                 focused_parent = (
                     hierarchy.id_to_contour.get(focused_id)
@@ -623,7 +632,8 @@ async def handle_object_add(websocket: WebSocket, client_msg: ClientMessage, sta
     # the DB insert, which made the client invent a bogus (decimal) id for the new
     # object and rebuild from the full hierarchy — blanking every other object's
     # label until the next page reload.
-    await add_object(contour, websocket, client_msg, state, source=source, model_key=model_key)
+    await add_object(contour, websocket, client_msg, state, source=source, model_key=model_key,
+                     use_hierarchy=use_hierarchy)
 
 
 async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
@@ -1164,7 +1174,8 @@ async def handle_instance_segmentation(websocket: WebSocket, client_msg: ClientM
 
 async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: ClientMessage,
                      state: AnnotationSessionState, group_id: str | None = None,
-                     source: str = provenance.MANUAL, model_key: str | None = None):
+                     source: str = provenance.MANUAL, model_key: str | None = None,
+                     use_hierarchy: bool = True):
     """Persist one new object and tell the client about it.
 
     Every interactive add reaches the database through here -- manual drawing,
@@ -1188,6 +1199,7 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
             mask_id=state.mask_id,
             contour_to_add=object_to_add,
             db=db,
+            use_hierarchy=use_hierarchy,
             author_username=state.user_id,
             reparented_contour_ids=reparented_ids,
             reparented_info=reparented_info,
@@ -1206,6 +1218,25 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
                                               username=state.user_id, run_id=group_id)
             else:
                 provenance.mark_manual(db, provenance.contour_ids_of(response), origin=source)
+            if getattr(object_to_add, "model_class", None) and model_key:
+                dataset_id = getattr(getattr(state, "image_db", None), "dataset_id", None) or getattr(state, "dataset_id", None)
+                if dataset_id is None and getattr(state, "image_id", None) is not None:
+                    try:
+                        dataset_id = dataset_id_for_image(state.image_id, db)
+                    except Exception:
+                        pass
+                if dataset_id is None and getattr(state, "mask_id", None) is not None:
+                    try:
+                        mask_row = db.get(Masks, state.mask_id) if hasattr(db, "get") else db.query(Masks).get(state.mask_id)
+                        if mask_row is not None and mask_row.image_id is not None:
+                            dataset_id = dataset_id_for_image(mask_row.image_id, db)
+                    except Exception:
+                        pass
+                if dataset_id is not None:
+                    model_label_mapping.apply_class_attributes(
+                        db, dataset_id, model_key, provenance.contour_ids_of(response),
+                    )
+                    db.commit()
             if getattr(state, "mask_id", None) is not None:
                 try:
                     state.contour_hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)

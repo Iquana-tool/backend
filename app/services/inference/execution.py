@@ -531,7 +531,10 @@ def run_unit(
         return UnitResult()
 
     unparented = 0
-    if step.level > 0:
+    if step.use_hierarchy is False:
+        for candidate in candidates:
+            candidate.parent_id = None
+    elif step.level > 0:
         parents = _existing_contours(db, mask.id, label_id=step.parent_label_id)
         candidates, unparented = attach_parents(candidates, parents, options)
         if not candidates:
@@ -552,7 +555,10 @@ def run_unit(
     )
 
     for parent_id, group in _group_by_parent(candidates).items():
-        existing = _existing_contours(db, mask.id, parent_id=parent_id, same_level=True)
+        existing = (_existing_contours(db, mask.id, label_id=step.label_id)
+                    if step.use_hierarchy is False else
+                    _existing_contours(db, mask.id, parent_id=parent_id, same_level=True))
+        existing = [c for c in existing if c.hierarchy_enabled or c.label_id == step.label_id]
         # Descendant annotations (e.g. child objects created earlier) are not colliding siblings
         if descendant_label_ids:
             existing = [c for c in existing if c.label_id not in descendant_label_ids]
@@ -572,7 +578,8 @@ def run_unit(
                 db, group[index], mask.id, parent_id=parent_id,
                 author_username=username, invalidate_metrics=False,
             )
-            if label_hierarchy is not None:
+            saved.hierarchy_enabled = step.use_hierarchy is not False
+            if saved.hierarchy_enabled and label_hierarchy is not None:
                 masks_db.adopt_descendants_for_parent(
                     db, mask.id, saved, group[index], label_hierarchy
                 )

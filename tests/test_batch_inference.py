@@ -1212,3 +1212,52 @@ def test_same_image_preview_does_not_borrow_required_exemplars_from_other_images
     )
     with pytest.raises(execution.InferenceUnitError, match="Resolved 0 instance exemplar"):
         execution.run_preview_unit(ctx["db"], request, ctx["images"][0], "cur")
+
+
+def test_independently_saved_objects_remain_valid_requested_parent_regions(ctx):
+    from app.services.inference import planning
+    db = ctx['db']
+    parent = ctx['existing']
+    parent.hierarchy_enabled = False
+    db.flush()
+    request = step(ctx['nucleus'].id, level=1, parent_label_id=ctx['cell'].id).model_copy(update={'use_hierarchy': True})
+    resolve = lambda current: planning.preview_parent_contours(
+        db, ctx['dataset'].id, ctx['images'][0].id, current)
+    assert [row.id for row in resolve(request)] == [parent.id]
+    assert [row.id for row in resolve(request.model_copy(update={'roi_contour_ids': [parent.id]}))] == [parent.id]
+
+
+def test_hierarchical_batch_can_attach_new_child_to_independent_parent(ctx, monkeypatch):
+    ctx['existing'].hierarchy_enabled = False
+    ctx['db'].flush()
+    _stub_predictions(monkeypatch, [box(.2, .2, .3, .3)])
+    request = step(ctx['nucleus'].id, level=1, parent_label_id=ctx['cell'].id).model_copy(update={'use_hierarchy': True})
+    result = execution.run_unit(ctx['db'], request, ctx['images'][0], InferenceOptions(), 'cur')
+    ctx['db'].commit()
+    assert result.created == 1
+    assert ctx['db'].get(Contours, result.contour_ids[0]).parent_id == ctx['existing'].id
+    assert ctx['existing'].parent_id is None and ctx['existing'].hierarchy_enabled is False
+
+
+def test_independent_batch_prediction_ignores_existing_parent_and_persists_choice(ctx, monkeypatch):
+    _stub_predictions(monkeypatch, [box(.2, .2, .3, .3)])
+    request = step(ctx['nucleus'].id, level=1, parent_label_id=ctx['cell'].id).model_copy(
+        update={'use_hierarchy': False})
+    result = execution.run_unit(ctx['db'], request, ctx['images'][0], InferenceOptions(), 'cur')
+    ctx['db'].commit()
+    assert result.created == 1
+    row = ctx['db'].get(Contours, result.contour_ids[0])
+    assert row.parent_id is None and row.hierarchy_enabled is False
+
+
+def test_hierarchy_scope_allows_more_than_32_parents():
+    from app.schemas.inference import InferenceStepRequest
+    parent_ids = list(range(1, 45))  # 44 parents (> 32)
+    step_req = InferenceStepRequest(
+        label_id=43,
+        model_registry_key="cellpose",
+        task="instance-segmentation",
+        use_hierarchy=True,
+        roi_contour_ids=parent_ids,
+    )
+    assert len(step_req.roi_contour_ids) == 44

@@ -3,7 +3,7 @@
 import asyncio
 from contextlib import contextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from iquana_toolbox.schemas.database.contour_hierarchy import ContourHierarchy
@@ -477,13 +477,15 @@ def test_handle_prompted_segmentation_forwards_parameters(monkeypatch):
     assert call_kwargs["model_key"] == "sam3-prompted"
 
 
-def test_handle_object_add_preserves_parent_and_provenance(monkeypatch):
+@pytest.mark.parametrize('parent_enabled', [True, False])
+def test_handle_object_add_preserves_parent_and_provenance(monkeypatch, parent_enabled):
     parent_frag = Contour(
         id=21060,
         x=[0.0, 1.0, 1.0, 0.0],
         y=[0.0, 0.0, 1.0, 1.0],
         label_id=10,
     )
+    parent_frag = parent_frag.model_copy(update={'hierarchy_enabled': parent_enabled})
     state = SimpleNamespace(
         focussed_contour_id=999,
         mask_id=7,
@@ -1260,3 +1262,66 @@ def test_add_object_broadcasts_reparented_children(monkeypatch):
         "contour_id": 102,
         "fields_to_be_updated": {"parent_id": 500},
     }
+
+
+def test_independent_add_ignores_focus_and_explicit_parent(monkeypatch):
+    state = SimpleNamespace(focussed_contour_id=100, mask_id=7, user_id='alice')
+    msg = ClientMessage(id='independent', type='object_add_manual', data={
+        'x': [.1,.2,.2], 'y': [.1,.1,.2], 'parent_id': 100,
+        'label_id': 43, 'use_hierarchy': False,
+    })
+    mock_add = AsyncMock()
+    monkeypatch.setattr(handlers, 'add_object', mock_add)
+    asyncio.run(handlers.handle_object_add(object(), msg, state))
+    assert mock_add.await_args.args[0].parent_id is None
+    assert mock_add.await_args.kwargs['use_hierarchy'] is False
+
+
+def test_add_object_applies_class_attributes_when_model_class_present(monkeypatch):
+    """When an object has model_class and model_key, apply_class_attributes is called."""
+    sent = []
+
+    async def mock_send(ws, msg):
+        sent.append(msg)
+
+    monkeypatch.setattr(handlers, "send_msg", mock_send)
+
+    state = SimpleNamespace(
+        mask_id=42,
+        user_id="alice",
+        dataset_id=15,
+    )
+    client_msg = ClientMessage(
+        id="req-add-species",
+        type="object_add_manual",
+        data={"model_class": "acropora"},
+    )
+    obj_input = Contour(x=[0.1, 0.2, 0.2], y=[0.1, 0.1, 0.2], label_id=43, model_class="acropora")
+    obj_persisted = Contour(id=505, x=[0.1, 0.2, 0.2], y=[0.1, 0.1, 0.2], label_id=43, model_class="acropora")
+
+    db = MagicMock()
+
+    @contextmanager
+    def context_session():
+        yield db
+
+    applied = []
+    def mock_apply_class_attributes(db_arg, dataset_id, model_key, ids):
+        applied.append((dataset_id, model_key, list(ids)))
+        return 1
+
+    monkeypatch.setattr(handlers, "get_context_session", context_session)
+    monkeypatch.setattr(handlers.masks_db, "add_contour_to_mask", AsyncMock(return_value=obj_persisted))
+    monkeypatch.setattr(handlers.history_db, "record_create", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers.provenance, "record_suggestions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers.model_label_mapping, "apply_class_attributes", mock_apply_class_attributes)
+    monkeypatch.setattr(handlers.masks_db, "get_contour_hierarchy_of_mask", AsyncMock(return_value=ContourHierarchy()))
+
+    result = asyncio.run(handlers.add_object(
+        obj_input, object(), client_msg, state,
+        source=handlers.provenance.SuggestionSource.INSTANCE_SEGMENTATION,
+        model_key="coral_species_v1",
+    ))
+    assert result == obj_persisted
+    assert applied == [(15, "coral_species_v1", [505])]
+    assert db.commit.called

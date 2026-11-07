@@ -94,7 +94,6 @@ class InferenceStepRequest(BaseModel):
     )
     roi_contour_ids: list[int] = Field(
         default_factory=list,
-        max_length=32,
         description="Saved same-image contours that explicitly bound preview inference.",
     )
     use_hierarchy: Optional[bool] = Field(

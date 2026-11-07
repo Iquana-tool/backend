@@ -620,3 +620,75 @@ def test_empty_dataset_http_get_labels(session):
     assert data["message"] == f"Retrieved 0 labels for dataset {ds_empty.id}."
     assert data["labels"]["root_level_labels"] == []
 
+
+@pytest.mark.parametrize('spill,adopt', [(0.001, True), (0.002, True), (0.004, False)])
+def test_boundary_tolerance_preserves_geometry_and_limits_distance(session, env, spill, adopt):
+    # A tiny protrusion at the bottom edge: small area alone must not allow
+    # a protrusion farther than two pixels, even on a large child object.
+    child = Contour(label_id=2,
+        x=[.3, .5, .5, .401, .401, .399, .399, .3],
+        y=[.3, .3, .5, .5, .5 + spill, .5 + spill, .5, .5])
+    saved = asyncio.run(masks_db.add_contour_to_mask(env['mask'].id, child, session))
+    before = (list(saved.x), list(saved.y))
+    parent = _box(.2, .2, .8, .5, 1)
+    adopted = []
+    saved_parent = asyncio.run(masks_db.add_contour_to_mask(
+        env['mask'].id, parent, session, reparented_contour_ids=adopted))
+    session.expire_all()
+    row = session.get(Contours, saved.id)
+    assert (saved.id in adopted) is adopt
+    assert row.parent_id == (saved_parent.id if adopt else None)
+    assert (list(row.x), list(row.y)) == before
+    np.testing.assert_array_equal(parent.to_binary_mask(1000, 1000), saved_parent.to_binary_mask(1000, 1000))
+
+
+def test_boundary_tolerance_rejects_large_area_even_within_one_pixel(session, env):
+    child = _box(.3, .3, .5, .501, 2)
+    saved = asyncio.run(masks_db.add_contour_to_mask(env['mask'].id, child, session))
+    parent = _box(.2, .2, .8, .5, 1)
+    adopted = []
+    asyncio.run(masks_db.add_contour_to_mask(env['mask'].id, parent, session,
+        reparented_contour_ids=adopted))
+    session.expire_all()
+    assert saved.id not in adopted
+    assert session.get(Contours, saved.id).parent_id is None
+
+
+def test_independent_child_survives_reload_history_and_later_parent(session, env):
+    mask_id = env['mask'].id
+    child = _box(.3, .3, .4, .4, 2)
+    saved = asyncio.run(masks_db.add_contour_to_mask(mask_id, child, session, use_hierarchy=False))
+    history_db.record_create(session, mask_id, 'annotator', saved.id)
+    history_db.undo(mask_id, 'annotator', session)
+    history_db.redo(mask_id, 'annotator', session)
+    session.expire_all()
+    assert session.get(Contours, saved.id).hierarchy_enabled is False
+    hierarchy = asyncio.run(masks_db.get_contour_hierarchy_of_mask(mask_id, session))
+    assert hierarchy.dump_for_client()['root_contours'][0]['hierarchy_enabled'] is False
+    parent = _box(.2, .2, .6, .6, 1)
+    asyncio.run(masks_db.add_contour_to_mask(mask_id, parent, session))
+    session.expire_all()
+    assert session.get(Contours, saved.id).parent_id is None
+    assert session.get(Contours, saved.id).x == saved.x
+
+
+def test_independent_parent_does_not_adopt_but_allows_requested_children(session, env):
+    mask_id = env['mask'].id
+    child = asyncio.run(masks_db.add_contour_to_mask(mask_id, _box(.3, .3, .4, .4, 2), session))
+    parent = asyncio.run(masks_db.add_contour_to_mask(mask_id, _box(.2, .2, .6, .6, 1), session, use_hierarchy=False))
+    assert session.get(Contours, child.id).parent_id is None
+    another = asyncio.run(masks_db.add_contour_to_mask(mask_id,
+        _box(.45, .45, .5, .5, 2, parent_id=parent.id), session))
+    assert another.parent_id == parent.id
+    hierarchy = asyncio.run(masks_db.get_contour_hierarchy_of_mask(mask_id, session))
+    assert [child.id for child in hierarchy.id_to_contour[parent.id].children] == [another.id]
+    assert hierarchy.id_to_contour[parent.id].hierarchy_enabled is False
+
+
+def test_independent_child_ignores_explicit_parent_and_preserves_geometry(session, env):
+    mask_id = env['mask'].id
+    parent = asyncio.run(masks_db.add_contour_to_mask(mask_id, _box(.2, .2, .4, .4, 1), session))
+    child = _box(.3, .3, .6, .6, 2, parent_id=parent.id)
+    saved = asyncio.run(masks_db.add_contour_to_mask(mask_id, child, session, use_hierarchy=False))
+    assert saved.parent_id is None and saved.hierarchy_enabled is False
+    assert saved.x == child.x and saved.y == child.y
