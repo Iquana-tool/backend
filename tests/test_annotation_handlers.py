@@ -1306,13 +1306,18 @@ def test_add_object_applies_class_attributes_when_model_class_present(monkeypatc
         yield db
 
     applied = []
+    events = []
     def mock_apply_class_attributes(db_arg, dataset_id, model_key, ids):
+        events.append("apply_class_attributes")
         applied.append((dataset_id, model_key, list(ids)))
         return 1
 
+    def mock_record_create(*args, **kwargs):
+        events.append("record_create")
+
     monkeypatch.setattr(handlers, "get_context_session", context_session)
     monkeypatch.setattr(handlers.masks_db, "add_contour_to_mask", AsyncMock(return_value=obj_persisted))
-    monkeypatch.setattr(handlers.history_db, "record_create", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handlers.history_db, "record_create", mock_record_create)
     monkeypatch.setattr(handlers.provenance, "record_suggestions", lambda *args, **kwargs: None)
     monkeypatch.setattr(handlers.model_label_mapping, "apply_class_attributes", mock_apply_class_attributes)
     monkeypatch.setattr(handlers.masks_db, "get_contour_hierarchy_of_mask", AsyncMock(return_value=ContourHierarchy()))
@@ -1324,4 +1329,5 @@ def test_add_object_applies_class_attributes_when_model_class_present(monkeypatc
     ))
     assert result == obj_persisted
     assert applied == [(15, "coral_species_v1", [505])]
+    assert events == ["apply_class_attributes", "record_create"]
     assert db.commit.called

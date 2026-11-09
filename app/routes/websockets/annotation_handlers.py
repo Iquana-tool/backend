@@ -1210,14 +1210,6 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
                 state.mask_id,
             )
         else:
-            history_db.record_create(db, state.mask_id, state.user_id, response.id,
-                                     group_id=group_id, adopted_children=reparented_info)
-            if source in provenance.AI_SOURCES:
-                provenance.record_suggestions(db, provenance.contour_ids_of(response),
-                                              source=source, model_key=model_key,
-                                              username=state.user_id, run_id=group_id)
-            else:
-                provenance.mark_manual(db, provenance.contour_ids_of(response), origin=source)
             if getattr(object_to_add, "model_class", None) and model_key:
                 dataset_id = getattr(getattr(state, "image_db", None), "dataset_id", None) or getattr(state, "dataset_id", None)
                 if dataset_id is None and getattr(state, "image_id", None) is not None:
@@ -1236,7 +1228,16 @@ async def add_object(object_to_add: Contour, websocket: WebSocket, client_msg: C
                     model_label_mapping.apply_class_attributes(
                         db, dataset_id, model_key, provenance.contour_ids_of(response),
                     )
-                    db.commit()
+                    if hasattr(db, "commit"):
+                        db.commit()
+            if source in provenance.AI_SOURCES:
+                provenance.record_suggestions(db, provenance.contour_ids_of(response),
+                                              source=source, model_key=model_key,
+                                              username=state.user_id, run_id=group_id)
+            else:
+                provenance.mark_manual(db, provenance.contour_ids_of(response), origin=source)
+            history_db.record_create(db, state.mask_id, state.user_id, response.id,
+                                     group_id=group_id, adopted_children=reparented_info)
             if getattr(state, "mask_id", None) is not None:
                 try:
                     state.contour_hierarchy = await masks_db.get_contour_hierarchy_of_mask(state.mask_id, db)
