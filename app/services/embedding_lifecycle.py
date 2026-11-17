@@ -47,6 +47,10 @@ logger = getLogger(__name__)
 # response (a model must never write a region kind onto an image subject, or vice versa).
 IMAGE_KINDS = frozenset({"image_cls"})
 REGION_KINDS = frozenset({"region_mean"})
+#: Kinds the active-learning annotation queue reads (Diversity and Density). Declared
+#: here, next to the retrieval strategies' needs, so the backfill and the queue's prep job
+#: compute them whatever retrieval strategies are enabled.
+ANNOTATION_QUEUE_KINDS = frozenset({"image_cls"})
 
 #: user_id stamped on background embed requests (no human initiates them).
 _SYSTEM_USER = "system"
@@ -66,9 +70,9 @@ def required_kinds(available_only: bool = True) -> set[str]:
 
     With ``available_only`` (the default) placeholder strategies are ignored, so enabling a
     strategy is what turns its kinds on. This is the single source of truth for what the
-    lifecycle and backfill compute.
+    lifecycle and backfill compute. The annotation queue's kinds are always included.
     """
-    kinds: set[str] = set()
+    kinds: set[str] = set(ANNOTATION_QUEUE_KINDS)
     for strategy in RETRIEVAL_STRATEGIES.values():
         if available_only and not strategy.available:
             continue
