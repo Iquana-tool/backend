@@ -23,6 +23,5 @@ def read_instance():
             "organisation": config.organisation,
             "contact": config.contact,
             "notice": config.notice,
-            "allow_registration": config.allow_registration,
         },
     }

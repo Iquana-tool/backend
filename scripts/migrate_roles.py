@@ -97,7 +97,7 @@ def drop_legacy_is_admin(connection, dry_run: bool) -> int:
     The column is declared ``BOOLEAN NOT NULL`` with no default, and ``Users`` no longer
     maps it. Any INSERT the ORM builds therefore omits it and SQLite rejects the row with
     ``NOT NULL constraint failed: users.is_admin`` — which surfaces as a 500 from
-    ``POST /auth/register``. Must run *after* backfill_global_roles().
+    ``POST /admin/users``. Must run *after* backfill_global_roles().
     """
     if "is_admin" not in _existing_columns(connection, "users"):
         return 0

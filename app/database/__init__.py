@@ -67,6 +67,7 @@ def import_models():
     """
     from app.database import (  # noqa: F401  (imported for their side effects)
         ai_suggestions,
+        account_invites,
         annotation_actions,
         annotation_queues,
         contour_metrics,
