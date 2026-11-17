@@ -111,6 +111,8 @@ def import_models():
 #: Frozen: this only serves the SQLite path of :func:`init_db`. PostgreSQL schema
 #: changes are Alembic revisions under ``migrations/versions``.
 _ADDED_COLUMNS = [
+    # Feature-specific counterpart of Alembic 0012 for existing SQLite workspaces.
+    ("contours", "hierarchy_enabled", "BOOLEAN NOT NULL DEFAULT 1"),
     ("annotation_rejections", "resolution", "VARCHAR(16)"),
     # Added with the metadata type system; a dev database that ran the untyped
     # first cut of image_metadata has the table but not this column.
@@ -123,7 +125,7 @@ _ADDED_COLUMNS = [
 
 
 def _ensure_columns(target_engine: Engine | None = None):
-    """Add late-arriving nullable columns to already-created tables.
+    """Add late-arriving columns to already-created tables.
 
     Mirrors ``scripts/migrate_roles.py`` but runs on every boot so a dev database
     stays in step with the models without a manual migration step. Safe on a fresh

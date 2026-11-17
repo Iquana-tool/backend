@@ -173,6 +173,14 @@ def test_catalog_offers_classed_models_for_mapped_labels_only(ctx, monkeypatch):
     monkeypatch.setattr(planning, "strategy_options", lambda db, dataset_id: [])
     (option,) = planning.model_catalog(db, ds, tasks=("instance-segmentation",)).models
     assert [c.key for c in option.classes] == ["region", "vessel", "fovea"]
+    assert [
+        (entry.model_class.key, entry.action, entry.label_id)
+        for entry in option.class_mappings
+    ] == [
+        ("region", "unmapped", None),
+        ("vessel", "unmapped", None),
+        ("fovea", "map", ctx["fovea"].id),
+    ]
     assert option.label_ids == [ctx["fovea"].id]
     assert option.predicts(ctx["fovea"].id)
     # Unmapped: a classed model is never class-agnostic, even with no label mapped.
@@ -193,3 +201,33 @@ def test_batch_filter_keeps_only_the_steps_label_for_classed_output():
         Contour(x=[0, 1, 1], y=[0, 0, 1], model_class="vessel", label_id=None),
     ], step)
     assert [c.model_class for c in kept] == ["region"]
+
+
+def test_polyp_sibling_models_share_saved_mapping_and_suggest_unique_polyp(ctx, monkeypatch):
+    db, ds = ctx["db"], ctx["dataset_id"]
+    coral_polyp = Labels(dataset_id=ds, name="Coral Polyp", value=3)
+    db.add(coral_polyp)
+    db.commit()
+
+    polyp_classes = [mlm.ModelClass(key="polyp", name="Polyp")]
+    monkeypatch.setattr(mlm, "_model_info", lambda key: {
+        "registry_key": key,
+        "name": key,
+        "classes": [{"key": "polyp", "name": "Polyp"}],
+    })
+
+    # 1. Without any saved mapping, auto-suggests the unique label containing "polyp"
+    resolved_yolo = mlm.resolve(db, ds, "yolo_polyp_v3_c_seed1", polyp_classes)
+    assert resolved_yolo[0].action == "map"
+    assert resolved_yolo[0].label_id == coral_polyp.id
+    assert resolved_yolo[0].source == "suggested"
+
+    # 2. When Cellpose has an explicitly saved mapping, YOLO inherits it as saved
+    mlm.save_mapping(db, ds, "cpsam_polyp_v3_b_seed17", [
+        ClassMappingWrite(model_class="polyp", action="map", label_id=coral_polyp.id),
+    ], "tester")
+    resolved_yolo_shared = mlm.resolve(db, ds, "yolo_polyp_v3_c_seed1", polyp_classes)
+    assert resolved_yolo_shared[0].action == "map"
+    assert resolved_yolo_shared[0].label_id == coral_polyp.id
+    assert resolved_yolo_shared[0].source == "suggested"
+

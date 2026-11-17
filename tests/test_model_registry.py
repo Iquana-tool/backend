@@ -8,6 +8,21 @@ from app.services import model_registry
 from app.services.inference.contract_resolver import resolve_input_contract
 
 
+def test_current_display_metadata_replaces_old_artifact_title(monkeypatch):
+    metadata = {"registry_key": "existing-model", "name": "Old model (C, seed 1)"}
+    monkeypatch.setattr(model_registry.mlflow.models, "get_model_info",
+                        lambda _: SimpleNamespace(metadata=metadata))
+    monkeypatch.setattr(model_registry.MODEL_REGISTRY.client, "get_registered_model",
+                        lambda _: SimpleNamespace(name="existing-model",
+                                                  description="Fine-tuned coral polyp model.",
+                                                  tags={"display_name": "YOLO11m-seg · Polyp"}))
+    result = model_registry._full_model_info("existing-model")
+    assert result["name"] == "YOLO11m-seg · Polyp"
+    assert result["description"] == "Fine-tuned coral polyp model."
+    assert result["registry_key"] == "existing-model"
+    assert metadata["name"] == "Old model (C, seed 1)"
+
+
 def test_full_model_info_returns_trained_model_metadata_name(monkeypatch):
     requested_uris = []
 

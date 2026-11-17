@@ -644,6 +644,80 @@ def test_a_species_class_maps_to_the_fragment_label_and_a_suggested_species(db, 
         "species": "Acropora"}
 
 
+def test_mapped_attributes_survive_undo_redo_after_add_object(db, world, monkeypatch):
+    """When an object is added with a model_class, its mapped attributes are captured
+    in the creation snapshot and preserved across Undo and Redo.
+    """
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from iquana_toolbox.schemas.networking.websockets.annotation_session import ClientMessage
+    from app.routes.websockets import annotation_handlers as handlers
+    from app.schemas.model_label_mapping import ClassMappingWrite
+    from app.services import model_label_mapping as mlm
+
+    monkeypatch.setattr(mlm, "_model_info", lambda key: SPECIES_INFO)
+    species = _species(db, world)
+    mlm.save_mapping(db, world["dataset"].id, SPECIES_MODEL, [
+        ClassMappingWrite(model_class="acropora", action="map", label_id=world["fragment"].id,
+                          attribute_id=species.id),
+    ], ANN)
+
+    state = SimpleNamespace(
+        mask_id=world["mask"].id,
+        user_id=ANN,
+        dataset_id=world["dataset"].id,
+        image_id=world["image"].id,
+        image_db=SimpleNamespace(dataset_id=world["dataset"].id),
+    )
+    client_msg = ClientMessage(
+        id="req-add-species-undo",
+        type="object_add_manual",
+        data={"model_class": "acropora"},
+    )
+    obj_input = Contour(
+        x=[0.1, 0.2, 0.2, 0.1],
+        y=[0.1, 0.1, 0.2, 0.2],
+        label_id=world["fragment"].id,
+        model_class="acropora",
+        confidence=0.85,
+    )
+
+    @contextmanager
+    def context_session():
+        yield db
+
+    monkeypatch.setattr(handlers, "get_context_session", context_session)
+    monkeypatch.setattr(handlers, "send_msg", AsyncMock())
+
+    saved = asyncio.run(handlers.add_object(
+        obj_input, object(), client_msg, state,
+        source=handlers.provenance.SuggestionSource.INSTANCE_SEGMENTATION,
+        model_key=SPECIES_MODEL,
+    ))
+    assert saved is not None
+    saved_id = saved.id
+
+    # 1. Attribute is initially saved and suggested
+    val_before = _value(db, saved_id, species.id)
+    assert val_before is not None
+    assert val_before.value == "Acropora"
+    assert val_before.status == "suggested"
+
+    # 2. Undo creation: object and attribute are removed
+    history_db.undo(world["mask"].id, ANN, db)
+    assert db.get(Contours, saved_id) is None
+    assert _value(db, saved_id, species.id) is None
+
+    # 3. Redo creation: object and mapped attribute are restored from creation snapshot
+    history_db.redo(world["mask"].id, ANN, db)
+    assert db.get(Contours, saved_id) is not None
+    val_after = _value(db, saved_id, species.id)
+    assert val_after is not None
+    assert val_after.value == "Acropora"
+    assert val_after.status == "suggested"
+
+
 def test_a_class_value_outside_the_vocabulary_is_refused(db, world, monkeypatch):
     from fastapi import HTTPException
     from app.schemas.model_label_mapping import ClassMappingWrite

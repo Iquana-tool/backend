@@ -43,3 +43,16 @@ def test_root_unknown_or_missing_concept_gets_nothing():
 def test_no_parent_objects_annotated_yet():
     empty = SimpleNamespace(label_id_to_contours={})
     assert parent_region_masks(empty, LABELS, 2, 10, 20) == []
+
+
+def test_independent_contour_can_be_used_for_requested_child_hierarchy(monkeypatch):
+    from app.services.annotation_session import operations
+    independent = _Contour('independent')
+    independent.id = 20
+    independent.hierarchy_enabled = False
+    hierarchy = SimpleNamespace(label_id_to_contours={1: [independent]})
+    assert parent_region_masks(hierarchy, LABELS, 2, 10, 20) == [('independent', 10, 20)]
+    monkeypatch.setattr(operations, '_containment', lambda *args: 1.0)
+    child = SimpleNamespace(label_id=None, parent_id=None)
+    operations.assign_hierarchy_parents([child], hierarchy, LABELS, 2)
+    assert child.parent_id == independent.id

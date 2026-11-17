@@ -230,6 +230,7 @@ def resolve_instance_conditioning(
     concept_label_id: int | None,
     max_instances: int = 5,
     target_image_id: int | None = None,
+    source_image_id: int | None = None,
 ) -> tuple[list[int], list[Any], list["CrossImageExemplar"]]:
     """Resolve ranked exemplar contour IDs, materialized BinaryMasks, and source-aware CrossImageExemplars."""
     from iquana_toolbox.schemas.database.contours import Contour
@@ -249,7 +250,9 @@ def resolve_instance_conditioning(
     )
     if concept_label_id is not None:
         q = q.filter(Contours.label_id == concept_label_id)
-    if target_image_id is not None:
+    if source_image_id is not None:
+        q = q.filter(Images.id == source_image_id)
+    elif target_image_id is not None:
         q = q.filter(Images.id != target_image_id)
 
     q = q.order_by(Contours.reviewed_by.any().desc(), Contours.created_at.desc())
@@ -641,6 +644,15 @@ def dispatch_conditioning(
             contour_ids = []
             positive_exemplars = []
             exemplars = []
+        elif step.task == "instance-suggestion":
+            matches = []
+            contour_ids, positive_exemplars, exemplars = resolve_instance_conditioning(
+                session,
+                dataset_id=target_image.dataset_id,
+                concept_label_id=step.label_id,
+                max_instances=count,
+                source_image_id=target_image.id,
+            )
         elif strategy:
             query_vector = None
             if query_contour_id is not None and is_region_based_strategy(strategy):

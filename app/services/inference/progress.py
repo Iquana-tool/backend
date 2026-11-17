@@ -17,7 +17,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database.images import Images
-from app.database.inference_jobs import InferenceJobItems, InferenceJobs
+from app.database.inference_jobs import (
+    InferenceJobItems,
+    InferenceJobs,
+    get_preview_predictions,
+)
 from app.schemas.inference import (
     ActivityEntry,
     InferenceJobItemRead,
@@ -25,6 +29,7 @@ from app.schemas.inference import (
     InferenceOptions,
     LevelProgress,
     ResolvedStep,
+    ResultMode,
 )
 
 logger = getLogger(__name__)
@@ -176,6 +181,7 @@ def snapshot(db: Session, job: InferenceJobs) -> InferenceJobSnapshot:
         created_by=job.created_by,
         status=job.status,
         write_mode=job.write_mode,
+        result_mode=ResultMode(job.result_mode or "write"),
         options=InferenceOptions.model_validate(job.options or {}),
         steps=steps,
         total_units=job.total_units or 0,
@@ -230,5 +236,12 @@ def read_items(
             contours_unparented=item.contours_unparented,
             duration_ms=item.duration_ms,
             error=item.error,
+            predictions=(
+                get_preview_predictions(job, item.id)
+                if job.result_mode == ResultMode.PREVIEW.value
+                and job.status == "succeeded"
+                and item.status == "done"
+                else None
+            ),
         ))
     return reads

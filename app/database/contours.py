@@ -3,7 +3,7 @@ from logging import getLogger
 
 from iquana_toolbox.quantification.registry import get_metric, resolve_unit
 from iquana_toolbox.schemas.database.contours import Contour
-from sqlalchemy import Column, DateTime, Integer, ForeignKey, Float, JSON, Boolean, String, Table, case
+from sqlalchemy import Column, DateTime, Integer, ForeignKey, Float, JSON, Boolean, String, Table, case, true
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import relationship, backref, Mapped
 
@@ -69,6 +69,9 @@ class Contours(database):
     mask_id: Mapped[int] = Column(Integer, ForeignKey('masks.id', ondelete='CASCADE'),
                      nullable=False, index=True)
     parent_id: Mapped[int] = Column(Integer, ForeignKey('contours.id', ondelete='CASCADE'), index=True)
+    # False preserves this object as independent and disables adoption when it is saved.
+    # It can still be used as a region when a later child run requests hierarchy.
+    hierarchy_enabled = Column(Boolean, nullable=False, default=True, server_default=true())
     temporary = Column(Boolean, nullable=False, default=False)  # Whether a contour is temporary or not.
     added_by: Mapped[str] = Column(String(255), nullable=False)  # What produced the geometry: User, SAM2, UNET, DINO etc.
     # How the object came to be, as a fixed vocabulary for analysis: "manual", "import",
@@ -270,6 +273,7 @@ def _save_contour_subtree(session, contour_schema: Contour, mask_id: int, parent
     # 2. Add to session and flush to generate db_contour.id
     session.add(db_contour)
     session.flush()
+    contour_schema.id = db_contour.id
 
     # 3. Restore reviewed_by relationship from schema (list of usernames)
     if contour_schema.reviewed_by:
