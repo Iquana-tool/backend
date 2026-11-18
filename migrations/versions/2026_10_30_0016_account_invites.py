@@ -3,7 +3,7 @@
 There is no open self-registration; an admin sends a link instead, and following it
 lets someone create their own account. Only the token's SHA-256 is stored.
 
-Revision ID: 0012
+Revision ID: 0016
 Revises: 0011
 Create Date: 2026-10-30 12:00:00.000000
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '0012'
+revision: str = '0016'
 down_revision: Union[str, Sequence[str], None] = '0011'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
