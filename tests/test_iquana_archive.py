@@ -392,6 +392,7 @@ def rich_dataset(db_session, tmp_path):
                 "label_id": None,
                 "model_registry_key": "mask2former",
                 "inputs": {"max_instances": 50},
+                "use_hierarchy": False,
             },
         ],
     )
@@ -524,6 +525,9 @@ def test_create_iquana_dataset_archive_full_with_config(db_session, rich_dataset
             assert b_prompted.label_name == "Coral"
             assert "query_contour_id" not in (b_prompted.inputs.get("conditioning") or {})
             assert b_prompted.inputs["conditioning"]["exemplar"] == "positive"
+            assert b_prompted.use_hierarchy is True
+            b_suggestion = next(b for b in cfg_doc.model_routing.bindings if b.task.value == "instance-suggestion")
+            assert b_suggestion.use_hierarchy is False
 
             # Omitted fields record query_contour_id disclosure
             assert len(cfg_doc.omitted_fields) == 1
@@ -908,6 +912,9 @@ def test_import_full_archive_roundtrip(db_session, rich_dataset, monkeypatch):
         assert routing is not None
         b_prompted = next(b for b in routing.bindings if b.get("task") == "prompted-segmentation")
         assert b_prompted.get("label_id") == lbl_map["Coral"].id
+        assert b_prompted["use_hierarchy"] is True
+        b_suggestion = next(b for b in routing.bindings if b.get("task") == "instance-suggestion")
+        assert b_suggestion["use_hierarchy"] is False
 
         # 8. Re-export and verify equivalence
         reexport_obj, reexport_name = create_iquana_dataset_archive(db_session, new_ds_id, include_config=True)
