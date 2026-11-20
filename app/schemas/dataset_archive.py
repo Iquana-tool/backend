@@ -905,6 +905,15 @@ class ArchiveModelRoutingBinding(StrictArchiveModel):
         default=None,
         description="Model-owned runtime parameters. Contour IDs must be stripped.",
     )
+    use_hierarchy: bool = Field(
+        default=True,
+        description="Whether to run within available parent objects and link results using the dataset hierarchy.",
+    )
+
+    @field_validator("use_hierarchy", mode="before")
+    @classmethod
+    def _default_use_hierarchy(cls, v: Any) -> Any:
+        return True if v is None else v
 
     @field_validator("inputs")
     @classmethod

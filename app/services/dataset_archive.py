@@ -1031,11 +1031,13 @@ def create_iquana_dataset_archive(
                             b_lid = raw_binding.get("label_id")
                             m_key = raw_binding.get("model_registry_key", "")
                             b_inputs = raw_binding.get("inputs")
+                            use_hierarchy = raw_binding.get("use_hierarchy")
                         else:
                             task_str = getattr(raw_binding, "task", None)
                             b_lid = getattr(raw_binding, "label_id", None)
                             m_key = getattr(raw_binding, "model_registry_key", "")
                             b_inputs = getattr(raw_binding, "inputs", None)
+                            use_hierarchy = getattr(raw_binding, "use_hierarchy", None)
 
                         task_enum = ModelRoutingTask(task_str)
 
@@ -1070,6 +1072,7 @@ def create_iquana_dataset_archive(
                                 label_name=b_label_name,
                                 model_registry_key=m_key,
                                 inputs=sanitized_inputs,
+                                use_hierarchy=use_hierarchy,
                             )
                         )
 
@@ -2028,6 +2031,7 @@ def import_iquana_dataset_archive(
                             "label_id": lbl_id,
                             "model_registry_key": b.model_registry_key,
                             "inputs": b.inputs,
+                            "use_hierarchy": b.use_hierarchy,
                         }
                     )
                 db.add(

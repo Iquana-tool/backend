@@ -165,6 +165,7 @@ def upsert_routing_policy(
             "label_id": binding.label_id,
             "model_registry_key": binding.model_registry_key,
             "inputs": normalized_inputs,
+            "use_hierarchy": binding.use_hierarchy,
         })
 
     now = _utcnow()
@@ -235,17 +236,22 @@ def resolve_routing_binding(
     )
     if row is None or not row.bindings:
         return None
-
     # 1. Exact label-specific override
     if label_id is not None:
         for binding in row.bindings:
             if binding.get("task") == task_str and binding.get("label_id") == label_id:
-                return binding
+                resolved = dict(binding)
+                if resolved.get("use_hierarchy") is None:
+                    resolved["use_hierarchy"] = True
+                return resolved
 
     # 2. Task-level default
     for binding in row.bindings:
         if binding.get("task") == task_str and binding.get("label_id") is None:
-            return binding
+            resolved = dict(binding)
+            if resolved.get("use_hierarchy") is None:
+                resolved["use_hierarchy"] = True
+            return resolved
 
     # 3. No dataset route
     return None
@@ -383,6 +389,7 @@ def execute_suggest_step(
         inputs=normalized_inputs,
         input_contract=option.input_contract,
         provenance=option.provenance,
+        use_hierarchy=binding.get("use_hierarchy"),
     )
 
     options = InferenceOptions(
