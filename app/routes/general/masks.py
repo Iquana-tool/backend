@@ -241,7 +241,9 @@ async def add_contours(
     for contour_to_add in contours_to_add:
         logger.info(f"Added {len(added)} / {len(contours_to_add)} contours.")
         # 1. Add to the hierarchy, ensuring it fits and respects hierarchies
-        fitted_contour = masks_db.add_contour_to_hierarchy(hierarchy, contour_to_add)
+        fitted_contour = masks_db.add_contour_to_hierarchy(
+            hierarchy, contour_to_add, image_shape=getattr(hierarchy, "_image_shape", None)
+        )
         if fitted_contour is None:
             continue
 

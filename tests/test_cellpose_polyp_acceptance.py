@@ -35,6 +35,49 @@ from iquana_toolbox.schemas.networking.websockets.annotation_session import (
 )
 
 
+@pytest.mark.parametrize("use_hierarchy", [True, False])
+def test_native_prediction_boundary_survives_save_and_reload(scratch_ctx, use_hierarchy):
+    session_factory, _, image, mask_id, fragment = scratch_ctx
+    x = [521 / 4096, 543 / 4096, 566 / 4096, 548 / 4096, 519 / 4096]
+    y = [502 / 3072, 493 / 3072, 518 / 3072, 545 / 3072, 531 / 3072]
+    parent_id = fragment.id if use_hierarchy else None
+    prediction = Contour(x=x, y=y, label_id=42, parent_id=parent_id, confidence=0.93)
+
+    with session_factory() as db:
+        image_row = db.get(Images, image.id)
+        image_row.width, image_row.height = 4096, 3072
+        db.commit()
+        saved = asyncio.run(masks_db.add_contour_to_mask(
+            mask_id, prediction, db, use_hierarchy=use_hierarchy, author_username="researcher",
+        ))
+        assert saved is not None
+        assert saved.x == x and saved.y == y
+        saved_id = saved.id
+
+    with session_factory() as db:
+        row = db.get(Contours, saved_id)
+        assert row.x == x and row.y == y
+        assert row.parent_id == parent_id
+        hierarchy = asyncio.run(masks_db.get_contour_hierarchy_of_mask(mask_id, db))
+        restored = hierarchy.id_to_contour[saved_id]
+        assert restored.x == x and restored.y == y
+
+
+def test_empty_geometry_root_contour_not_saved(scratch_ctx):
+    session_factory, _, image, mask_id, fragment = scratch_ctx
+    empty_root = Contour(x=[], y=[], label_id=41, parent_id=None)
+    with session_factory() as db:
+        saved = asyncio.run(masks_db.add_contour_to_mask(
+            mask_id, empty_root, db, use_hierarchy=True, author_username="researcher"
+        ))
+        assert saved is None
+        # Verify nothing was added to the database
+        contours_in_db = db.query(Contours).filter_by(mask_id=mask_id).all()
+        # Only the fixture's pre-existing fragment should exist
+        assert all(len(c.x) >= 3 and len(c.y) >= 3 for c in contours_in_db)
+
+
+
 @pytest.fixture
 def scratch_ctx(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'acceptance_scratch.db'}")

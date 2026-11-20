@@ -2,6 +2,7 @@ import os
 from logging import getLogger
 from pathlib import Path
 
+import cv2
 import numpy as np
 from PIL import Image
 from iquana_toolbox.schemas.database.contour_hierarchy import ContourHierarchy
@@ -20,10 +21,218 @@ from app.services.database_access import labels as labels_db
 logger = getLogger(__name__)
 
 
+def _to_safe_normalized(coords: np.ndarray, dim: int) -> list[float]:
+    """Convert integer pixel coordinates to normalized floats in [0, 1].
+
+    Guarantees that when the normalized floats are multiplied by `dim` and cast to
+    integer via `.astype(int)` (the rasterizer in `iquana_toolbox`), floating-point
+    representation does not truncate downwards (e.g. 508.0 / 4001 * 4001 = 507.999... -> 507).
+    Uses `np.nextafter(..., 1.0)` to nudge only underflowing coordinates by 1 ULP (~2e-17).
+    """
+    coords_f = np.asarray(coords, dtype=np.float64)
+    norm = coords_f / dim
+    underflow = (norm * dim).astype(int) < np.round(coords_f).astype(int)
+    norm[underflow] = np.nextafter(norm[underflow], 1.0)
+    return norm.tolist()
+
+
+def fit_contour_at_image_resolution(
+        contour: Contour,
+        parent: Contour | None,
+        competing_siblings: list[Contour],
+        image_shape: tuple[int, int],
+) -> tuple[Contour | None, bool]:
+    """Check constraints and optionally refit a contour within its bounding box at image resolution.
+
+    Limits rasterization to the contour's padded bounding box to avoid full-image mask
+    allocations. Checks both parent containment and competing sibling non-overlap.
+    If the contour is valid without clipping, returns (contour, False).
+    If clipping is required, refits against allowed pixels (parent & ~siblings) within
+    the crop at native image resolution and returns (fitted_contour, True).
+    If no pixels remain, returns (None, True).
+    """
+    if not contour.x or not contour.y or len(contour.x) < 3 or len(contour.y) < 3 or len(contour.x) != len(contour.y):
+        return None, True
+
+    if parent is None and not competing_siblings:
+        return contour, False
+
+    h, w = image_shape
+
+    pad = 4
+    x_min, x_max = min(contour.x) * w, max(contour.x) * w
+    y_min, y_max = min(contour.y) * h, max(contour.y) * h
+    x0 = max(0, int(np.floor(x_min)) - pad)
+    x1 = min(w, int(np.ceil(x_max)) + pad)
+    y0 = max(0, int(np.floor(y_min)) - pad)
+    y1 = min(h, int(np.ceil(y_max)) + pad)
+    w_crop, h_crop = x1 - x0, y1 - y0
+    if w_crop <= 0 or h_crop <= 0:
+        return None, True
+
+    c_mask = np.zeros((h_crop, w_crop), dtype=np.uint8)
+    c_pts = (contour.to_rescaled_contour(h, w) - np.array([[[x0, y0]]])).astype(np.int32)
+    cv2.drawContours(c_mask, [c_pts], -1, 1, cv2.FILLED)
+
+    if parent is None:
+        p_mask = np.ones((h_crop, w_crop), dtype=np.uint8)
+    else:
+        p_mask = np.zeros((h_crop, w_crop), dtype=np.uint8)
+        p_pts = (parent.to_rescaled_contour(h, w) - np.array([[[x0, y0]]])).astype(np.int32)
+        cv2.drawContours(p_mask, [p_pts], -1, 1, cv2.FILLED)
+
+    s_mask = np.zeros((h_crop, w_crop), dtype=np.uint8)
+    intersecting_siblings: list[Contour] = []
+    for s in competing_siblings:
+        if not s.x or not s.y or len(s.x) < 3 or len(s.y) < 3:
+            continue
+        sx_min, sx_max = min(s.x) * w, max(s.x) * w
+        sy_min, sy_max = min(s.y) * h, max(s.y) * h
+        if sx_max < x0 or sx_min > x1 or sy_max < y0 or sy_min > y1:
+            continue
+        intersecting_siblings.append(s)
+        s_pts = (s.to_rescaled_contour(h, w) - np.array([[[x0, y0]]])).astype(np.int32)
+        cv2.drawContours(s_mask, [s_pts], -1, 1, cv2.FILLED)
+
+    allowed_crop = (p_mask == 1) & (s_mask == 0)
+    outside_allowed = np.any((c_mask == 1) & (~allowed_crop))
+
+    # Continuous vertex containment tests
+    if not outside_allowed and parent is not None:
+        p_pts_f = np.column_stack([np.array(parent.x) * w, np.array(parent.y) * h]).astype(np.float32)
+        for x, y in zip(contour.x, contour.y):
+            if cv2.pointPolygonTest(p_pts_f, (float(x * w), float(y * h)), measureDist=False) < 0:
+                outside_allowed = True
+                break
+
+    if not outside_allowed:
+        for s in intersecting_siblings:
+            s_pts_f = np.column_stack([np.array(s.x) * w, np.array(s.y) * h]).astype(np.float32)
+            for x, y in zip(contour.x, contour.y):
+                if cv2.pointPolygonTest(s_pts_f, (float(x * w), float(y * h)), measureDist=False) > 0:
+                    outside_allowed = True
+                    break
+            if outside_allowed:
+                break
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+
+    # Fast path for contours well inside allowed region:
+    # If a contour does not touch or come within 1 pixel of ~allowed_crop,
+    # OpenCV fixed-point scanline discrepancies (< 1 pixel) cannot touch it.
+    # Return original vertices immediately without building full-image masks.
+    if not outside_allowed:
+        c_near_boundary = np.any(cv2.dilate(c_mask, kernel) & (~allowed_crop))
+        if not c_near_boundary:
+            return contour, False
+
+    # Bound full-image validation and refitting to the crop window.
+    # Rather than holding full-image masks for each sibling, extract crop slices immediately.
+    if parent is not None:
+        p_full = parent.to_binary_mask(h, w)
+        p_mask_refit = p_full[y0:y1, x0:x1]
+        del p_full
+    else:
+        p_mask_refit = np.ones((h_crop, w_crop), dtype=np.uint8)
+
+    s_mask_refit = np.zeros((h_crop, w_crop), dtype=np.uint8)
+    for s in intersecting_siblings:
+        s_pts = (s.to_rescaled_contour(h, w) - np.array([[[x0, y0]]])).astype(np.int32)
+        s_local = np.zeros((h_crop, w_crop), dtype=np.uint8)
+        cv2.drawContours(s_local, [s_pts], -1, 1, cv2.FILLED)
+        if np.any(cv2.dilate(c_mask, kernel) & (s_local == 1)):
+            s_full = s.to_binary_mask(h, w)
+            s_mask_refit |= s_full[y0:y1, x0:x1]
+            del s_full
+        else:
+            s_mask_refit |= s_local
+
+    # If the contour was not initially outside, check whether the boundary scanlines in full-image
+    # parent/sibling rasters exclude any of its pixels.
+    if not outside_allowed:
+        if not np.any((c_mask == 1) & (p_mask_refit == 0)) and not np.any((c_mask == 1) & (s_mask_refit == 1)):
+            return contour, False
+
+    # Refit inside crop using both parent and sibling constraints sampled from full-image rasters.
+    allowed_refit = (p_mask_refit == 1) & (s_mask_refit == 0)
+    new_crop = (c_mask == 1) & allowed_refit
+    if not np.any(new_crop):
+        return None, True
+
+    fitted = Contour.from_binary_mask(
+        new_crop,
+        only_return_biggest_contour=True,
+        **contour.model_dump(exclude={"x", "y", "path", "quantification"})
+    )
+    if not isinstance(fitted, Contour):
+        return None, True
+
+    # Convert crop integer boundary coordinates back to normalized coordinates without downward float truncation
+    px = np.round(np.array(fitted.x) * w_crop) + x0
+    py = np.round(np.array(fitted.y) * h_crop) + y0
+    fitted.x = _to_safe_normalized(px, w)
+    fitted.y = _to_safe_normalized(py, h)
+
+    # Validate clipped contours against the full-image raster within the crop window
+    def _is_raster_valid(cand: Contour) -> bool:
+        cand_crop = cand.to_binary_mask(h, w)[y0:y1, x0:x1]
+        if np.any(cand_crop & ~p_mask_refit):
+            return False
+        if np.any(cand_crop & s_mask_refit):
+            return False
+        return True
+
+    if not _is_raster_valid(fitted):
+        curr_mask = new_crop.astype(np.uint8)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        fitted_valid = None
+        for _ in range(3):
+            curr_mask = cv2.erode(curr_mask, kernel)
+            if not np.any(curr_mask):
+                break
+            candidate_eroded = Contour.from_binary_mask(
+                curr_mask,
+                only_return_biggest_contour=True,
+                **contour.model_dump(exclude={"x", "y", "path", "quantification"}),
+            )
+            if not isinstance(candidate_eroded, Contour):
+                break
+            px_e = np.round(np.array(candidate_eroded.x) * w_crop) + x0
+            py_e = np.round(np.array(candidate_eroded.y) * h_crop) + y0
+            candidate_eroded.x = _to_safe_normalized(px_e, w)
+            candidate_eroded.y = _to_safe_normalized(py_e, h)
+            if _is_raster_valid(candidate_eroded):
+                fitted_valid = candidate_eroded
+                break
+        if fitted_valid is None:
+            return None, True
+        fitted = fitted_valid
+
+    return fitted, True
+
+
+def check_parent_containment(
+        contour: Contour,
+        parent: Contour | None,
+        image_shape: tuple[int, int] | None = None,
+) -> bool:
+    """Verify that a child contour is strictly contained within its parent at image resolution."""
+    if parent is None:
+        return True
+    effective_shape = (
+        image_shape
+        if (image_shape is not None and image_shape[0] > 0 and image_shape[1] > 0)
+        else (4000, 4000)
+    )
+    _, changed = fit_contour_at_image_resolution(contour, parent, [], effective_shape)
+    return not changed
+
+
 def add_contour_to_hierarchy(
         hierarchy: ContourHierarchy,
         contour: Contour,
         label_hierarchy: labels_db.LabelHierarchy | None = None,
+        image_shape: tuple[int, int] | None = None,
 ) -> Contour | None:
     """Fit and index a contour without crashing when no pixels remain.
 
@@ -37,6 +246,12 @@ def add_contour_to_hierarchy(
     unparented/unresolved and must not subtract pixels from a new ancestor contour.
     """
     from iquana_toolbox.schemas.database.contour_hierarchy import logical_or_contours
+
+    if not contour.x or not contour.y or len(contour.x) < 3 or len(contour.y) < 3 or len(contour.x) != len(contour.y):
+        return None
+
+    if image_shape is None:
+        image_shape = getattr(hierarchy, "_image_shape", None)
 
     resolution_shape = (1000, 1000)
 
@@ -64,15 +279,41 @@ def add_contour_to_hierarchy(
         else:
             allowed_level = np.ones(resolution_shape, dtype=bool)
     else:
-        allowed_level = np.logical_not(logical_or_contours(same_level_contours, resolution_shape))
+        competing_siblings = [c for c in same_level_contours if c.id != contour.id]
+        if competing_siblings:
+            level_mask = logical_or_contours(competing_siblings, resolution_shape)
+            allowed_level = np.logical_not(level_mask)
+        else:
+            allowed_level = np.ones(resolution_shape, dtype=bool)
 
-    allowed_pixels = np.logical_and(
-        allowed_level,
-        hierarchy.get_parent_mask(contour.parent_id, resolution_shape),
-    )
-    fitted_contour, _changed = contour.fit_to_mask(allowed_pixels)
-    if not isinstance(fitted_contour, Contour):
-        return None
+    if contour.parent_id is None and not competing_siblings:
+        fitted_contour = contour
+    else:
+        allowed_pixels = np.logical_and(
+            allowed_level,
+            hierarchy.get_parent_mask(contour.parent_id, resolution_shape),
+        )
+        fitted_contour, changed = contour.fit_to_mask(allowed_pixels)
+        if not isinstance(fitted_contour, Contour):
+            return None
+        # The comparison grid must not quantize boundaries that need no clipping,
+        # provided the contour respects both parent and sibling constraints at image resolution.
+        if not changed:
+            parent = hierarchy.id_to_contour.get(contour.parent_id) if contour.parent_id is not None else None
+            effective_shape = (
+                image_shape
+                if (image_shape is not None and image_shape[0] > 0 and image_shape[1] > 0)
+                else (4000, 4000)
+            )
+            fitted_at_res, changed_at_res = fit_contour_at_image_resolution(
+                contour, parent, competing_siblings, effective_shape
+            )
+            if not changed_at_res:
+                fitted_contour = contour
+            else:
+                if not isinstance(fitted_at_res, Contour):
+                    return None
+                fitted_contour = fitted_at_res
 
     if fitted_contour.parent_id is None:
         hierarchy.root_contours.append(fitted_contour)
@@ -207,7 +448,9 @@ async def get_contour_hierarchy_of_mask(
             index(child)
     for contour in roots:
         index(contour)
-    return ContourHierarchy(root_contours=roots, id_to_contour=by_id, label_id_to_contours=by_label)
+    res_hierarchy = ContourHierarchy(root_contours=roots, id_to_contour=by_id, label_id_to_contours=by_label)
+    res_hierarchy._image_shape = (size["height"], size["width"])
+    return res_hierarchy
 
 
 def contour_fingerprint(mask_id: int, db: Session) -> tuple[int, int]:
@@ -439,6 +682,9 @@ async def add_contour_to_mask(
     :param reparented_info: Optional list to collect dictionaries of adopted descendant
         info (``{"contour_id": int, "before_parent_id": int | None}``).
     """
+    if not contour_to_add.x or not contour_to_add.y or len(contour_to_add.x) < 3 or len(contour_to_add.y) < 3 or len(contour_to_add.x) != len(contour_to_add.y):
+        return None
+
     dataset_id = (db.query(Images.dataset_id)
                   .join(Masks, Masks.image_id == Images.id)
                   .filter(Masks.id == mask_id)
