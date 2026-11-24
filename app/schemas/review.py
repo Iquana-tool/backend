@@ -211,6 +211,11 @@ class ReviewQueueImageItem(BaseModel):
     mask_id: int
     pending_instances: int = Field(..., description="Contours nobody has approved yet.")
     total_instances: int
+    completeness_unsure: bool = Field(
+        False,
+        description="Another reviewer was unsure whether the image is complete; it is "
+                    "queued for a second look even when every object is approved.",
+    )
 
 
 class ReviewQueueInstanceItem(BaseModel):
@@ -257,12 +262,19 @@ class ReviewSummary(BaseModel):
 
     pending_instances: int = Field(..., description="Unapproved contours on submitted masks.")
     pending_images: int = Field(..., description="Images with at least one pending instance.")
+    in_progress_pending_instances: int = Field(
+        0, description="Unapproved contours on masks nobody submitted yet — queued only when "
+                       "the reviewer includes images still being annotated.")
+    in_progress_pending_images: int = Field(0, description="Images behind in_progress_pending_instances.")
     reviewed_instances: int = Field(
         0,
         description="Already-approved contours on submitted masks — re-reviewable "
                     "via the queue's include_reviewed option.",
     )
     open_rejections: int = Field(..., description="Sent-back items the annotators have not addressed yet.")
+    unsure_images: int = Field(
+        0, description="Images another reviewer was unsure are complete, waiting for a second look."
+    )
     methods: list[QueueMethodOption] = Field(default_factory=list)
     authors: list[str] = Field(
         default_factory=list, description="Other people who drew here, for the 'By' filter."
@@ -276,6 +288,77 @@ class ReviewSummary(BaseModel):
     recommended: RecommendedQueue | None = Field(
         None, description="The settings a curator recommends for this dataset, if any."
     )
+
+
+# -- Completeness ------------------------------------------------------------
+#
+# At the end of an image the reviewer is asked whether everything on it is
+# annotated, per label. "incomplete" sends the image back with the reason
+# "objects are missing"; "unsure" asks another reviewer to look again.
+
+
+class CompletenessAnswer(StrEnum):
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+    UNSURE = "unsure"
+
+
+class CompletenessItem(StrEnum):
+    """What one answer is about: one label, or the image's relationships."""
+
+    LABEL = "label"
+    RELATIONSHIPS = "relationships"
+
+
+class CompletenessEntry(BaseModel):
+    """One row of the completeness card."""
+
+    item: CompletenessItem = CompletenessItem.LABEL
+    label_id: int | None = Field(None, description="Required when item is 'label'.")
+    answer: CompletenessAnswer
+
+    @model_validator(mode="after")
+    def _label_matches_item(self) -> "CompletenessEntry":
+        if self.item is CompletenessItem.LABEL and self.label_id is None:
+            raise ValueError("A label answer needs a label_id.")
+        if self.item is CompletenessItem.RELATIONSHIPS and self.label_id is not None:
+            raise ValueError("A relationships answer does not name a label.")
+        return self
+
+
+class CompletenessCreate(BaseModel):
+    """The reviewer's answers for one image."""
+
+    answers: list[CompletenessEntry] = Field(..., min_length=1)
+    note: str | None = Field(None, max_length=1000,
+                             description="What is missing; goes to the annotator with a send-back.")
+
+    @model_validator(mode="after")
+    def _one_answer_per_item(self) -> "CompletenessCreate":
+        keys = [(entry.item, entry.label_id) for entry in self.answers]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Each label (and the relationships) can be answered only once.")
+        return self
+
+
+class CompletenessCheckRead(BaseModel):
+    id: int
+    mask_id: int
+    item: CompletenessItem
+    label_id: int | None
+    answer: CompletenessAnswer
+    note: str | None
+    created_by: str | None
+    created_at: datetime
+    rejection_id: int | None
+
+
+class CompletenessVerdict(StrEnum):
+    """The image-level summary of one set of answers."""
+
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+    UNSURE = "unsure"
 
 
 # -- Correction queue -------------------------------------------------------

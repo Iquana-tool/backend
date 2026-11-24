@@ -722,11 +722,13 @@ async def handle_object_modify(websocket: WebSocket, client_msg: ClientMessage, 
                                                previous_label_id,
                                                fields_to_be_updated["label_id"])
 
-        # Assigning a label counts as a review only for callers entitled to give
-        # one; for everyone else the label change simply stands on its own.
-        if (wants_review or assigns_label) and user.has_permission(state.dataset_id,
-                                                                   Permission.REVIEW_APPROVE):
+        # An explicit approval goes through the review policy. Assigning a label
+        # counts as one only for a reviewer labelling someone else's object; the
+        # author labelling their own work has not reviewed it.
+        if wants_review and user.has_permission(state.dataset_id, Permission.REVIEW_APPROVE):
             await contours_db.review_contour(contour_id, user=user, db=db, strict=False)
+        elif assigns_label:
+            await contours_db.approve_on_label_change(contour_id, user, state.dataset_id, db)
 
     if fields_to_be_updated or wants_review:
         await send_msg(websocket, ServerMessage(

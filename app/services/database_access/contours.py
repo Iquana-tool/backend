@@ -15,6 +15,7 @@ from app.database.datasets import Datasets
 from app.database.images import Images
 from app.database.masks import Masks
 from app.database.users import Users
+from app.schemas.permissions import Permission
 from app.services import hierarchy_cache, provenance
 from app.services.database_access.labels import get_label_hierarchy
 from app.services.quantification import (
@@ -240,6 +241,27 @@ async def review_contour(
         hierarchy_cache.invalidate(contour_db.mask_id)
         provenance.record_review(db, contour_id)
     return True
+
+
+async def approve_on_label_change(contour_id: int, user, dataset_id: int, db: Session) -> bool:
+    """Count a label assignment as an approval, where that is honest.
+
+    A reviewer who corrects the label of someone else's object has looked at it,
+    so the relabel is recorded as their approval. The object's own author has not
+    reviewed anything by labelling their work: counting that as an approval
+    marked objects reviewed the moment they were drawn, and they never reached a
+    second reviewer. So the author gets no implicit approval here, whatever the
+    dataset's independent-review setting; an explicit approval still goes through
+    `review_contour` and its policy.
+
+    Returns whether an approval was recorded.
+    """
+    contour = db.query(Contours).filter_by(id=contour_id).first()
+    if contour is None or contour.author_username == user.username:
+        return False
+    if not user.has_permission(dataset_id, Permission.REVIEW_APPROVE):
+        return False
+    return await review_contour(contour_id, user, db, strict=False)
 
 
 async def delete_contour(

@@ -43,6 +43,7 @@ from app.schemas.review import (
     ReviewSummary,
 )
 from app.services import queue_core
+from app.services.database_access import completeness as completeness_db
 from app.services.queue_methods import OBJECTS, MethodContext
 
 
@@ -205,6 +206,7 @@ def build_queue(dataset_id: int, request: ReviewQueueRequest,
         by_image: dict[int, list[QueueCandidate]] = {}
         for candidate in candidates:
             by_image.setdefault(candidate.image_id, []).append(candidate)
+        unsure = completeness_db.unsure_masks(dataset_id, db, exclude_username=username)
         items = [
             ReviewQueueImageItem(
                 image_id=image_id,
@@ -212,12 +214,15 @@ def build_queue(dataset_id: int, request: ReviewQueueRequest,
                 pending_instances=sum(
                     1 for c in group if c.eligible(request.include_reviewed)),
                 total_instances=len(group),
+                completeness_unsure=group[0].mask_id in unsure,
             )
             for image_id, group in by_image.items()
         ]
         # Only images with something left to look at, most pending work first
-        # (ascending flips that for reviewers who want the quick wins).
-        items = [item for item in items if item.pending_instances > 0]
+        # (ascending flips that for reviewers who want the quick wins). An image
+        # another reviewer was unsure is complete stays in for a second look,
+        # even with every object approved.
+        items = [item for item in items if item.pending_instances > 0 or item.completeness_unsure]
         items.sort(key=lambda item: (item.pending_instances, item.image_id),
                    reverse=direction == "ascending")
         return ReviewQueueRead(**echo, total=len(items), images=items)
@@ -258,6 +263,13 @@ def summarize(dataset_id: int, db: Session, username: str | None = None) -> Revi
     candidates = _collect_candidates(dataset_id, db, only_submitted=True)
     pending = [candidate for candidate in candidates if candidate.pending]
     reviewed = [candidate for candidate in candidates if candidate.reviewed]
+    # The setup page can also sweep images nobody submitted yet; it needs that
+    # count too, or it reports "nothing to review" with work sitting right there.
+    submitted_masks = {candidate.mask_id for candidate in candidates}
+    in_progress = [
+        candidate for candidate in _collect_candidates(dataset_id, db, only_submitted=False)
+        if candidate.pending and candidate.mask_id not in submitted_masks
+    ]
     open_rejections = (
         db.query(AnnotationRejections)
         .join(Masks, Masks.id == AnnotationRejections.mask_id)
@@ -269,8 +281,11 @@ def summarize(dataset_id: int, db: Session, username: str | None = None) -> Revi
     return ReviewSummary(
         pending_instances=len(pending),
         pending_images=len({candidate.image_id for candidate in pending}),
+        in_progress_pending_instances=len(in_progress),
+        in_progress_pending_images=len({candidate.image_id for candidate in in_progress}),
         reviewed_instances=len(reviewed),
         open_rejections=open_rejections,
+        unsure_images=len(completeness_db.unsure_masks(dataset_id, db, exclude_username=username)),
         methods=queue_core.method_options(OBJECTS),
         authors=queue_core.dataset_authors(db, dataset_id, exclude=username),
         models=queue_core.dataset_models(db, dataset_id),
