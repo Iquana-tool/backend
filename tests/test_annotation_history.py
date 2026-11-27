@@ -398,3 +398,71 @@ def test_wiping_a_mask_discards_every_annotators_history(session, world):
     asyncio.run(masks_db.delete_all_contours_of_mask(mask.id, db=session))
 
     assert session.query(AnnotationActions).filter_by(mask_id=mask.id).count() == 0
+
+
+# --------------------------------------------------------------------------- #
+# Deleting several objects at once ("Discard all unreviewed", multi-select)
+# --------------------------------------------------------------------------- #
+def _run_delete_handler(monkeypatch, session, mask, data):
+    """Run the OBJECT_DELETE handler on this session; returns the messages it sent."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from iquana_toolbox.schemas.networking.websockets.annotation_session import ClientMessage
+
+    import app.routes.websockets.annotation_handlers as handlers
+
+    sent = []
+
+    async def send(_websocket, message):
+        sent.append(message)
+
+    @contextmanager
+    def context_session():
+        yield session
+
+    monkeypatch.setattr(handlers, "send_msg", send)
+    monkeypatch.setattr(handlers, "get_context_session", context_session)
+    state = SimpleNamespace(mask_id=mask.id, user_id=ANNOTATOR)
+    msg = ClientMessage(id="delete-1", type="object_delete", data=data)
+    asyncio.run(handlers.handle_object_delete(None, msg, state))
+    return sent
+
+
+def test_several_objects_are_deleted_in_one_request_and_undone_in_one_step(monkeypatch, session, world):
+    mask = world["mask"]
+    ids = [_add(session, mask, cx=100 + i * 100, cy=100).id for i in range(4)]
+    keep = _add(session, mask, cx=600, cy=400).id
+
+    sent = _run_delete_handler(monkeypatch, session, mask, {"contour_ids": ids})
+
+    assert _ids(session, mask) == {keep}
+    # One reply for all of them, so the client removes them in one go.
+    assert len(sent) == 1
+    assert sent[0].data["deleted_contours"] == ids
+
+    history_db.undo(mask.id, ANNOTATOR, session)
+    assert _ids(session, mask) == set(ids) | {keep}
+
+
+def test_a_child_selected_with_its_parent_is_deleted_and_restored_once(monkeypatch, session, world):
+    mask = world["mask"]
+    parent_id = _add(session, mask, half=100).id
+    child_id = _add(session, mask, half=10, parent_id=parent_id).id
+
+    _run_delete_handler(monkeypatch, session, mask, {"contour_ids": [child_id, parent_id]})
+    assert _ids(session, mask) == set()
+
+    history_db.undo(mask.id, ANNOTATOR, session)
+    assert _ids(session, mask) == {parent_id, child_id}
+    assert session.query(Contours).filter_by(id=child_id).one().parent_id == parent_id
+
+
+def test_the_single_contour_id_form_still_works(monkeypatch, session, world):
+    mask = world["mask"]
+    contour_id = _add(session, mask).id
+
+    sent = _run_delete_handler(monkeypatch, session, mask, {"contour_id": contour_id})
+
+    assert _ids(session, mask) == set()
+    assert sent[0].data["deleted_contours"] == [contour_id]

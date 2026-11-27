@@ -667,20 +667,35 @@ async def handle_object_finalise(websocket: WebSocket, client_msg: ClientMessage
 
 
 async def handle_object_delete(websocket: WebSocket, client_msg: ClientMessage, state: AnnotationSessionState):
-    """ Handle removing an object from the mask. """
-    contour_id = client_msg.data.get("contour_id")
+    """ Handle removing one object, or several at once, from the mask.
+
+    Takes ``contour_ids`` (a list) or the single ``contour_id``. Several objects are
+    deleted in one transaction and undone as one step, and the client gets one
+    OBJECT_REMOVED for all of them - a per-object request each with its own commit
+    made discarding many suggestions very slow.
+    """
+    data = client_msg.data or {}
+    requested = data.get("contour_ids")
+    if requested is None:
+        requested = [data.get("contour_id")]
+    contour_ids = list(dict.fromkeys(int(cid) for cid in requested if cid is not None))
     with get_context_session() as db:
         # Snapshot first: the delete cascades to the descendants, so once it has
         # run there is nothing left to describe what undo would have to bring back.
-        snapshot = history_db.snapshot_subtree(contour_id, db)
-        await contours_db.delete_contour(contour_id, db)
-        history_db.record_delete(db, state.mask_id, state.user_id, snapshot)
+        # A child selected along with its parent is inside the parent's snapshot.
+        root_ids = contours_db.top_level_contour_ids(contour_ids, db)
+        snapshots = [history_db.snapshot_subtree(cid, db) for cid in root_ids]
+        await contours_db.delete_contours(root_ids, db)
+        group_id = history_db.new_group_id() if len(snapshots) > 1 else None
+        for snapshot in snapshots:
+            history_db.record_delete(db, state.mask_id, state.user_id, snapshot, group_id=group_id)
     await send_msg(websocket, ServerMessage(
         id=client_msg.id,
         type=ServerMessageType.OBJECT_REMOVED,
         success=True,
-        message="Object removed from mask.",
-        data={"deleted_contours": [contour_id]},
+        message=f"{len(contour_ids)} object(s) removed from mask." if len(contour_ids) > 1
+        else "Object removed from mask.",
+        data={"deleted_contours": contour_ids},
     ))
 
 

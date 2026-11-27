@@ -246,38 +246,73 @@ async def delete_contour(
         contour_id: int,
         db: Session
 ):
-    # Fetch the contour and all descendants in one query
-    contour = (
-        db.query(Contours)
-        .filter_by(id=contour_id)
-        .first()
-    )
-    if not contour:
-        return
+    await delete_contours([contour_id], db)
 
-    # Read the group keys before the row goes away (the instance is detached afterwards).
-    mask_id, parent_id = contour.mask_id, contour.parent_id
 
-    # The surviving siblings lost a neighbour, and the parent lost a child. Flagging them
-    # before the DELETE is safe: this contour's own rows are flagged too, but they are
-    # removed by the CASCADE moments later. Descendants need no handling - they are
-    # cascade-deleted along with their rows, so no group survives to be invalidated.
-    mark_contextual_stale_for_group(db, mask_id, parent_id)
-    mark_relational_stale_for_parent(db, [parent_id])
-
-    # The CASCADE removes the descendants too; their suggestions are rejected with them.
-    subtree_ids, frontier = [contour.id], [contour.id]
+def _descendant_ids(contour_ids, db: Session) -> list[int]:
+    """Every contour nested (at any depth) under the given ones, not counting them."""
+    found, frontier = [], list(contour_ids)
     while frontier:
         frontier = [cid for (cid,) in
                     db.query(Contours.id).filter(Contours.parent_id.in_(frontier)).all()]
-        subtree_ids.extend(frontier)
+        found.extend(frontier)
+    return found
 
-    # Delete the root contour (CASCADE will handle the rest)
-    db.delete(contour)
+
+def top_level_contour_ids(contour_ids, db: Session) -> list[int]:
+    """The given contours that still exist and are not nested under another one of them.
+
+    Deleting a contour cascades to its descendants, so a child that is selected along
+    with its parent is already covered by the parent: deleting (or snapshotting) it on
+    its own as well would remove it twice, or restore it twice on undo.
+    """
+    existing = [cid for (cid,) in
+                db.query(Contours.id).filter(Contours.id.in_(list(contour_ids))).all()]
+    nested = set(_descendant_ids(existing, db))
+    return sorted(cid for cid in existing if cid not in nested)
+
+
+async def delete_contours(
+        contour_ids,
+        db: Session
+) -> list[int]:
+    """Delete several contours, and everything nested under them, in one transaction.
+
+    One commit and one cache invalidation per mask, however many contours: deleting
+    them one request at a time took a round trip, a commit and a hierarchy rebuild
+    each, which made discarding a few hundred suggestions take minutes.
+
+    Returns:
+        The top-level ids that were deleted (see :func:`top_level_contour_ids`).
+    """
+    root_ids = top_level_contour_ids(contour_ids, db)
+    if not root_ids:
+        return []
+    roots = db.query(Contours).filter(Contours.id.in_(root_ids)).all()
+
+    # The surviving siblings lost a neighbour, and the parents lost a child. Flagging them
+    # before the DELETE is safe: the deleted contours' own rows are flagged too, but they
+    # are removed by the CASCADE moments later. Descendants need no handling - they are
+    # cascade-deleted along with their rows, so no group survives to be invalidated.
+    # Read the keys before the rows go away (the instances are detached afterwards).
+    groups = {(contour.mask_id, contour.parent_id) for contour in roots}
+    mask_ids = {mask_id for mask_id, _ in groups}
+    for mask_id, parent_id in groups:
+        mark_contextual_stale_for_group(db, mask_id, parent_id)
+    mark_relational_stale_for_parent(db, sorted({parent_id for _, parent_id in groups},
+                                                key=lambda v: (v is None, v)))
+
+    # The CASCADE removes the descendants too; their suggestions are rejected with them.
+    subtree_ids = root_ids + _descendant_ids(root_ids, db)
+
+    for contour in roots:
+        db.delete(contour)
     db.flush()
     db.commit()
-    hierarchy_cache.invalidate(mask_id)
+    for mask_id in mask_ids:
+        hierarchy_cache.invalidate(mask_id)
     provenance.record_deletion(db, subtree_ids)
+    return root_ids
 
 
 async def remove_review(
