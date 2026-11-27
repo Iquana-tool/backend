@@ -18,6 +18,7 @@ from app.database.inference_jobs import InferenceJobs
 from app.database.labels import Labels
 from app.database.masks import Masks
 from app.database.users import Users
+from app.schemas.dataset_archive import ArchiveModelRoutingBinding
 from app.schemas.inference import (
     DatasetModelRoutingRead,
     DatasetModelRoutingWrite,
@@ -774,6 +775,61 @@ def test_execute_suggest_step_with_task_and_mask_id(monkeypatch, ctx):
     assert kwargs["options"].write_mode == WriteMode.PATCH
     assert kwargs["options"].preserve_reviewed is True
     assert kwargs["mask"].id == mask.id
+    assert kwargs["step"].use_hierarchy is True
+
+
+def test_execute_suggest_step_forwards_use_hierarchy_false(monkeypatch, ctx):
+    """execute_suggest_step passes saved use_hierarchy=False to ResolvedStep."""
+    _stub_multi_task_catalog(monkeypatch)
+    db = ctx["db"]
+    ds_id = ctx["dataset"].id
+    cell_id = ctx["cell"].id
+
+    image = Images(
+        dataset_id=ds_id,
+        file_name="test_img_hier.png",
+        file_path="/tmp/test_img_hier.png",
+        thumbnail_file_path="/tmp/thumb_hier.png",
+        width=100,
+        height=100,
+    )
+    db.add(image)
+    db.flush()
+    mask = Masks(image_id=image.id, file_path="/tmp/mask_hier.png")
+    db.add(mask)
+    db.commit()
+
+    body = DatasetModelRoutingWrite(
+        dataset_id=ds_id,
+        bindings=[
+            ModelRoutingBinding(
+                task=ModelRoutingTask.CROSS_IMAGE_SUGGESTION,
+                label_id=cell_id,
+                model_registry_key="sam3-cross",
+                use_hierarchy=False,
+            )
+        ],
+    )
+    configuration.upsert_routing_policy(db=db, dataset_id=ds_id, username="curator", body=body)
+
+    fake_unit_result = execution.UnitResult(created=1, suppressed=0, unparented=0, contour_ids=[201])
+    run_unit_mock = MagicMock(return_value=fake_unit_result)
+    monkeypatch.setattr(execution, "run_unit", run_unit_mock)
+
+    result = configuration.execute_suggest_step(
+        db=db,
+        dataset_id=ds_id,
+        image_id=image.id,
+        label_id=cell_id,
+        username="curator",
+        task=ModelRoutingTask.CROSS_IMAGE_SUGGESTION,
+        mask_id=mask.id,
+    )
+
+    assert result.contours_created == 1
+    assert run_unit_mock.called
+    _, kwargs = run_unit_mock.call_args
+    assert kwargs["step"].use_hierarchy is False
 
 
 def test_execute_suggest_step_rejects_active_batch_before_model_call(monkeypatch, ctx):
@@ -981,3 +1037,125 @@ def test_get_routing_policy_returns_stored_policy_with_unavailable_model_for_rep
     assert policy.bindings[0].model_registry_key == "deleted-or-unregistered-model"
     assert policy.bindings[0].task == "instance-segmentation"
     assert policy.bindings[0].label_id == cell_id
+
+
+# --------------------------------------------------------------------------- #
+# Hierarchy orchestration configuration tests
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("binding_model", [ModelRoutingBinding, ArchiveModelRoutingBinding])
+@pytest.mark.parametrize("value,expected", [(None, True), (False, False), ("false", False)])
+def test_hierarchy_binding_defaults_and_validates_booleans(binding_model, value, expected):
+    binding = binding_model.model_validate({
+        "task": "instance-segmentation",
+        "model_registry_key": "m2f",
+        "use_hierarchy": value,
+    })
+    assert binding.use_hierarchy is expected
+
+
+def test_routing_policy_legacy_binding_defaults_use_hierarchy_on(ctx):
+    """Legacy binding saved without use_hierarchy resolves to ON (True)."""
+    db = ctx["db"]
+    ds_id = ctx["dataset"].id
+    cell_id = ctx["cell"].id
+
+    row = DatasetModelRoutingConfigs(
+        dataset_id=ds_id,
+        bindings=[
+            {
+                "task": "instance-segmentation",
+                "label_id": cell_id,
+                "model_registry_key": "m2f-cell",
+                "inputs": None,
+            }
+        ],
+        updated_by="curator",
+    )
+    db.add(row)
+    db.commit()
+
+    policy = configuration.get_routing_policy(db, ds_id)
+    assert policy is not None
+    assert policy.bindings[0].use_hierarchy is True
+
+    resolved = configuration.resolve_routing_binding(
+        db, ds_id, task="instance-segmentation", label_id=cell_id
+    )
+    assert resolved is not None
+    assert resolved["use_hierarchy"] is True
+
+
+def test_routing_policy_explicit_use_hierarchy_off_persists_and_resolves(monkeypatch, ctx):
+    """Explicitly saved use_hierarchy=False survives save/reload and resolves to False."""
+    _stub_multi_task_catalog(monkeypatch)
+    db = ctx["db"]
+    ds_id = ctx["dataset"].id
+    cell_id = ctx["cell"].id
+
+    body = DatasetModelRoutingWrite(
+        dataset_id=ds_id,
+        bindings=[
+            ModelRoutingBinding(
+                task=ModelRoutingTask.INSTANCE_SEGMENTATION,
+                label_id=cell_id,
+                model_registry_key="m2f",
+                use_hierarchy=False,
+            ),
+        ],
+    )
+
+    saved = configuration.upsert_routing_policy(db, ds_id, "curator", body)
+    assert saved.bindings[0].use_hierarchy is False
+
+    reloaded = configuration.get_routing_policy(db, ds_id)
+    assert reloaded is not None
+    assert reloaded.bindings[0].use_hierarchy is False
+
+    resolved = configuration.resolve_routing_binding(
+        db, ds_id, task=ModelRoutingTask.INSTANCE_SEGMENTATION, label_id=cell_id
+    )
+    assert resolved is not None
+    assert resolved["use_hierarchy"] is False
+
+
+def test_resolve_routing_binding_hierarchy_resolution_across_bindings(monkeypatch, ctx):
+    """Hierarchy setting resolves correctly across task-default and label-override bindings."""
+    _stub_multi_task_catalog(monkeypatch)
+    db = ctx["db"]
+    ds_id = ctx["dataset"].id
+    cell_id = ctx["cell"].id
+    nucleus_id = ctx["nucleus"].id
+
+    body = DatasetModelRoutingWrite(
+        dataset_id=ds_id,
+        bindings=[
+            ModelRoutingBinding(
+                task=ModelRoutingTask.INSTANCE_SEGMENTATION,
+                label_id=None,
+                model_registry_key="m2f",
+                use_hierarchy=True,
+            ),
+            ModelRoutingBinding(
+                task=ModelRoutingTask.INSTANCE_SEGMENTATION,
+                label_id=cell_id,
+                model_registry_key="m2f",
+                use_hierarchy=False,
+            ),
+        ],
+    )
+    configuration.upsert_routing_policy(db, ds_id, "curator", body)
+
+    # cell_id has explicit override with use_hierarchy=False
+    resolved_cell = configuration.resolve_routing_binding(
+        db, ds_id, task=ModelRoutingTask.INSTANCE_SEGMENTATION, label_id=cell_id
+    )
+    assert resolved_cell is not None
+    assert resolved_cell["use_hierarchy"] is False
+
+    # nucleus_id falls back to task default with use_hierarchy=True
+    resolved_nucleus = configuration.resolve_routing_binding(
+        db, ds_id, task=ModelRoutingTask.INSTANCE_SEGMENTATION, label_id=nucleus_id
+    )
+    assert resolved_nucleus is not None
+    assert resolved_nucleus["use_hierarchy"] is True

@@ -287,6 +287,15 @@ class ModelRoutingBinding(BaseModel):
         default=None,
         description="Model-owned inputs when supported by the task/model contract.",
     )
+    use_hierarchy: bool = Field(
+        default=True,
+        description="Whether to run within available parent objects and link results using the dataset hierarchy.",
+    )
+
+    @field_validator("use_hierarchy", mode="before")
+    @classmethod
+    def _default_use_hierarchy(cls, v: Any) -> Any:
+        return True if v is None else v
 
 
 class DatasetModelRoutingWrite(BaseModel):
