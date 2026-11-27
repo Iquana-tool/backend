@@ -115,11 +115,10 @@ async def change_contour_label(
     """
     Edit the label of a contour, marking it reviewed by the caller where allowed.
 
-    The automatic approval only happens for callers who actually hold
-    `review.approve` and are permitted to review this contour; for everyone else
-    the label change still succeeds, it just does not count as a review. Before,
-    any label edit self-approved the contour, which made a mask reach "finished"
-    without anyone else ever looking at it.
+    The automatic approval only happens for callers who hold `review.approve`, are
+    permitted to review this contour, and did not draw it themselves (see
+    `approve_on_label_change`); for everyone else the label change still succeeds,
+    it just does not count as a review.
 
     Args:
         contour_id (int): The ID of the contour to edit.
@@ -140,10 +139,8 @@ async def change_contour_label(
     history_db.record_label_change(db, mask_id, user.username, contour_id,
                                    previous_label_id, new_label_id)
 
-    # 2. Record a review only if this caller is entitled to give one
-    reviewed = False
-    if user.has_permission(dataset_id, Permission.REVIEW_APPROVE):
-        reviewed = await contours_db.review_contour(contour_id, user, db, strict=False)
+    # 2. Record a review only for a reviewer labelling someone else's object
+    reviewed = await contours_db.approve_on_label_change(contour_id, user, dataset_id, db)
 
     return {
         "success": True,

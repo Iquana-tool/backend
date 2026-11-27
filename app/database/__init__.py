@@ -70,6 +70,7 @@ def import_models():
         account_invites,
         annotation_actions,
         annotation_queues,
+        completeness,
         contour_metrics,
         contours,
         credentials,

@@ -17,6 +17,8 @@ from app.schemas.auth_user import AuthenticatedUser
 from app.schemas.permissions import Permission
 from app.schemas.queue import RecommendedQueueWrite
 from app.schemas.review import (
+    CompletenessAnswer,
+    CompletenessCreate,
     CorrectionQueueRequest,
     RejectionCreate,
     RejectionResolve,
@@ -24,9 +26,10 @@ from app.schemas.review import (
 )
 from app.services import correction_queue, queue_recommendation, review_queue
 from app.services.auth import get_current_user
+from app.services.database_access import completeness as completeness_db
 from app.services.database_access import contours as contours_db
 from app.services.database_access import rejections as rejections_db
-from app.services.permissions import ensure_permission_for, require
+from app.services.permissions import ensure_permission, ensure_permission_for, require
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 logger = getLogger(__name__)
@@ -180,6 +183,48 @@ async def reject_mask(
         "success": True,
         "message": f"Mask {mask_id} rejected ({rejection.reason}).",
         "rejection": rejections_db.to_read(rejection).model_dump(mode="json"),
+    }
+
+
+@router.post("/masks/{mask_id}/completeness")
+async def record_completeness(
+        mask_id: int,
+        body: CompletenessCreate,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.REVIEW_APPROVE, "mask_id")),
+):
+    """Store the reviewer's answer to "is everything on this image annotated?".
+
+    One answer per label (and optionally one for the relationships). An
+    "incomplete" answer also sends the image back with the reason "objects are
+    missing", so it needs the right to reject as well; "unsure" queues the image
+    for a second reviewer.
+    """
+    if any(entry.answer is CompletenessAnswer.INCOMPLETE for entry in body.answers):
+        dataset_id = ensure_permission_for(user, "mask_id", mask_id, Permission.REVIEW_APPROVE, db)
+        ensure_permission(user, dataset_id, Permission.REVIEW_REJECT)
+    checks, verdict, rejection = await completeness_db.record(mask_id, body, user.username, db)
+    return {
+        "success": True,
+        "message": f"Mask {mask_id} checked: {verdict.value}.",
+        "verdict": verdict.value,
+        "checks": [completeness_db.to_read(check).model_dump(mode="json") for check in checks],
+        "rejection": rejections_db.to_read(rejection).model_dump(mode="json") if rejection else None,
+    }
+
+
+@router.get("/masks/{mask_id}/completeness")
+async def get_completeness(
+        mask_id: int,
+        db: Session = Depends(get_session),
+        user: AuthenticatedUser = Depends(require(Permission.ANNOTATION_READ, "mask_id")),
+):
+    """Every reviewer's current completeness answers for an image."""
+    checks = completeness_db.current_for_mask(mask_id, db)
+    return {
+        "success": True,
+        "message": f"Retrieved {len(checks)} completeness answers for mask {mask_id}.",
+        "checks": [completeness_db.to_read(check).model_dump(mode="json") for check in checks],
     }
 
 
