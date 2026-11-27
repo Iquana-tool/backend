@@ -25,6 +25,7 @@ import io
 import json
 import time
 import zipfile
+import zlib
 from typing import Any, Optional
 
 import pytest
@@ -69,12 +70,50 @@ def _compute_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _stored_zlib_stream(data: bytes) -> bytes:
+    """A zlib stream of uncompressed ("stored") deflate blocks.
+
+    The output depends only on ``data``. A compressing encoder (Pillow, zlib.compress)
+    gives different bytes for different zlib versions, so a hash of it differs by machine.
+    """
+    out = bytearray(b"\x78\x01")
+    step = 0xFFFF
+    for start in range(0, max(len(data), 1), step):
+        block = data[start:start + step]
+        final = 1 if start + step >= len(data) else 0
+        out += bytes([final]) + len(block).to_bytes(2, "little") + (len(block) ^ 0xFFFF).to_bytes(2, "little")
+        out += block
+    out += zlib.adler32(data).to_bytes(4, "big")
+    return bytes(out)
+
+
 def _create_synthetic_png_image(width: int, height: int, color: tuple[int, int, int]) -> bytes:
-    """Creates real decodable PNG image bytes with explicit dimensions and color."""
-    img = PILImage.new("RGB", (width, height), color=color)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+    """Creates real decodable PNG image bytes with explicit dimensions and color.
+
+    Built with the standard library only, so the bytes (and the SHA-256 that the
+    annotations store) are the same on every machine and library version.
+    """
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (len(payload).to_bytes(4, "big") + kind + payload
+                + zlib.crc32(kind + payload).to_bytes(4, "big"))
+
+    ihdr = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes([8, 2, 0, 0, 0])  # 8-bit RGB
+    scanlines = (b"\x00" + bytes(color) * width) * height  # filter type 0 per row
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", _stored_zlib_stream(scanlines)) + chunk(b"IEND", b""))
+
+
+def _archive_content_sha256(zip_bytes: bytes) -> str:
+    """SHA-256 over the member names and uncompressed bytes, in archive order.
+
+    The compressed ZIP bytes depend on the zlib version (1.3 and 1.3.1 already differ),
+    so the golden values pin the archive content, not one machine's deflate output.
+    """
+    digest = hashlib.sha256()
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for name in zf.namelist():
+            digest.update(name.encode("utf-8") + b"\0" + hashlib.sha256(zf.read(name)).digest())
+    return digest.hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -538,49 +577,29 @@ def test_golden_archive_zip_structure_and_integrity(content_mode: str, include_c
                 assert img.iquana.size_bytes is None
 
 
-GOLDEN_ZIP_FULL_WITH_CONFIG_SHA256 = "8826544b295b5d119404a85ddd79881200f8e00a1e55d803eb035be49c3c2686"
-GOLDEN_ZIP_FULL_WITHOUT_CONFIG_SHA256 = "90525c5a98b0c3e555d4741c19e1e9dea493a53996acba70750775b573a2c6d0"
-GOLDEN_ZIP_ANNOTATIONS_ONLY_WITH_CONFIG_SHA256 = "26bccda5782189aeeb608a15cdced3b6a021b087e059ea77505249476674c7db"
-GOLDEN_ZIP_ANNOTATIONS_ONLY_WITHOUT_CONFIG_SHA256 = "9a8749f12d06d3c68f90734c106fdd3475118565e65b00bf31cd89ba15fa36cd"
+# Content hashes (see _archive_content_sha256), not hashes of the compressed ZIP bytes.
+GOLDEN_ZIP_FULL_WITH_CONFIG_SHA256 = "5aff72e9225622588d1f9b867c573ec5ba60fee035e7b2967776da40fb30a328"
+GOLDEN_ZIP_FULL_WITHOUT_CONFIG_SHA256 = "be563f17f9b7ce498788bfbdd26c79532a9539f76d7184b057cad0e049df3b8f"
+GOLDEN_ZIP_ANNOTATIONS_ONLY_WITH_CONFIG_SHA256 = "2dcace749e6c087c8d11b3fc2522379ff5fc7c80fc616b0e3a27af5ae5727907"
+GOLDEN_ZIP_ANNOTATIONS_ONLY_WITHOUT_CONFIG_SHA256 = "1446c4a3eecc2c8d5a6101af3222cc384ee5d2068214a843b932ac4b220008fe"
 
 
-def test_golden_zip_hashes_are_deterministic():
-    """ZipInfo fixed timestamps ensure builds generated at different times produce identical SHA-256 hashes across all 4 modes."""
-    # 1. Full with config
-    zip1 = build_golden_archive_zip(include_config=True, content_mode="full")
+@pytest.mark.parametrize(
+    ("include_config", "content_mode", "golden"),
+    [
+        (True, "full", GOLDEN_ZIP_FULL_WITH_CONFIG_SHA256),
+        (False, "full", GOLDEN_ZIP_FULL_WITHOUT_CONFIG_SHA256),
+        (True, "annotations_only", GOLDEN_ZIP_ANNOTATIONS_ONLY_WITH_CONFIG_SHA256),
+        (False, "annotations_only", GOLDEN_ZIP_ANNOTATIONS_ONLY_WITHOUT_CONFIG_SHA256),
+    ],
+)
+def test_golden_zip_hashes_are_deterministic(include_config: bool, content_mode: str, golden: str):
+    """Fixed ZipInfo timestamps make two builds byte-identical, and the content matches the golden hash."""
+    first = build_golden_archive_zip(include_config=include_config, content_mode=content_mode)
     time.sleep(0.01)
-    zip2 = build_golden_archive_zip(include_config=True, content_mode="full")
-    hash_full_cfg1 = _compute_sha256(zip1)
-    hash_full_cfg2 = _compute_sha256(zip2)
-    assert hash_full_cfg1 == hash_full_cfg2
-    assert hash_full_cfg1 == GOLDEN_ZIP_FULL_WITH_CONFIG_SHA256
-
-    # 2. Full without config
-    zip3 = build_golden_archive_zip(include_config=False, content_mode="full")
-    time.sleep(0.01)
-    zip4 = build_golden_archive_zip(include_config=False, content_mode="full")
-    hash_full_nocfg1 = _compute_sha256(zip3)
-    hash_full_nocfg2 = _compute_sha256(zip4)
-    assert hash_full_nocfg1 == hash_full_nocfg2
-    assert hash_full_nocfg1 == GOLDEN_ZIP_FULL_WITHOUT_CONFIG_SHA256
-
-    # 3. Annotations only with config
-    zip5 = build_golden_archive_zip(include_config=True, content_mode="annotations_only")
-    time.sleep(0.01)
-    zip6 = build_golden_archive_zip(include_config=True, content_mode="annotations_only")
-    hash_ann_cfg1 = _compute_sha256(zip5)
-    hash_ann_cfg2 = _compute_sha256(zip6)
-    assert hash_ann_cfg1 == hash_ann_cfg2
-    assert hash_ann_cfg1 == GOLDEN_ZIP_ANNOTATIONS_ONLY_WITH_CONFIG_SHA256
-
-    # 4. Annotations only without config
-    zip7 = build_golden_archive_zip(include_config=False, content_mode="annotations_only")
-    time.sleep(0.01)
-    zip8 = build_golden_archive_zip(include_config=False, content_mode="annotations_only")
-    hash_ann_nocfg1 = _compute_sha256(zip7)
-    hash_ann_nocfg2 = _compute_sha256(zip8)
-    assert hash_ann_nocfg1 == hash_ann_nocfg2
-    assert hash_ann_nocfg1 == GOLDEN_ZIP_ANNOTATIONS_ONLY_WITHOUT_CONFIG_SHA256
+    second = build_golden_archive_zip(include_config=include_config, content_mode=content_mode)
+    assert _compute_sha256(first) == _compute_sha256(second)
+    assert _archive_content_sha256(first) == golden
 
 
 # ---------------------------------------------------------------------------

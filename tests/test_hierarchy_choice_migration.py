@@ -7,11 +7,11 @@ from sqlalchemy import create_engine, text, inspect
 
 
 def test_hierarchy_policy_migration_preserves_existing_rows(tmp_path):
-    path = Path(__file__).parents[1] / 'migrations/versions/2026_11_07_0012_contour_hierarchy_choice.py'
+    path = Path(__file__).parents[1] / 'migrations/versions/2026_11_07_0017_contour_hierarchy_choice.py'
     spec = importlib.util.spec_from_file_location('choice_migration', path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
-    assert migration.revision == '0012'
+    assert migration.revision == '0017'
     assert migration.down_revision == '0011'
     engine = create_engine(f'sqlite:///{tmp_path / "migration.db"}')
     with engine.begin() as connection:
