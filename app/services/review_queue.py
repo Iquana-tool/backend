@@ -168,6 +168,26 @@ def _collect_candidates(dataset_id: int, db: Session,
     return candidates
 
 
+def _objectless_masks(mask_ids: set[int], db: Session,
+                      only_submitted: bool = True) -> list[tuple[int, int]]:
+    """(mask id, image id) of the given masks that carry no objects at all.
+
+    The image queue is built from objects, so these images would otherwise never be
+    queued, not even for a second completeness look.
+    """
+    if not mask_ids:
+        return []
+    has_objects = (
+        db.query(Contours.id)
+        .filter(Contours.mask_id == Masks.id, Contours.temporary.is_(False))
+        .exists()
+    )
+    query = db.query(Masks.id, Masks.image_id).filter(Masks.id.in_(mask_ids), ~has_objects)
+    if only_submitted:
+        query = query.filter(Masks.fully_annotated.is_(True))
+    return [(mask_id, image_id) for mask_id, image_id in query]
+
+
 # -- Queue building ----------------------------------------------------------
 
 def _validate_labels(dataset_id: int, label_ids: list[int], db: Session) -> None:
@@ -218,6 +238,21 @@ def build_queue(dataset_id: int, request: ReviewQueueRequest,
             )
             for image_id, group in by_image.items()
         ]
+        # An image without objects never shows up above. When a reviewer was unsure
+        # whether it is complete, it still needs its second look. The image filters
+        # apply as usual. Nobody drew on such an image, so it counts as "not mine"
+        # (the default under independent review) but matches no person or model.
+        if request.by in ("everyone", "others"):
+            bare = _objectless_masks(unsure, db, only_submitted=request.only_submitted)
+            bare = queue_core.filter_by_metadata(db, dataset_id, bare,
+                                                 request.metadata_filters,
+                                                 lambda pair: (pair[1],))
+            items += [
+                ReviewQueueImageItem(image_id=image_id, mask_id=mask_id,
+                                     pending_instances=0, total_instances=0,
+                                     completeness_unsure=True)
+                for mask_id, image_id in bare
+            ]
         # Only images with something left to look at, most pending work first
         # (ascending flips that for reviewers who want the quick wins). An image
         # another reviewer was unsure is complete stays in for a second look,

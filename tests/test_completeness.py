@@ -183,6 +183,24 @@ def test_a_second_answer_settles_an_unsure_image(ctx):
     assert summarize(ctx.ds.id, ctx.db, "ann").unsure_images == 0
 
 
+def test_unsure_queues_an_image_without_objects_for_someone_else(ctx):
+    ctx.db.delete(ctx.contour)
+    ctx.db.commit()
+    assert image_queue(ctx, "rev2") == []
+
+    run(completeness_db.record(ctx.mask.id, answers(ctx, "complete", "unsure"), "rev", ctx.db))
+
+    queued = image_queue(ctx, "rev2")
+    assert [(item.mask_id, item.total_instances) for item in queued] == [(ctx.mask.id, 0)]
+    assert queued[0].completeness_unsure is True
+    assert image_queue(ctx, "rev") == []
+    # Independent review defaults the "By" filter to everyone but the reviewer.
+    others = ReviewQueueRequest(granularity=ReviewGranularity.IMAGES, by="others")
+    assert len(build_queue(ctx.ds.id, others, ctx.db, "rev2").images) == 1
+    mine = ReviewQueueRequest(granularity=ReviewGranularity.IMAGES, by="mine")
+    assert build_queue(ctx.ds.id, mine, ctx.db, "rev2").images == []
+
+
 def _user(username, may_review=True):
     return SimpleNamespace(username=username, has_permission=lambda *_: may_review)
 
